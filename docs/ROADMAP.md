@@ -4,14 +4,14 @@
 
 **Goal:** Interface + Remote backend. Drop-in replacement for existing chromedp code.
 
-- [ ] Define `Browser`, `Page` interfaces
-- [ ] Common options: `WithConcurrency`, `WithTimeout`, `WithUserAgent`
-- [ ] Page pool with semaphore
-- [ ] `remote/` backend — connect to `ws://` CDP endpoint (chromedp under the hood)
-- [ ] Migrate go-search `browser.go` → `browser.New(remote.WithEndpoint(wsURL))`
-- [ ] Migrate go-wp `browser_init.go` → same pattern
-- [ ] Tests: pool concurrency, timeout, unavailable graceful degradation
-- [ ] Delete `browserless` container from docker-compose (after Rod in Phase 1)
+- [x] Define `Browser`, `Page` interfaces
+- [x] Common options: `WithConcurrency`, `WithTimeout`, `WithUserAgent`
+- [x] Page pool with semaphore
+- [x] `remote/` backend — connect to `ws://` CDP endpoint (chromedp under the hood)
+- [x] Migrate go-search `browser.go` → `browser.New(remote.WithEndpoint(wsURL))`
+- [x] Migrate go-wp `browser_init.go` → same pattern
+- [x] Tests: pool concurrency, timeout, unavailable graceful degradation
+- [x] Delete `browserless` container from docker-compose (after Rod in Phase 1)
 
 **Result:** Same behavior, shared code, one dependency instead of two copy-pasted files.
 
@@ -19,14 +19,14 @@
 
 **Goal:** In-process Chromium. Eliminate `browserless` container.
 
-- [ ] `rod/` backend — launch + manage Chromium via Rod
-- [ ] Auto-download Chromium binary on first run
-- [ ] Proxy integration via `go-stealth.ProxyPool`
-- [ ] Page pool with Rod's built-in browser.EachEvent
-- [ ] Docker: add Chromium to service containers that need it (go-search, go-wp)
-- [ ] Remove `browserless` service from docker-compose
-- [ ] Benchmark: memory per tab, render latency vs browserless
-- [ ] Tests: proxy rotation, concurrent renders, crash recovery
+- [x] `rod/` backend — launch + manage Chromium via Rod
+- [x] Auto-download Chromium binary on first run
+- [x] Proxy integration via `go-stealth.ProxyPool`
+- [x] Page pool with Rod's built-in browser.EachEvent
+- [x] Docker: add Chromium to service containers that need it (go-search, go-wp)
+- [x] Remove `browserless` service from docker-compose
+- [x] Benchmark: memory per tab, render latency vs browserless
+- [x] Tests: proxy rotation, concurrent renders, crash recovery
 
 **Result:** No more external browserless container. ~384MB RAM freed.
 
@@ -49,12 +49,12 @@
 
 **Goal:** Production hardening + advanced capabilities.
 
-- [ ] Request interception (block images/fonts/analytics for faster renders)
+- [x] Request interception (block images/fonts/analytics for faster renders)
 - [ ] Cookie injection (authenticated scraping)
 - [ ] Screenshot support (Rod backend only)
 - [ ] Custom JS injection (wait conditions, data extraction scripts)
 - [ ] Metrics: render count, latency histogram, error rate (callback hooks)
-- [ ] Health monitoring: auto-restart crashed browser process
+- [x] Health monitoring: auto-restart crashed browser process
 
 ## Phase 4: Anti-Detection (v0.5.0)
 
