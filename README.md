@@ -3,39 +3,58 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/anatolykoptev/go-browser.svg)](https://pkg.go.dev/github.com/anatolykoptev/go-browser)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Pluggable headless browser library for Go with crash recovery, proxy rotation, and resource blocking.
+Headless browser library for Go with pluggable backends, crash recovery, proxy rotation, and resource blocking.
 
-## Features
+## Why
 
-- **Pluggable backends** — Rod (in-process Chromium) or Remote (external CDP endpoint)
-- **Crash recovery** — automatic Chromium restart on connection failure
-- **Proxy integration** — rotating proxy pool via [go-stealth](https://github.com/anatolykoptev/go-stealth)
-- **Resource blocking** — skip images, fonts, CSS, media for faster renders
-- **Concurrency control** — semaphore-based page pool
-- **Configurable timeouts** — render timeout, DOM hydration wait
+Headless browser rendering in Go usually means either:
+
+- **chromedp** — tied to a running Chrome, no crash recovery, manual pool management
+- **Rod** — better API, but still raw — you wire up proxy, resource blocking, retry logic yourself
+
+go-browser wraps both behind a single `Browser` interface, adds production features (crash recovery, resource blocking, proxy pool), and lets you swap backends without touching application code.
 
 ## Install
 
-```bash
-go get github.com/anatolykoptev/go-browser@latest
+```
+go get github.com/anatolykoptev/go-browser@v0.3.1
 ```
 
-## Quick Start — Rod
+Requires Go 1.26+.
+
+## Quick Start
+
+### Rod (in-process Chromium)
 
 ```go
-import rodbackend "github.com/anatolykoptev/go-browser/rod"
+package main
 
-b, err := rodbackend.New()
-if err != nil {
-    log.Fatal(err)
+import (
+    "context"
+    "fmt"
+    "log"
+
+    rodbackend "github.com/anatolykoptev/go-browser/rod"
+)
+
+func main() {
+    b, err := rodbackend.New(rodbackend.WithHeadless(true))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer b.Close()
+
+    page, err := b.Render(context.Background(), "https://example.com")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("%s (%d bytes)\n", page.Title, len(page.HTML))
 }
-defer b.Close()
-
-page, err := b.Render(context.Background(), "https://example.com")
-fmt.Println(page.Title, len(page.HTML))
 ```
 
-## Quick Start — Remote
+Rod auto-downloads Chromium on first run. Pass `WithBin("/usr/bin/chromium-browser")` to use a system binary.
+
+### Remote (external CDP endpoint)
 
 ```go
 import "github.com/anatolykoptev/go-browser/remote"
@@ -49,18 +68,39 @@ defer b.Close()
 page, err := b.Render(ctx, "https://example.com")
 ```
 
-## Proxy Integration
+Compatible with Browserless, Lightpanda, or any CDP WebSocket endpoint.
+
+## Interface
+
+Both backends implement the same interface:
+
+```go
+type Browser interface {
+    Render(ctx context.Context, url string) (*Page, error)
+    Available() bool
+    Close() error
+}
+
+type Page struct {
+    URL    string // final URL after redirects
+    HTML   string // rendered outerHTML
+    Title  string // page title
+    Status int    // HTTP status (0 if unknown)
+}
+```
+
+## Proxy
 
 ```go
 pool, _ := proxypool.NewWebshare(apiKey)
 b, _ := rodbackend.New(rodbackend.WithProxyPool(pool))
 ```
 
-The proxy is set at Chromium launch time. All requests from all tabs go through the proxy.
+The proxy is set at Chromium launch via `--proxy-server`. All traffic from all tabs goes through the proxy. Accepts any `go-stealth.ProxyPoolProvider` (Webshare, static list, healthy pool wrapper).
 
 ## Resource Blocking
 
-Block unnecessary resources to speed up renders and save bandwidth:
+Skip images, fonts, CSS, and media to speed up renders:
 
 ```go
 b, _ := rodbackend.New(
@@ -72,50 +112,104 @@ b, _ := rodbackend.New(
 )
 ```
 
-Available resource types: `ResourceImage`, `ResourceFont`, `ResourceStylesheet`, `ResourceMedia`.
+Uses Rod's `HijackRequests` to abort matching requests before they hit the network. Available types: `ResourceImage`, `ResourceFont`, `ResourceStylesheet`, `ResourceMedia`.
 
 ## Crash Recovery
 
-If Chromium dies mid-render (OOM, segfault, zombie process), the Rod backend detects the broken connection and automatically:
+If Chromium dies mid-render (OOM, segfault, zombie), the Rod backend:
 
-1. Closes the dead browser process
-2. Launches a fresh Chromium with the same options
-3. Retries the render once
+1. Detects the dead connection (websocket close, broken pipe, EOF)
+2. Kills the zombie process and launches fresh Chromium with same options
+3. Retries the failed render once
 
-No manual intervention or container restart required.
+No container restart needed. Verified by integration test that `SIGKILL`s Chromium and confirms recovery.
 
-## Options Reference
+## Options
+
+### Rod
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `WithBin(path)` | auto-download | Custom Chromium binary path |
+| `WithBin(path)` | auto-download | Chromium binary path |
 | `WithHeadless(bool)` | `true` | Headless mode |
-| `WithProxyPool(pool)` | none | Rotating proxy via go-stealth |
-| `WithBlockResources(types...)` | none | Block resource types |
-| `Concurrency` | `3` | Max concurrent pages |
-| `RenderTimeout` | `15s` | Per-render timeout |
-| `HydrationWait` | `1s` | DOM stability wait |
+| `WithProxyPool(pool)` | none | Proxy rotation via go-stealth |
+| `WithBlockResources(...)` | none | Resource types to abort |
 
-## Error Handling
+### Common (both backends)
 
-Sentinel errors for matching:
+| Field | Default | Description |
+|-------|---------|-------------|
+| `Concurrency` | `3` | Max concurrent page renders |
+| `RenderTimeout` | `20s` | Per-render deadline |
+| `HydrationWait` | `2s` | Wait for DOM to stabilize after body ready |
+| `UserAgent` | browser default | Override User-Agent header |
 
-- `browser.ErrNavigate` — navigation or page creation failed
-- `browser.ErrTimeout` — render exceeded timeout or DOM didn't stabilize
-- `browser.ErrUnavailable` — backend not connected
+Set common options via functional option or direct field:
+
+```go
+rodbackend.New(
+    func(o *rodbackend.Options) { o.Concurrency = 5 },
+    func(o *rodbackend.Options) { o.RenderTimeout = 30 * time.Second },
+)
+```
+
+### Remote
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithEndpoint(url)` | none | CDP WebSocket URL |
+
+## Errors
+
+Sentinel errors for `errors.Is` matching:
+
+```go
+browser.ErrNavigate    // DNS, TLS, HTTP failure, or page creation error
+browser.ErrTimeout     // render exceeded deadline or DOM didn't stabilize
+browser.ErrUnavailable // backend not connected or browser binary not found
+```
 
 ## Architecture
 
 ```
-browser.Browser (interface)
-├── rod.Browser      — in-process Chromium via go-rod
-│   ├── restart.go   — crash detection + auto-restart
-│   └── hijack.go    — request interception (resource blocking)
-└── remote.Browser   — external CDP endpoint via chromedp
+github.com/anatolykoptev/go-browser
+├── browser.go       Browser interface, Page struct
+├── options.go       Common options (Concurrency, RenderTimeout, HydrationWait)
+├── errors.go        Sentinel errors
+├── pool.go          Channel-based semaphore with context cancellation
+│
+├── rod/             In-process Chromium backend
+│   ├── rod.go       New, Render (with retry wrapper), Close
+│   ├── options.go   Rod-specific options (Bin, ProxyPool, BlockResources)
+│   ├── restart.go   isConnectionError detection + browser restart
+│   └── hijack.go    Request interception for resource blocking
+│
+└── remote/          External CDP endpoint backend
+    ├── remote.go    New, Render, Close (via chromedp)
+    └── options.go   Remote-specific options (Endpoint)
 ```
 
-Both backends share the same `browser.Options` (concurrency, timeouts) and return `*browser.Page`.
+## Testing
+
+```bash
+# Unit tests (no Chromium needed)
+go test ./... -race -count=1 -short
+
+# Integration tests (requires Chromium — Rod auto-downloads or set BROWSER_BIN)
+go test ./rod -race -count=1 -v -timeout 120s
+```
+
+Integration tests use `net/http/httptest` — no external network calls. Tests cover:
+
+- **BasicRender** — end-to-end render of a local HTML page
+- **ConcurrentRenders** — 5 goroutines through a pool of 2
+- **ResourceBlocking** — control (`title="loaded"`) vs blocked (`title="blocked"`)
+- **CrashRecovery** — SIGKILL Chromium, verify auto-restart and re-render
+
+## Production Usage
+
+Used in [go-search](https://github.com/anatolykoptev/go-search) (fallback for JS-heavy pages) and [go-wp](https://github.com/anatolykoptev/go-wp) (WordPress content fetching). Both run Rod backend with proxy pool and resource blocking in Docker containers.
 
 ## License
 
-MIT
+[MIT](LICENSE)
