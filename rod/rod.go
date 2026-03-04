@@ -15,10 +15,11 @@ import (
 
 // Browser implements browser.Browser using Rod.
 type Browser struct {
-	mu   sync.RWMutex
-	rod  *rod.Browser
-	pool *browser.Pool
-	opts Options
+	mu       sync.RWMutex
+	rod      *rod.Browser
+	launcher *launcher.Launcher
+	pool     *browser.Pool
+	opts     Options
 }
 
 // New creates a Rod browser backend.
@@ -51,9 +52,10 @@ func New(opts ...Option) (*Browser, error) {
 	slog.Info("rod: browser launched", "headless", o.Headless)
 
 	return &Browser{
-		rod:  b,
-		pool: browser.NewPool(o.Concurrency),
-		opts: o,
+		rod:      b,
+		launcher: l,
+		pool:     browser.NewPool(o.Concurrency),
+		opts:     o,
 	}, nil
 }
 
@@ -136,6 +138,17 @@ func (b *Browser) renderOnce(ctx context.Context, url string) (*browser.Page, er
 		HTML:  html,
 		Title: title,
 	}, nil
+}
+
+// ChromiumPID returns the OS process ID of the managed Chromium instance.
+// Returns 0 if the browser was not launched locally (e.g. zero-value Browser).
+func (b *Browser) ChromiumPID() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.launcher == nil {
+		return 0
+	}
+	return b.launcher.PID()
 }
 
 // Available reports whether the Rod browser is connected.

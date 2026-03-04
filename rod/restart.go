@@ -30,6 +30,9 @@ func (b *Browser) restart() error {
 	if b.rod != nil {
 		b.rod.Close() //nolint:errcheck // dying browser, best-effort
 	}
+	if b.launcher != nil {
+		b.launcher.Kill() // clean up zombie Chromium
+	}
 
 	l := launcher.New().Headless(b.opts.Headless)
 	if b.opts.Bin != "" {
@@ -44,16 +47,19 @@ func (b *Browser) restart() error {
 	controlURL, err := l.Launch()
 	if err != nil {
 		b.rod = nil
+		b.launcher = nil
 		return fmt.Errorf("rod: restart launch: %w", err)
 	}
 
 	newBrowser := rod.New().ControlURL(controlURL)
 	if err := newBrowser.Connect(); err != nil {
 		b.rod = nil
+		b.launcher = nil
 		return fmt.Errorf("rod: restart connect: %w", err)
 	}
 
 	b.rod = newBrowser
+	b.launcher = l
 	slog.Info("rod: browser restarted")
 	return nil
 }
