@@ -66,3 +66,34 @@ func TestWithOptions(t *testing.T) {
 		t.Error("Headless should be false")
 	}
 }
+
+func TestWithBlockResources(t *testing.T) {
+	o := rodbackend.DefaultOptions()
+	rodbackend.WithBlockResources(
+		rodbackend.ResourceImage,
+		rodbackend.ResourceFont,
+	)(&o)
+	if len(o.BlockResources) != 2 {
+		t.Fatalf("BlockResources len = %d, want 2", len(o.BlockResources))
+	}
+	if o.BlockResources[0] != rodbackend.ResourceImage {
+		t.Errorf("BlockResources[0] = %q, want Image", o.BlockResources[0])
+	}
+	if o.BlockResources[1] != rodbackend.ResourceFont {
+		t.Errorf("BlockResources[1] = %q, want Font", o.BlockResources[1])
+	}
+}
+
+func TestResourceTypeConstants(t *testing.T) {
+	types := []rodbackend.ResourceType{
+		rodbackend.ResourceImage,
+		rodbackend.ResourceFont,
+		rodbackend.ResourceStylesheet,
+		rodbackend.ResourceMedia,
+	}
+	for _, rt := range types {
+		if rt == "" {
+			t.Errorf("ResourceType constant is empty")
+		}
+	}
+}

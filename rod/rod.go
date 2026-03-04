@@ -58,11 +58,25 @@ func New(opts ...Option) (*Browser, error) {
 }
 
 // Render navigates to url, waits for JS, returns rendered HTML.
+// If Chromium crashes mid-render, it restarts the browser and retries once.
 func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error) {
 	if url == "" {
 		return nil, fmt.Errorf("%w: empty URL", browser.ErrNavigate)
 	}
 
+	page, err := b.renderOnce(ctx, url)
+	if err != nil && isConnectionError(err) {
+		slog.Warn("rod: connection error, restarting browser", "err", err)
+		if restartErr := b.restart(); restartErr != nil {
+			return nil, fmt.Errorf("rod: restart failed after crash: %w", restartErr)
+		}
+		return b.renderOnce(ctx, url)
+	}
+	return page, err
+}
+
+// renderOnce performs a single render attempt.
+func (b *Browser) renderOnce(ctx context.Context, url string) (*browser.Page, error) {
 	b.mu.RLock()
 	r := b.rod
 	b.mu.RUnlock()
@@ -89,6 +103,12 @@ func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error)
 			slog.Warn("rod: page close failed", "err", closeErr)
 		}
 	}()
+
+	// Block unwanted resource types if configured.
+	if len(b.opts.BlockResources) > 0 {
+		cleanup := blockResources(page, b.opts.BlockResources)
+		defer cleanup()
+	}
 
 	if err := page.Navigate(url); err != nil {
 		return nil, fmt.Errorf("%w: %v", browser.ErrNavigate, err)
