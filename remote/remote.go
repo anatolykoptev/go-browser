@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	browser "github.com/anatolykoptev/go-browser"
 	"github.com/chromedp/chromedp"
@@ -18,7 +19,7 @@ type Browser struct {
 	ctxCancel   context.CancelFunc
 	pool        *browser.Pool
 	opts        Options
-	connected   bool
+	connected   atomic.Bool
 }
 
 // New connects to a remote CDP endpoint.
@@ -29,7 +30,7 @@ func New(opts ...Option) (*Browser, error) {
 	}
 
 	if o.Endpoint == "" {
-		return &Browser{}, nil
+		return &Browser{pool: browser.NewPool(1)}, nil
 	}
 
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(
@@ -45,19 +46,23 @@ func New(opts ...Option) (*Browser, error) {
 
 	slog.Info("remote: connected", "endpoint", o.Endpoint)
 
-	return &Browser{
+	b := &Browser{
 		ctx:         ctx,
 		allocCancel: allocCancel,
 		ctxCancel:   ctxCancel,
 		pool:        browser.NewPool(o.Concurrency),
 		opts:        o,
-		connected:   true,
-	}, nil
+	}
+	b.connected.Store(true)
+	return b, nil
 }
 
 // Render navigates to url, waits, returns rendered HTML.
 func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error) {
-	if !b.connected {
+	if url == "" {
+		return nil, fmt.Errorf("%w: empty URL", browser.ErrNavigate)
+	}
+	if !b.connected.Load() {
 		return nil, browser.ErrUnavailable
 	}
 
@@ -81,26 +86,33 @@ func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error)
 		chromedp.OuterHTML("html", &html),
 	)
 	if err != nil {
+		if renderCtx.Err() != nil {
+			return nil, fmt.Errorf("%w: %v", browser.ErrTimeout, err)
+		}
 		return nil, fmt.Errorf("%w: %v", browser.ErrNavigate, err)
 	}
 
-	var title string
+	var title, finalURL string
 	_ = chromedp.Run(renderCtx, chromedp.Title(&title))
+	_ = chromedp.Run(renderCtx, chromedp.Location(&finalURL))
+	if finalURL == "" {
+		finalURL = url
+	}
 
 	return &browser.Page{
-		URL:   url,
+		URL:   finalURL,
 		HTML:  html,
 		Title: title,
 	}, nil
 }
 
 // Available reports whether the remote browser is connected.
-func (b *Browser) Available() bool { return b.connected }
+func (b *Browser) Available() bool { return b.connected.Load() }
 
 // Close disconnects from the remote browser.
 func (b *Browser) Close() error {
+	b.connected.Store(false)
 	b.pool.Close()
-	b.connected = false
 	if b.ctxCancel != nil {
 		b.ctxCancel()
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	browser "github.com/anatolykoptev/go-browser"
 	"github.com/go-rod/rod"
@@ -14,6 +15,7 @@ import (
 
 // Browser implements browser.Browser using Rod.
 type Browser struct {
+	mu   sync.RWMutex
 	rod  *rod.Browser
 	pool *browser.Pool
 	opts Options
@@ -57,7 +59,15 @@ func New(opts ...Option) (*Browser, error) {
 
 // Render navigates to url, waits for JS, returns rendered HTML.
 func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error) {
-	if b.rod == nil {
+	if url == "" {
+		return nil, fmt.Errorf("%w: empty URL", browser.ErrNavigate)
+	}
+
+	b.mu.RLock()
+	r := b.rod
+	b.mu.RUnlock()
+
+	if r == nil {
 		return nil, browser.ErrUnavailable
 	}
 
@@ -70,11 +80,15 @@ func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error)
 	renderCtx, cancel := context.WithTimeout(ctx, b.opts.RenderTimeout)
 	defer cancel()
 
-	page, err := b.rod.Context(renderCtx).Page(proto.TargetCreateTarget{URL: "about:blank"})
+	page, err := r.Context(renderCtx).Page(proto.TargetCreateTarget{URL: "about:blank"})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", browser.ErrNavigate, err)
 	}
-	defer page.Close()
+	defer func() {
+		if closeErr := page.Close(); closeErr != nil {
+			slog.Warn("rod: page close failed", "err", closeErr)
+		}
+	}()
 
 	if err := page.Navigate(url); err != nil {
 		return nil, fmt.Errorf("%w: %v", browser.ErrNavigate, err)
@@ -89,14 +103,16 @@ func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error)
 		return nil, fmt.Errorf("rod: html: %w", err)
 	}
 
-	info, _ := page.Info()
+	// Get page info safely (no MustInfo panic).
+	finalURL := url
 	title := ""
-	if info != nil {
+	if info, infoErr := page.Info(); infoErr == nil && info != nil {
+		finalURL = info.URL
 		title = info.Title
 	}
 
 	return &browser.Page{
-		URL:   page.MustInfo().URL,
+		URL:   finalURL,
 		HTML:  html,
 		Title: title,
 	}, nil
@@ -104,14 +120,23 @@ func (b *Browser) Render(ctx context.Context, url string) (*browser.Page, error)
 
 // Available reports whether the Rod browser is connected.
 func (b *Browser) Available() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return b.rod != nil
 }
 
 // Close shuts down Rod and the Chromium process.
 func (b *Browser) Close() error {
-	b.pool.Close()
-	if b.rod != nil {
-		return b.rod.Close()
+	b.mu.Lock()
+	r := b.rod
+	b.rod = nil
+	b.mu.Unlock()
+
+	if b.pool != nil {
+		b.pool.Close()
+	}
+	if r != nil {
+		return r.Close()
 	}
 	return nil
 }

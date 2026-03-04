@@ -62,3 +62,57 @@ func TestPool_RespectsContextCancel(t *testing.T) {
 	}
 	release()
 }
+
+func TestPool_MinSize(t *testing.T) {
+	pool := browser.NewPool(0) // should clamp to 1
+	defer pool.Close()
+
+	release, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	// Pool size 1 — second acquire should block.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err = pool.Acquire(ctx)
+	if err == nil {
+		t.Fatal("expected timeout on pool of size 1")
+	}
+	release()
+}
+
+func TestPool_CloseUnblocksWaiters(t *testing.T) {
+	pool := browser.NewPool(1)
+
+	// Fill the pool.
+	release, _ := pool.Acquire(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := pool.Acquire(context.Background())
+		done <- err
+	}()
+
+	// Give goroutine time to block on Acquire.
+	time.Sleep(10 * time.Millisecond)
+
+	pool.Close()
+	release()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected error after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waiter not unblocked after Close")
+	}
+}
+
+func TestPool_DoubleCloseNoPanic(t *testing.T) {
+	pool := browser.NewPool(2)
+	pool.Close()
+	pool.Close() // should not panic
+}
