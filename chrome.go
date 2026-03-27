@@ -149,5 +149,27 @@ func discoverWSURL(wsURL string) (string, error) {
 		return "", fmt.Errorf("webSocketDebuggerUrl missing in /json/version response")
 	}
 
-	return v.WebSocketDebuggerURL, nil
+	// The debugger URL often contains 127.0.0.1 (internal to Chrome container).
+	// Replace the host:port with the original wsURL's host:port so it's reachable
+	// from the go-browser container via Docker networking.
+	return rewriteDebuggerURL(v.WebSocketDebuggerURL, wsURL), nil
+}
+
+// rewriteDebuggerURL replaces the host:port in a debugger URL with the original ws URL's host:port.
+// Chrome returns ws://127.0.0.1/devtools/browser/GUID but we need ws://cloakbrowser:9222/devtools/browser/GUID.
+func rewriteDebuggerURL(debuggerURL, originalWS string) string {
+	// Extract path from debugger URL: /devtools/browser/GUID
+	pathIdx := strings.Index(debuggerURL, "/devtools/")
+	if pathIdx < 0 {
+		return debuggerURL // can't parse, return as-is
+	}
+	path := debuggerURL[pathIdx:]
+
+	// Extract host:port from original ws URL
+	host := originalWS
+	host = strings.TrimPrefix(host, "ws://")
+	host = strings.TrimPrefix(host, "wss://")
+	host = strings.TrimRight(host, "/")
+
+	return "ws://" + host + path
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 )
 
 const (
@@ -44,18 +45,25 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// NewServer constructs a Server and registers all routes.
-func NewServer(cfg ServerConfig, logger *slog.Logger) *Server {
+// NewServer constructs a Server, connects to CloakBrowser, and registers all routes.
+func NewServer(cfg ServerConfig, logger *slog.Logger) (*Server, error) {
+	chrome, err := NewChromeManager(cfg.CloakBrowserWSURL)
+	if err != nil {
+		logger.Warn("chrome not available — Chrome endpoints will return 503", "err", err)
+	}
+
+	pool := NewSessionPool(5*time.Minute, 10)
+
 	mux := http.NewServeMux()
 	s := &Server{
 		cfg:    cfg,
 		mux:    mux,
-		pool:   nil, // populated in Task 2
-		chrome: nil, // populated in Task 3
+		pool:   pool,
+		chrome: chrome,
 		logger: logger,
 	}
 	s.registerRoutes(mux)
-	return s
+	return s, nil
 }
 
 // ListenAndServe starts the HTTP server and blocks until it returns an error.
