@@ -78,26 +78,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleInteract is a stub — implemented in Task 6.
-func (s *Server) handleInteract(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented")
-}
-
-// handleSolve is a stub — implemented in Task 7.
-func (s *Server) handleSolve(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented")
-}
-
-// handleRender is a stub — implemented in Task 8.
-func (s *Server) handleRender(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented")
-}
-
-// handleDestroySession is a stub — implemented in Task 6.
-func (s *Server) handleDestroySession(w http.ResponseWriter, _ *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented")
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
