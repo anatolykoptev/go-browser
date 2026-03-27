@@ -53,6 +53,8 @@ func TestParseAction_AllTypes(t *testing.T) {
 		{"go_back", `{"type":"go_back"}`},
 		{"get_logs", `{"type":"get_logs"}`},
 		{"scroll", `{"type":"scroll","selector":".item","delta_x":0,"delta_y":300}`},
+		{"get_cookies", `{"type":"get_cookies"}`},
+		{"destroy_session", `{"type":"destroy_session"}`},
 	}
 
 	for _, tc := range types {
@@ -65,5 +67,71 @@ func TestParseAction_AllTypes(t *testing.T) {
 				t.Errorf("Type = %q, want %q", a.Type, tc.name)
 			}
 		})
+	}
+}
+
+func TestParseAction_GetCookies(t *testing.T) {
+	raw := `{"type":"get_cookies"}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Type != "get_cookies" {
+		t.Errorf("Type = %q, want %q", a.Type, "get_cookies")
+	}
+}
+
+func TestParseAction_DestroySession(t *testing.T) {
+	raw := `{"type":"destroy_session"}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Type != "destroy_session" {
+		t.Errorf("Type = %q, want %q", a.Type, "destroy_session")
+	}
+}
+
+func TestParseAction_EvaluateJSField(t *testing.T) {
+	raw := `{"type":"evaluate","js":"return 1"}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.JS != "return 1" {
+		t.Errorf("JS = %q, want %q", a.JS, "return 1")
+	}
+}
+
+func TestParseAction_HandleDialogAccept(t *testing.T) {
+	f := false
+	raw := `{"type":"handle_dialog","accept":false,"text":"my prompt"}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Accept == nil || *a.Accept != f {
+		t.Errorf("Accept = %v, want *false", a.Accept)
+	}
+	if a.Text != "my prompt" {
+		t.Errorf("Text = %q, want %q", a.Text, "my prompt")
+	}
+}
+
+func TestParseAction_CookieInputSecureHTTPOnly(t *testing.T) {
+	raw := `{"type":"set_cookies","cookies":[{"name":"sid","value":"abc","domain":"example.com","secure":true,"http_only":true}]}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(a.Cookies) != 1 {
+		t.Fatalf("Cookies len = %d, want 1", len(a.Cookies))
+	}
+	c := a.Cookies[0]
+	if !c.Secure {
+		t.Error("Secure = false, want true")
+	}
+	if !c.HTTPOnly {
+		t.Error("HTTPOnly = false, want true")
 	}
 }
