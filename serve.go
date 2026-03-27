@@ -1,0 +1,115 @@
+package browser
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+)
+
+const (
+	defaultPort              = "8906"
+	defaultCloakBrowserWSURL = "ws://127.0.0.1:9222"
+)
+
+// ServerConfig holds configuration for the HTTP server.
+type ServerConfig struct {
+	Port              string
+	CloakBrowserWSURL string
+}
+
+// ServerConfigFromEnv reads ServerConfig from environment variables.
+// PORT defaults to 8906, CLOAKBROWSER_WS_URL defaults to ws://127.0.0.1:9222.
+func ServerConfigFromEnv() ServerConfig {
+	cfg := ServerConfig{
+		Port:              defaultPort,
+		CloakBrowserWSURL: defaultCloakBrowserWSURL,
+	}
+	if v := os.Getenv("PORT"); v != "" {
+		cfg.Port = v
+	}
+	if v := os.Getenv("CLOAKBROWSER_WS_URL"); v != "" {
+		cfg.CloakBrowserWSURL = v
+	}
+	return cfg
+}
+
+// Server is the go-browser HTTP API server.
+type Server struct {
+	cfg    ServerConfig
+	mux    *http.ServeMux
+	pool   *SessionPool   // set in Task 2
+	chrome *ChromeManager // set in Task 3
+	logger *slog.Logger
+}
+
+// SessionPool is a placeholder type to be implemented in Task 2.
+type SessionPool struct{}
+
+// ChromeManager is a placeholder type to be implemented in Task 3.
+type ChromeManager struct{}
+
+// NewServer constructs a Server and registers all routes.
+func NewServer(cfg ServerConfig, logger *slog.Logger) *Server {
+	mux := http.NewServeMux()
+	s := &Server{
+		cfg:    cfg,
+		mux:    mux,
+		pool:   nil, // populated in Task 2
+		chrome: nil, // populated in Task 3
+		logger: logger,
+	}
+	s.registerRoutes(mux)
+	return s
+}
+
+// ListenAndServe starts the HTTP server and blocks until it returns an error.
+func (s *Server) ListenAndServe() error {
+	addr := fmt.Sprintf(":%s", s.cfg.Port)
+	s.logger.Info("listening", "addr", addr)
+	return http.ListenAndServe(addr, s.mux) //nolint:gosec // non-TLS intentional for internal sidecar
+}
+
+func (s *Server) registerRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /chrome/interact", s.handleInteract)
+	mux.HandleFunc("POST /solve", s.handleSolve)
+	mux.HandleFunc("POST /render", s.handleRender)
+	mux.HandleFunc("DELETE /session/{id}", s.handleDestroySession)
+}
+
+// handleHealth returns 200 OK with service status.
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleInteract is a stub — implemented in Task 6.
+func (s *Server) handleInteract(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "not implemented")
+}
+
+// handleSolve is a stub — implemented in Task 7.
+func (s *Server) handleSolve(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "not implemented")
+}
+
+// handleRender is a stub — implemented in Task 8.
+func (s *Server) handleRender(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "not implemented")
+}
+
+// handleDestroySession is a stub — implemented in Task 6.
+func (s *Server) handleDestroySession(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "not implemented")
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
