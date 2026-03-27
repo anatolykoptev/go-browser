@@ -44,9 +44,6 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// SessionPool is a placeholder type to be implemented in Task 2.
-type SessionPool struct{}
-
 // ChromeManager is a placeholder type to be implemented in Task 3.
 type ChromeManager struct{}
 
