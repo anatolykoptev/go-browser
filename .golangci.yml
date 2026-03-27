@@ -12,3 +12,4 @@ linters:
       rules:
         - name: exported
           arguments: [checkPrivateReceivers]
+
