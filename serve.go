@@ -44,9 +44,6 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// ChromeManager is a placeholder type to be implemented in Task 3.
-type ChromeManager struct{}
-
 // NewServer constructs a Server and registers all routes.
 func NewServer(cfg ServerConfig, logger *slog.Logger) *Server {
 	mux := http.NewServeMux()
