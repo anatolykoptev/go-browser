@@ -109,16 +109,37 @@ func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 func doSetCookies(page *rod.Page, cookies []CookieInput) error {
 	for _, c := range cookies {
 		req := proto.NetworkSetCookie{
-			Name:   c.Name,
-			Value:  c.Value,
-			Domain: c.Domain,
-			Path:   c.Path,
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			Secure:   c.Secure,
+			HTTPOnly: c.HTTPOnly,
 		}
 		if _, err := req.Call(page); err != nil {
 			return fmt.Errorf("set_cookies %q: %w", c.Name, err)
 		}
 	}
 	return nil
+}
+
+func doGetCookies(page *rod.Page) ([]map[string]any, error) {
+	cookies, err := page.Cookies(nil)
+	if err != nil {
+		return nil, fmt.Errorf("get_cookies: %w", err)
+	}
+	result := make([]map[string]any, 0, len(cookies))
+	for _, c := range cookies {
+		result = append(result, map[string]any{
+			"name":      c.Name,
+			"value":     c.Value,
+			"domain":    c.Domain,
+			"path":      c.Path,
+			"secure":    c.Secure,
+			"http_only": c.HTTPOnly,
+		})
+	}
+	return result, nil
 }
 
 func doSnapshot(page *rod.Page, _ string) (string, error) {
@@ -146,10 +167,14 @@ func doSnapshot(page *rod.Page, _ string) (string, error) {
 	return sb.String(), nil
 }
 
-func doHandleDialog(page *rod.Page) (string, error) {
+func doHandleDialog(page *rod.Page, accept bool, promptText string) (string, error) {
 	wait, handle := page.HandleDialog()
 	ev := wait()
-	if err := handle(&proto.PageHandleJavaScriptDialog{Accept: true}); err != nil {
+	params := &proto.PageHandleJavaScriptDialog{Accept: accept}
+	if promptText != "" {
+		params.PromptText = promptText
+	}
+	if err := handle(params); err != nil {
 		return "", fmt.Errorf("handle_dialog: %w", err)
 	}
 	return ev.Message, nil

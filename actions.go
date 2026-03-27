@@ -13,6 +13,7 @@ type Action struct {
 	Selector string        `json:"selector,omitempty"`
 	Text     string        `json:"text,omitempty"`
 	Script   string        `json:"script,omitempty"`
+	JS       string        `json:"js,omitempty"`
 	Key      string        `json:"key,omitempty"`
 	URL      string        `json:"url,omitempty"`
 	Humanize bool          `json:"humanize,omitempty"`
@@ -21,14 +22,17 @@ type Action struct {
 	Cookies  []CookieInput `json:"cookies,omitempty"`
 	DeltaX   float64       `json:"delta_x,omitempty"`
 	DeltaY   float64       `json:"delta_y,omitempty"`
+	Accept   *bool         `json:"accept,omitempty"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
 type CookieInput struct {
-	Name   string `json:"name"`
-	Value  string `json:"value"`
-	Domain string `json:"domain"`
-	Path   string `json:"path,omitempty"`
+	Name     string `json:"name"`
+	Value    string `json:"value"`
+	Domain   string `json:"domain"`
+	Path     string `json:"path,omitempty"`
+	Secure   bool   `json:"secure,omitempty"`
+	HTTPOnly bool   `json:"http_only,omitempty"`
 }
 
 // ActionResult is the outcome of a single executed action.
@@ -57,7 +61,11 @@ func ExecuteAction(ctx context.Context, page *rod.Page, a Action) ActionResult {
 	case "screenshot":
 		data, err = doScreenshot(page)
 	case "evaluate":
-		data, err = doEvaluate(page, a.Script)
+		script := a.Script
+		if script == "" {
+			script = a.JS
+		}
+		data, err = doEvaluate(page, script)
 	case "press":
 		err = doPress(page, a.Key)
 	case "sleep":
@@ -69,7 +77,15 @@ func ExecuteAction(ctx context.Context, page *rod.Page, a Action) ActionResult {
 	case "snapshot":
 		data, err = doSnapshot(page, a.Format)
 	case "handle_dialog":
-		data, err = doHandleDialog(page)
+		accept := true
+		if a.Accept != nil {
+			accept = *a.Accept
+		}
+		data, err = doHandleDialog(page, accept, a.Text)
+	case "get_cookies":
+		data, err = doGetCookies(page)
+	case "destroy_session":
+		// No-op in action execution — session lifecycle managed by handler
 	case "hover":
 		err = doHover(ctx, page, a.Selector)
 	case "go_back":
