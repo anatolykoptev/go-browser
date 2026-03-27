@@ -1,135 +1,82 @@
 # go-browser Roadmap
 
-## Phase 0: Bootstrap (v0.1.0)
+## Completed Phases
 
-**Goal:** Interface + Remote backend. Drop-in replacement for existing chromedp code.
-
-- [x] Define `Browser`, `Page` interfaces
-- [x] Common options: `WithConcurrency`, `WithTimeout`, `WithUserAgent`
+### Phase 0: Bootstrap (v0.1.0) — DONE
+- [x] `Browser`, `Page` interfaces
+- [x] `remote/` backend (chromedp CDP)
 - [x] Page pool with semaphore
-- [x] `remote/` backend — connect to `ws://` CDP endpoint (chromedp under the hood)
-- [x] Migrate go-search `browser.go` → `browser.New(remote.WithEndpoint(wsURL))`
-- [x] Migrate go-wp `browser_init.go` → same pattern
-- [x] Tests: pool concurrency, timeout, unavailable graceful degradation
-- [x] Delete `browserless` container from docker-compose (after Rod in Phase 1)
+- [x] Options: concurrency, timeout, user-agent
 
-**Result:** Same behavior, shared code, one dependency instead of two copy-pasted files.
+### Phase 1: Rod Backend (v0.2.0) — DONE
+- [x] `rod/` backend — in-process Chromium via Rod
+- [x] Proxy integration via go-stealth ProxyPool
+- [x] Crash recovery with auto-restart
+- [x] Request interception (block images/fonts)
+- [x] Removed `browserless` container (384MB freed)
 
-## Phase 1: Rod Backend (v0.2.0)
+---
 
-**Goal:** In-process Chromium. Eliminate `browserless` container.
+## Active: Browser Hybrid Architecture
 
-- [x] `rod/` backend — launch + manage Chromium via Rod
-- [x] Auto-download Chromium binary on first run
-- [x] Proxy integration via `go-stealth.ProxyPool`
-- [x] Page pool with Rod's built-in browser.EachEvent
-- [x] Docker: add Chromium to service containers that need it (go-search, go-wp)
-- [x] Remove `browserless` service from docker-compose
-- [x] Benchmark: memory per tab, render latency vs browserless
-- [x] Tests: proxy rotation, concurrent renders, crash recovery
+**Spec:** `~/docs/superpowers/specs/2026-03-27-browser-hybrid-architecture-design.md`
 
-**Result:** No more external browserless container. ~384MB RAM freed.
+### Phase 2: go-browser HTTP Service (v0.3.0)
 
-## Phase 2: Lightpanda Backend (v0.3.0)
+**Plan:** `~/docs/superpowers/plans/2026-03-27-browser-hybrid-phase1.md`
+**Goal:** Standalone service on `:8906` connected to CloakBrowser via rod CDP.
 
-**Goal:** Lightweight alternative for high-volume JS rendering.
+- [ ] HTTP server skeleton + health endpoint
+- [ ] Session pool with TTL reaper
+- [ ] Chrome manager (rod → CloakBrowser WS, stealth JS, per-context proxy)
+- [ ] 15 Chrome actions matching ox-browser API contract
+- [ ] Humanize engine (Bezier mouse, keyboard timing)
+- [ ] /chrome/interact handler
+- [ ] /solve handler (CF clearance)
+- [ ] /render handler
+- [ ] Dockerfile + Docker Compose
+- [ ] Integration smoke tests
 
-- [ ] `lightpanda/` backend — connect to Lightpanda CDP server
-- [ ] Lightpanda binary management (download, health check)
-- [ ] Docker: Lightpanda sidecar or embedded binary
-- [ ] Benchmark: memory/latency vs Rod for typical enrichment pages
-- [ ] Fallback: Lightpanda → Rod when Lightpanda can't render (missing Web APIs)
-- [ ] go-enriche integration: `WithBrowser(browser.Browser)` option
+**Parallelizable:** Session pool, chrome manager, actions, humanize — all after skeleton.
+**Resource:** +256MB (go-browser container)
 
-**Depends on:** Lightpanda stability (currently beta). Monitor Web API coverage.
+### Phase 3: ox-browser Decoupling (v0.4.0)
 
-**Result:** 9x less memory for JS rendering in enrichment pipeline.
+**Goal:** ox-browser proxies Chrome ops to go-browser, removes chromiumoxide.
 
-## Phase 3: Advanced Features (v0.4.0)
+- [ ] ox-browser /solve → proxy to go-browser:8906/solve
+- [ ] ox-browser /chrome/interact → proxy to go-browser
+- [ ] Remove chromiumoxide from ox-browser Cargo.toml
+- [ ] Delete ~2800 lines: browser_pool, chrome_session, solver_chromium, chrome_interact
+- [ ] Move twitter login to go-browser (or separate service)
+- [ ] Rebuild ox-browser — verify faster builds, all HTTP endpoints work
+- [ ] Update go-stealth: OxBrowserSolver backed by go-browser
 
-**Goal:** Production hardening + advanced capabilities.
+**Result:** ox-browser = pure HTTP stealth (wreq). No abandoned deps. Faster builds.
 
-- [x] Request interception (block images/fonts/analytics for faster renders)
-- [ ] Cookie injection (authenticated scraping)
-- [ ] Screenshot support (Rod backend only)
-- [ ] Custom JS injection (wait conditions, data extraction scripts)
-- [ ] Metrics: render count, latency histogram, error rate (callback hooks)
-- [x] Health monitoring: auto-restart crashed browser process
+### Phase 4: Cleanup (v0.5.0)
 
-## Phase 4: Anti-Detection (v0.5.0)
+**Goal:** Remove Byparr, optimize, add MCP.
 
-**Goal:** Stealth browser sessions that pass bot detection.
+- [ ] Remove Byparr container — free 1.5GB RAM
+- [ ] go-browser MCP server (chrome_interact, solve, render as MCP tools)
+- [ ] go-wp/go-search import go-browser directly (drop browser_init.go boilerplate)
+- [ ] Prometheus metrics (sessions, latency, errors)
+- [ ] Connection pooling, page pre-warming
+- [ ] Proxy auth via rod Hijack (Fetch.authRequired)
 
-- [ ] Browser fingerprint rotation (viewport, timezone, locale, WebGL)
-- [ ] Human-like behavior (random delays, scroll patterns)
-- [ ] Integration with go-stealth profiles (match TLS fingerprint to browser UA)
-- [ ] Cloudflare/Turnstile bypass testing
-- [ ] Per-session proxy binding (proxy ↔ fingerprint consistency)
+## Resource Impact
 
-## Future: Kalamari (monitoring)
+| Container | Now | Phase 2 | Phase 4 |
+|-----------|-----|---------|---------|
+| ox-browser | 768MB | 768MB | 512MB |
+| cloakbrowser | 512MB | 512MB | 512MB |
+| byparr | 1536MB | 1536MB | **0** |
+| go-browser | 0 | 256MB | 256MB |
+| **Total** | **2816MB** | **3072MB** | **1280MB** |
 
-Pure Rust headless browser, 10MB binary, no Chromium. Currently v0.1, 3 GitHub stars.
+## Future
 
-**Watch for:**
-- JS execution support (currently DOM-only)
-- Stability improvements
-- Community adoption (stars, contributors)
-- Go FFI or sidecar integration feasibility
-
-**When ready:** Add `kalamari/` backend with same `Browser` interface.
-
-## Migration Plan
-
-### Step 1: go-search (lowest risk)
-
-Browser is optional fallback (thin content < 200 chars). Safe to swap.
-
-```go
-// Before (browser.go, 101 lines):
-chromedp.NewRemoteAllocator(ctx, wsURL)
-
-// After:
-b, _ := remote.New(remote.WithEndpoint(wsURL))
-page, _ := b.Render(ctx, url)
-```
-
-### Step 2: go-wp (medium risk)
-
-Browser used for Yandex Maps org data. Test with known place URLs.
-
-```go
-// Before (browser_init.go, 87 lines):
-chromedp.NewRemoteAllocator(ctx, wsURL)
-
-// After:
-b, _ := rod.New(
-    browser.WithConcurrency(2),
-    browser.WithTimeout(25 * time.Second),
-    rod.WithProxyPool(pool),
-)
-deps.BrowserFetch = func(ctx context.Context, url string) (string, error) {
-    page, err := b.Render(ctx, url)
-    if err != nil { return "", err }
-    return page.HTML, nil
-}
-```
-
-### Step 3: go-enriche (new integration)
-
-Add optional `WithBrowser` to enriche for JS-rendered content extraction.
-
-```go
-b, _ := lightpanda.New(lightpanda.WithEndpoint("ws://127.0.0.1:9222"))
-e := enriche.New(
-    enriche.WithStealth(stealthClient),
-    enriche.WithBrowser(b),  // new option
-)
-// Enricher tries HTTP first, falls back to browser for thin content
-```
-
-## Non-Goals
-
-- **Full test automation framework** — not Selenium/Playwright replacement
-- **Screenshot service** — incidental feature of Rod, not primary purpose
-- **PDF generation** — use dedicated tools (wkhtmltopdf, etc.)
-- **Multi-browser support** — Chromium-family only (Rod + Lightpanda)
+- **Lightpanda backend** — when stable, 9x less memory for simple renders
+- **Kalamari** — pure Rust headless, 10MB binary, watch for maturity
+- **Multi-browser** — CloakBrowser (Chromium) + Camoufox (Firefox) when Camoufox reaches production-ready
