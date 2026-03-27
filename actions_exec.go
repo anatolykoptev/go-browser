@@ -1,0 +1,196 @@
+package browser
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/input"
+	"github.com/go-rod/rod/lib/proto"
+)
+
+// keyMap maps action key names to rod input keys.
+var keyMap = map[string]input.Key{
+	"Enter":      input.Enter,
+	"Tab":        input.Tab,
+	"Escape":     input.Escape,
+	"Backspace":  input.Backspace,
+	"ArrowUp":    input.ArrowUp,
+	"ArrowDown":  input.ArrowDown,
+	"ArrowLeft":  input.ArrowLeft,
+	"ArrowRight": input.ArrowRight,
+	"Space":      input.Space,
+}
+
+func doClick(ctx context.Context, page *rod.Page, selector string) error {
+	el, err := page.Context(ctx).Element(selector)
+	if err != nil {
+		return fmt.Errorf("click: find %q: %w", selector, err)
+	}
+	if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return fmt.Errorf("click: %w", err)
+	}
+	return nil
+}
+
+func doTypeText(ctx context.Context, page *rod.Page, selector, text string) error {
+	el, err := page.Context(ctx).Element(selector)
+	if err != nil {
+		return fmt.Errorf("type_text: find %q: %w", selector, err)
+	}
+	if err := el.SelectAllText(); err != nil {
+		return fmt.Errorf("type_text: select all: %w", err)
+	}
+	if err := el.Input(text); err != nil {
+		return fmt.Errorf("type_text: input: %w", err)
+	}
+	return nil
+}
+
+func doWaitFor(ctx context.Context, page *rod.Page, selector string) error {
+	if _, err := page.Context(ctx).Element(selector); err != nil {
+		return fmt.Errorf("wait_for %q: %w", selector, err)
+	}
+	return nil
+}
+
+func doScreenshot(page *rod.Page) (string, error) {
+	buf, err := page.Screenshot(true, nil)
+	if err != nil {
+		return "", fmt.Errorf("screenshot: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(buf), nil
+}
+
+func doEvaluate(page *rod.Page, script string) (any, error) {
+	res, err := page.Eval(script)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate: %w", err)
+	}
+	return res.Value.Val(), nil
+}
+
+func doPress(page *rod.Page, key string) error {
+	k, ok := keyMap[key]
+	if !ok {
+		return fmt.Errorf("press: unknown key %q", key)
+	}
+	if err := page.Keyboard.Press(k); err != nil {
+		return fmt.Errorf("press %q: %w", key, err)
+	}
+	return nil
+}
+
+func doSleep(ctx context.Context, waitMs int) error {
+	if waitMs <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Duration(waitMs) * time.Millisecond):
+		return nil
+	}
+}
+
+func doNavigate(ctx context.Context, page *rod.Page, url string) error {
+	if err := page.Context(ctx).Navigate(url); err != nil {
+		return fmt.Errorf("navigate %q: %w", url, err)
+	}
+	if err := page.Context(ctx).WaitLoad(); err != nil {
+		return fmt.Errorf("navigate wait_load: %w", err)
+	}
+	return nil
+}
+
+func doSetCookies(page *rod.Page, cookies []CookieInput) error {
+	for _, c := range cookies {
+		req := proto.NetworkSetCookie{
+			Name:   c.Name,
+			Value:  c.Value,
+			Domain: c.Domain,
+			Path:   c.Path,
+		}
+		if _, err := req.Call(page); err != nil {
+			return fmt.Errorf("set_cookies %q: %w", c.Name, err)
+		}
+	}
+	return nil
+}
+
+func doSnapshot(page *rod.Page, _ string) (string, error) {
+	res, err := proto.AccessibilityGetFullAXTree{}.Call(page)
+	if err != nil {
+		return "", fmt.Errorf("snapshot: %w", err)
+	}
+	var sb strings.Builder
+	for _, node := range res.Nodes {
+		if node.Ignored {
+			continue
+		}
+		role := ""
+		if node.Role != nil {
+			role = fmt.Sprintf("%v", node.Role.Value.Val())
+		}
+		name := ""
+		if node.Name != nil {
+			name = fmt.Sprintf("%v", node.Name.Value.Val())
+		}
+		if role != "" || name != "" {
+			fmt.Fprintf(&sb, "[%s] %s\n", role, name)
+		}
+	}
+	return sb.String(), nil
+}
+
+func doHandleDialog(page *rod.Page) (string, error) {
+	wait, handle := page.HandleDialog()
+	ev := wait()
+	if err := handle(&proto.PageHandleJavaScriptDialog{Accept: true}); err != nil {
+		return "", fmt.Errorf("handle_dialog: %w", err)
+	}
+	return ev.Message, nil
+}
+
+func doHover(ctx context.Context, page *rod.Page, selector string) error {
+	el, err := page.Context(ctx).Element(selector)
+	if err != nil {
+		return fmt.Errorf("hover: find %q: %w", selector, err)
+	}
+	if err := el.Hover(); err != nil {
+		return fmt.Errorf("hover: %w", err)
+	}
+	return nil
+}
+
+func doGoBack(page *rod.Page) error {
+	if err := page.NavigateBack(); err != nil {
+		return fmt.Errorf("go_back: %w", err)
+	}
+	return nil
+}
+
+func doGetLogs() string {
+	return "log capture requires event listener setup"
+}
+
+func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float64) error {
+	if selector != "" {
+		el, err := page.Context(ctx).Element(selector)
+		if err != nil {
+			return fmt.Errorf("scroll: find %q: %w", selector, err)
+		}
+		if err := el.ScrollIntoView(); err != nil {
+			return fmt.Errorf("scroll into view: %w", err)
+		}
+		return nil
+	}
+	const scrollSteps = 1
+	if err := page.Mouse.Scroll(dx, dy, scrollSteps); err != nil {
+		return fmt.Errorf("scroll: %w", err)
+	}
+	return nil
+}
