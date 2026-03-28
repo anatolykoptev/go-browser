@@ -26,6 +26,7 @@ type InteractRequest struct {
 	SessionID   *string  `json:"session_id,omitempty"`
 	Profile     string   `json:"profile,omitempty"`
 	UseProfile  bool     `json:"use_profile,omitempty"` // use default Chrome profile (persistent cookies)
+	ReusePage   bool     `json:"reuse_page,omitempty"`  // attach to existing page (bypasses CDP page-creation detection)
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -107,26 +108,45 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		}
 	}()
 
-	profile, err := LoadProfile(req.Profile)
-	if err != nil {
-		return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err)}
-	}
+	var page *rod.Page
 
-	page, err := s.chrome.NewStealthPage(browser, profile)
-	if err != nil {
-		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+	if req.ReusePage {
+		// Attach to existing page — no TargetCreateTarget CDP call.
+		// This bypasses Google/Twitter CDP page-creation detection.
+		page, err = s.chrome.FindPage("")
+		if err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
+		}
+		// Navigate to URL if specified
+		if req.URL != "" && req.URL != "about:blank" {
+			if navErr := page.Context(ctx).Navigate(req.URL); navErr != nil {
+				return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + navErr.Error()}
+			}
+			if loadErr := page.Context(ctx).WaitLoad(); loadErr != nil {
+				return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + loadErr.Error()}
+			}
+		}
+	} else {
+		profile, err := LoadProfile(req.Profile)
+		if err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err)}
+		}
+		page, err = s.chrome.NewStealthPage(browser, profile)
+		if err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+		}
+		defer func() { _ = page.Close() }()
+
+		if err := page.Context(ctx).Navigate(req.URL); err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + err.Error()}
+		}
+		if err := page.Context(ctx).WaitLoad(); err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + err.Error()}
+		}
 	}
-	defer func() { _ = page.Close() }()
 
 	logs := NewLogCollector()
 	logs.SubscribeCDP(page)
-
-	if err := page.Context(ctx).Navigate(req.URL); err != nil {
-		return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + err.Error()}
-	}
-	if err := page.Context(ctx).WaitLoad(); err != nil {
-		return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + err.Error()}
-	}
 
 	cursor := humanize.NewCursor(390, 290)
 
