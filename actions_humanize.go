@@ -83,7 +83,7 @@ func doTypeTextHumanized(
 		vk := charToVK(ch)
 
 		_ = proto.InputDispatchKeyEvent{
-			Type:                  proto.InputDispatchKeyEventTypeKeyDown,
+			Type:                  proto.InputDispatchKeyEventTypeRawKeyDown,
 			Key:                   char,
 			Code:                  code,
 			WindowsVirtualKeyCode: vk,

@@ -27,7 +27,7 @@ type InteractRequest struct {
 	Profile     string   `json:"profile,omitempty"`
 	UseProfile  bool     `json:"use_profile,omitempty"` // use default Chrome profile (persistent cookies)
 	ReusePage   bool     `json:"reuse_page,omitempty"`
-	NoStealth   bool     `json:"no_stealth,omitempty"` // plain page without stealth injection  // attach to existing page (bypasses CDP page-creation detection)
+	NoStealth   bool     `json:"no_stealth,omitempty"`  // plain page without stealth JS injection
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
