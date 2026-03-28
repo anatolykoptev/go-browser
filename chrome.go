@@ -47,10 +47,11 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 	closeInitialPages(b)
 
 	// Create a keepalive context so Chrome doesn't exit when user contexts are disposed.
+	// Non-fatal: headed Chrome with Xvfb doesn't need keepalive.
 	keepaliveCtxID, err := createKeepaliveContext(b)
 	if err != nil {
-		_ = b.Close()
-		return nil, fmt.Errorf("chrome: keepalive context: %w", err)
+		// Don't fail — headed Chrome survives without keepalive
+		keepaliveCtxID = ""
 	}
 
 	return &ChromeManager{
