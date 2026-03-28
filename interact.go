@@ -118,13 +118,11 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
 		}
-		// Navigate to URL if specified (no WaitLoad — SPA pages never fully "load")
+		// Navigate to URL — no WaitLoad (use wait_for/sleep actions for SPA pages)
 		if req.URL != "" && req.URL != "about:blank" {
 			if navErr := page.Context(ctx).Navigate(req.URL); navErr != nil {
 				return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + navErr.Error()}
 			}
-			// Wait for DOMContentLoaded, not full load (Google/Twitter are SPAs)
-			_ = page.Context(ctx).WaitDOMStable(time.Second, 0.1)
 		}
 	} else if req.NoStealth {
 		// Plain page without stealth injection — for sites that detect stealth JS.
@@ -133,6 +131,13 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 			return InteractResponse{URL: req.URL, Status: "error", Error: "plain page: " + err.Error()}
 		}
 		defer func() { _ = page.Close() }()
+
+		if err := page.Context(ctx).Navigate(req.URL); err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + err.Error()}
+		}
+		if err := page.Context(ctx).WaitLoad(); err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + err.Error()}
+		}
 	} else {
 		profile, err := LoadProfile(req.Profile)
 		if err != nil {
