@@ -9,6 +9,7 @@ const workerBootstrap = (function() {
   const dm = sp?.hardware?.deviceMemory || 8;
   const platform = sp?.platform || 'MacIntel';
   const langs = sp?.languages ? JSON.stringify(sp.languages) : '["en-US","en"]';
+  const ua = sp?.userAgent || navigator.userAgent;
 
   return `
     Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
@@ -28,6 +29,9 @@ const workerBootstrap = (function() {
     });
     Object.defineProperty(Navigator.prototype, 'language', {
       get: () => ${langs}[0], configurable: true
+    });
+    Object.defineProperty(Object.getPrototypeOf(navigator), 'userAgent', {
+      get: () => '${ua}', configurable: true
     });
   `;
 })();

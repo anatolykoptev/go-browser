@@ -18,21 +18,36 @@ if (!window.chrome.runtime) {
 }
 
 if (!window.chrome.csi) {
-  window.chrome.csi = () => {
-    const now = Date.now();
-    return {startE: now, onloadT: now, pageT: now, tran: 15};
+  window.chrome.csi = function() {
+    var t = performance.timing || {};
+    var navStart = t.navigationStart || (Date.now() - 5000);
+    return {
+      startE: navStart,
+      onloadT: (t.loadEventEnd || navStart + 2000),
+      pageT: performance.now(),
+      tran: 15
+    };
   };
 }
 
 if (!window.chrome.loadTimes) {
-  window.chrome.loadTimes = () => {
-    const now = Date.now() / 1000;
+  window.chrome.loadTimes = function() {
+    var t = performance.timing || {};
+    var navStart = (t.navigationStart || Date.now() - 5000) / 1000;
     return {
-      requestTime: now, startLoadTime: now, commitLoadTime: now,
-      finishDocumentLoadTime: now, finishLoadTime: now, firstPaintTime: now,
-      firstPaintAfterLoadTime: 0, navigationType: 'Other',
-      wasFetchedViaSpdy: false, wasNpnNegotiated: false, npnNegotiatedProtocol: '',
-      wasAlternateProtocolAvailable: false, connectionInfo: 'h2'
+      requestTime: navStart,
+      startLoadTime: navStart + 0.1,
+      commitLoadTime: navStart + 0.3,
+      finishDocumentLoadTime: navStart + 1.2,
+      finishLoadTime: navStart + 1.5,
+      firstPaintTime: navStart + 0.8,
+      firstPaintAfterLoadTime: 0,
+      navigationType: 'Other',
+      wasFetchedViaSpdy: true,
+      wasNpnNegotiated: true,
+      npnNegotiatedProtocol: 'h2',
+      wasAlternateProtocolAvailable: false,
+      connectionInfo: 'h2'
     };
   };
 }
