@@ -52,7 +52,7 @@ func TestChromeManager_StealthJS(t *testing.T) {
 		"webdriver",
 		"chrome.runtime",
 		"canPlayType",
-		"WorkerGlobalScope",
+		"OriginalWorker",
 		"__cdp_runtime",
 	}
 
