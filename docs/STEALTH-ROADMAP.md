@@ -1,187 +1,155 @@
 # Stealth Roadmap — Go-Browser
 
-> From "looks like a bot" to "indistinguishable from a real person on a MacBook"
+> From "looks like a bot" to "a real person on a real MacBook"
 
-## Current State
+## Current State (2026-03-28)
 
-**STEALTH-SPEC.md**: 20 detection vectors passing, 9 known gaps. Castle.io SDK generates tokens consistently but Twitter returns 399. All open-source login solutions (twikit, d60/twitter_login) also broken — Castle protocol updated.
+- **Headed Chrome** via Xvfb + persistent profile (Docker volume)
+- **bot.sannysoft.com**: 56/56 PASS
+- **TLS/HTTP2**: identical to real Chrome 145 (JA4, Akamai hash verified)
+- **Scraping**: Amazon, Booking, Avito, Reddit, HN, GitHub — 0 blocks
+- **Twitter 399**: all open-source solutions broken, not our issue
 
-## Phase 1: Quick JS Fixes (1 day, HIGH impact)
+## Phase 1: Quick JS Fixes — ✅ DONE
 
-Low-effort fixes that close obvious detection vectors. All in stealth JS modules.
+| # | Fix | Status |
+|---|-----|--------|
+| 1.1 | `performance.memory` | ✅ NATIVE (headed Chrome) |
+| 1.2 | Worker `userAgent` | ✅ Done |
+| 1.3 | `visibilityState` | ✅ NATIVE (headed Chrome) |
+| 1.4 | `csi()/loadTimes()` realistic timings | ✅ Done |
+| 1.5 | `speechSynthesis.getVoices()` | ✅ NATIVE (headed Chrome, 9 voices) |
+| 1.6 | `Accept-Language` header | ✅ Done (CDP) |
+| 1.7 | `getBattery()` | ✅ Done |
+| 1.8 | `getGamepads()` | ✅ Done |
+| 1.9 | Localhost port scan protection | ✅ Done |
 
-### 1.1 `performance.memory` spoof
-- **File**: `stealth/02_navigator.js`
-- **What**: Add realistic heap size values (jsHeapSizeLimit ~4GB, totalJSHeapSize ~20MB)
-- **Detectors**: Akamai, FingerprintJS Pro
-- **Effort**: 5 lines
+## Phase 2: Medium Fixes — OPEN
 
-### 1.2 Worker `userAgent` patch
-- **File**: `stealth/05_worker_injection.js`
-- **What**: Add `navigator.userAgent` override to worker bootstrap (currently missing — only webdriver, hwConcurrency, deviceMemory, platform, languages are patched)
-- **Detectors**: Castle.io, DataDome, PerimeterX — all check Worker UA vs main thread
-- **Effort**: 2 lines
+| # | Fix | Status | Priority |
+|---|-----|--------|----------|
+| 2.1 | WebGL `getSupportedExtensions()` Intel Iris list | ❌ TODO | MEDIUM — CreepJS checks |
+| 2.2 | `navigator.userAgentData` instanceof fix | ❌ TODO | MEDIUM — CreepJS prototype lie |
+| 2.3 | `navigator.connection` instanceof fix | ❌ TODO | LOW — partial (value works, instanceof fails) |
+| 2.4 | CSS media queries via CDP Emulation | ✅ NATIVE (headed Chrome) | — |
+| 2.5 | Sec-CH-UA GREASE randomization (go-browser) | ❌ TODO | MEDIUM — DataDome |
+| 2.6 | WebGL getParameter toString masking | ❌ TODO | LOW |
 
-### 1.3 `document.visibilityState` + `document.hidden`
-- **File**: `stealth/02_navigator.js`
-- **What**: Force `visibilityState='visible'`, `hidden=false`, suppress `visibilitychange` events
-- **Detectors**: Kasada, PerimeterX
-- **Effort**: 5 lines
+**Remaining: 5 items.** 2.1 and 2.2 are highest priority.
 
-### 1.4 `chrome.csi()` / `chrome.loadTimes()` realistic timings
-- **File**: `stealth/03_chrome_object.js`
-- **What**: Use `performance.timing` values instead of `Date.now()` for all timing fields. Add realistic deltas between navigation stages.
-- **Detectors**: Castle.io (part of fingerprint)
-- **Effort**: 15 lines
+### 2.1 WebGL getSupportedExtensions() — Intel Iris 540
 
-### 1.5 `speechSynthesis.getVoices()` stub
-- **File**: `stealth/04_media_permissions.js`
-- **What**: Return 10-15 macOS Apple voices (Alex, Samantha, Victoria, etc.) instead of empty array
-- **Detectors**: CreepJS, PerimeterX
-- **Effort**: 20 lines
+Our CloakBrowser uses SwiftShader (software renderer) but we spoof the GPU as "Intel Iris OpenGL Engine". SwiftShader and Intel Iris return **different WebGL extension lists**. CreepJS and Browserleaks check this.
 
-### 1.6 `Accept-Language` header via CDP
-- **File**: `chrome.go` (NewStealthPage)
-- **What**: Call `Network.setExtraHTTPHeaders` with `Accept-Language: en-US,en;q=0.9` matching profile languages
-- **Detectors**: All — trivial cross-check
-- **Effort**: 5 lines Go
+**Fix**: Override `getSupportedExtensions()` to return exact Intel Iris 540 extension list. Also override `getParameter()` for MAX_TEXTURE_SIZE, MAX_RENDERBUFFER_SIZE etc.
 
-### 1.7 `navigator.getBattery()` stub
-- **File**: `stealth/02_navigator.js`
-- **What**: Return Promise with `{charging: true, level: 0.9, chargingTime: 0, dischargingTime: Infinity}`
-- **Detectors**: Rare but cheap to fix
-- **Effort**: 5 lines
+**Need**: Reference data from a real Intel MacBook Pro. Run browserleaks.com/webgl on a real Mac and save the extension list + parameter values.
 
-### 1.8 `navigator.getGamepads()` stub
-- **File**: `stealth/02_navigator.js`
-- **What**: Return `[null, null, null, null]` (4 empty slots, matches real Chrome)
-- **Effort**: 1 line
+### 2.2 NavigatorUAData instanceof
 
-### 1.9 Localhost port scan protection
-- **File**: `stealth/01_cdp_markers.js`
-- **What**: Intercept fetch/XMLHttpRequest/WebSocket to localhost/127.0.0.1/[::1], return network error
-- **Detectors**: PerimeterX, eBay
-- **Effort**: 10 lines
+`navigator.userAgentData instanceof NavigatorUAData` returns false (we return a plain object). CreepJS flags this as "prototype lie".
 
-## Phase 2: Medium Fixes (2-3 days)
+**Fix**: Before overriding, capture `Object.getPrototypeOf(navigator.userAgentData).constructor` and use it to create our spoofed object with the correct prototype chain. Tricky because CloakBrowser may not expose NavigatorUAData natively in headless.
 
-### 2.1 WebGL `getSupportedExtensions()` — Intel Iris list
-- **File**: `stealth/02_navigator.js`
-- **What**: Override `getSupportedExtensions()` to return the exact extension list for Intel Iris 540 (MacBook Pro 2016). SwiftShader returns a different set. Also override other `getParameter()` constants (MAX_TEXTURE_SIZE, MAX_RENDERBUFFER_SIZE, etc.)
-- **Detectors**: CreepJS, Browserleaks
-- **Effort**: 30 lines (need reference data from a real Intel Mac)
+### 2.5 GREASE Randomization (go-browser stealth JS)
 
-### 2.2 `navigator.userAgentData` instanceof fix
-- **File**: `stealth/02_navigator.js`
-- **What**: Capture `NavigatorUAData.prototype` before overriding, create spoofed object with correct prototype chain so `instanceof NavigatorUAData` returns true
-- **Detectors**: CreepJS (prototype lie detection)
-- **Effort**: 15 lines, tricky
+Currently our `sec-ch-ua` in stealth profiles uses a static GREASE brand. Should randomize per-session from the set of valid Chrome 145 patterns.
 
-### 2.3 `navigator.connection` instanceof fix
-- **File**: `stealth/02_navigator.js`
-- **What**: Same approach — capture `NetworkInformation.prototype`, create object with correct chain
-- **Effort**: 10 lines
+Note: ox-browser already has GREASE randomization in `profile_hints.rs` (done this session). go-browser stealth JS needs the same.
 
-### 2.4 CSS media queries via CDP Emulation
-- **File**: `chrome.go` (NewStealthPage)
-- **What**: Call `Emulation.setEmulatedMedia` to ensure `(hover: hover)`, `(pointer: fine)`, `(display-mode: browser)` match a real laptop. Also set `prefers-color-scheme: light`.
-- **Detectors**: PerimeterX
-- **Effort**: 10 lines Go
+## Phase 3: Infrastructure — PARTIAL
 
-### 2.5 Sec-CH-UA GREASE randomization
-- **File**: `stealth/profiles/mac_chrome145.json` + `02_navigator.js`
-- **What**: Randomize the GREASE brand format per session from the set of valid Chrome 145 patterns. Not-A.Brand / Not A(Brand) / Not)A;Brand etc.
-- **Detectors**: DataDome
-- **Effort**: 10 lines
+| # | Check | Status | Result |
+|---|-------|--------|--------|
+| 3.1 | HTTP/2 SETTINGS frame | ✅ Verified | Identical to real Chrome |
+| 3.2 | QUIC/HTTP3 through proxies | ❌ Not tested | May differ from real Chrome |
+| 3.3 | Runtime.enable audit | ✅ Done | Removed from default path |
+| 3.4 | Webshare IP quality | ❌ Not tested | Some ports blocked by Twitter |
+| 3.5 | OffscreenCanvas Worker | ❌ Not tested | CloakBrowser C++ may not cover |
+| 3.6 | Persistent Chrome profile | ✅ Done | Docker volume `cloakbrowser_profile` |
 
-### 2.6 WebGL getParameter toString masking
-- **File**: `stealth/02_navigator.js`
-- **What**: Apply `__defineNativeGetter` pattern to WebGL `getParameter` override so `.toString()` returns `[native code]`
-- **Effort**: 5 lines
+## Phase 4: Anti-Bot Detector Tool — PLANNED
 
-## Phase 3: Infrastructure (1 week)
+New MCP tool: given a URL, identify what anti-bot protection is deployed.
 
-### 3.1 Verify HTTP/2 SETTINGS frame fingerprint
-- **Action**: Test CloakBrowser against `https://tls.peet.ws/api/all` and `https://www.browserscan.net/tls`. Compare SETTINGS frame values (HEADER_TABLE_SIZE, INITIAL_WINDOW_SIZE, MAX_HEADER_LIST_SIZE) with real Chrome 145.
-- **If mismatch**: Requires CloakBrowser C++ patch or Chrome flags
-- **Detectors**: Akamai Bot Manager
+### Architecture
+```
+Phase 1 (HTTP only):     ox-browser /fetch → headers + cookies + HTML → signature matching
+Phase 2 (Browser):       go-browser /chrome/interact → CDP network + JS vars → deep detection
+```
 
-### 3.2 Verify QUIC/HTTP3 behavior through proxies
-- **Action**: Test if CloakBrowser attempts QUIC through Webshare proxy. Real Chrome uses QUIC for Google/Cloudflare domains. SOCKS5 breaks UDP → Chrome falls back to HTTP/2 silently. This pattern is detectable.
-- **If issue**: Use HTTPS proxy instead of SOCKS5, or add `--disable-quic` flag (less suspicious than always-HTTP/2-never-QUIC)
+### Data sources
+1. `scrapfly/Antibot-Detector` — 16 anti-bot JSON signatures (MIT)
+2. `projectdiscovery/wappalyzergo` — 6000+ technology signatures (Go library)
+3. Custom Castle.io / Kasada signatures
 
-### 3.3 Audit go-rod Runtime.enable calls
-- **Action**: Grep all go-rod methods that internally call `Runtime.enable` (`page.Console()`, `page.Log()`, etc.). Ensure none are used in production flow.
-- **Note**: Chrome 145+ V8 patch killed the main `Runtime.enable` detection vector, but alternative detection methods exist.
+### Target services (13)
+Cloudflare, DataDome, Akamai, PerimeterX/HUMAN, Castle.io, Kasada, Shape/F5, FingerprintJS Pro, Imperva/Incapsula, AWS WAF, reCAPTCHA, hCaptcha, Turnstile
 
-### 3.4 Webshare IP quality check
-- **Action**: Test 10 random Webshare ports against `https://ipqualityscore.com/api` and `https://ipapi.com`. Check if IPs are flagged as proxy/VPN/datacenter.
-- **If flagged**: Consider ISP-grade proxy provider (e.g., Bright Data ISP proxies)
+### Implementation
+- **Location**: `go-code/internal/antibot/` (static) + `go-browser` action (dynamic)
+- **Effort**: ~600 lines Go (static) + ~300 lines Go (dynamic)
+- **Dependency**: `projectdiscovery/wappalyzergo` for base coverage
 
-### 3.5 OffscreenCanvas in Worker consistency
-- **Action**: Test if CloakBrowser's canvas noise applies to OffscreenCanvas inside Workers. If not, canvas fingerprint from Worker differs from main thread.
-- **Detectors**: CreepJS
-
-## Phase 4: Anti-Bot Detector Tool (1 week)
-
-New MCP tool for go-code: given a URL, identify what anti-bot protection is deployed.
-
-### 4.1 Signature database
-- **Source 1**: `scrapfly/Antibot-Detector` JSON files (16 anti-bot services, MIT license)
-- **Source 2**: `projectdiscovery/wappalyzergo` (6000+ technologies, Go library)
-- **Source 3**: Custom Castle.io signatures (not in any existing tool)
-- **Format**: JSON with `cookie[]`, `header[]`, `url[]`, `content[]`, `script_src[]` + confidence scores
-
-### 4.2 Static analyzer (Phase 1 — HTTP only)
-- **Location**: `go-code/internal/antibot/`
-- **Input**: URL → HTTP GET via go-stealth
-- **Analysis**: Response headers + Set-Cookie + HTML body + `<script src>` URLs
-- **Output**: `[{name, confidence, category, signals}]`
-- **Coverage**: ~70% of anti-bot services (all header/cookie-based)
-- **Effort**: ~600 lines Go
-
-### 4.3 Dynamic analyzer (Phase 2 — browser)
-- **Location**: `go-browser` action or `ox-browser` endpoint
-- **Input**: URL → full page load via CloakBrowser
-- **Analysis**: CDP Network.requestWillBeSent (SDK endpoint URLs) + Runtime.evaluate (JS global vars like `window._pxAppId`, `window.dd`) + final cookies
-- **Output**: Same format + network-based signals
-- **Coverage**: ~95% of anti-bot services
-- **Effort**: ~300 lines Go + CDP integration
-
-### Detectable services (target list)
-| Service | Static (HTTP) | Dynamic (Browser) |
-|---------|:---:|:---:|
-| Cloudflare | ✅ | ✅ |
-| DataDome | ✅ (headers) | ✅ (JS + cookies) |
-| Akamai | ✅ (cookies) | ✅ (JS + network) |
-| PerimeterX/HUMAN | ✅ (cookies) | ✅ (JS + network) |
-| Castle.io | ❌ | ✅ (script src + network) |
-| Kasada | ❌ | ✅ (network endpoints) |
-| Shape/F5 | ✅ (headers) | ✅ (JS + cookies) |
-| FingerprintJS Pro | ❌ | ✅ (script src + JS) |
-| Imperva/Incapsula | ✅ (cookies) | ✅ |
-| AWS WAF | ✅ (cookies) | ✅ |
-| reCAPTCHA | ✅ (script src) | ✅ |
-| hCaptcha | ✅ (script src) | ✅ |
-| Turnstile | ✅ (script src) | ✅ |
-
-## Phase 5: Continuous Validation
+## Phase 5: Continuous Validation — PLANNED
 
 ### 5.1 Anti-detect test suite
 Automated tests against:
-- `https://bot.sannysoft.com/` — basic headless detection
-- `https://abrahamjuliot.github.io/creepjs/` — advanced fingerprint analysis
-- `https://browserleaks.com/` — WebGL, canvas, fonts, screen
-- `https://tls.peet.ws/api/all` — TLS/HTTP2 fingerprint
+- `bot.sannysoft.com` — basic headless detection (currently 56/56)
+- `abrahamjuliot.github.io/creepjs` — advanced fingerprint analysis
+- `browserleaks.com` — WebGL, canvas, fonts, screen
+- `tls.peet.ws/api/all` — TLS/HTTP2 fingerprint
 
 ### 5.2 Regression testing
 After each stealth change:
 1. Run fingerprint diagnostic (in-browser JS eval)
 2. Check creepJS trust score (should be >50%)
 3. Verify Castle.io token generation (no hanging)
-4. Test Twitter login flow (track 399 vs success)
+4. Scraping test: Amazon, Booking, Reddit (no blocks)
 
-### 5.3 Monitoring Castle.io / Twitter updates
-- Watch `d60/twitter_login` repo for Castle protocol updates
-- Monitor `yubie-re/castleio-gen` (archived but may get forked)
-- Check Castle.io changelog for SDK version changes
+### 5.3 Monitoring
+- `d60/twitter_login` repo — Castle protocol updates
+- CloakBrowser releases — new C++ patches
+- Chrome stable channel — version updates for profiles
+
+## Completed This Session (2026-03-28)
+
+### go-browser
+- [x] Headed Chrome via Xvfb + dbus
+- [x] Persistent Chrome profile (Docker volume)
+- [x] Function.prototype.toString native masking (WeakMap)
+- [x] Worker proxy: Blob/data: URLs + full navigator props + userAgent
+- [x] Worker.toString() = native code
+- [x] InputDispatchKeyEvent (keyDown/char/keyUp) replaces InputInsertText
+- [x] Profile consistency: x86, 1440x900, colorDepth 24, platformVersion 10.15.7
+- [x] Accept-Language via CDP setExtraHTTPHeaders
+- [x] getBattery/getGamepads stubs
+- [x] Localhost port scan protection (fetch + WebSocket)
+- [x] chrome.csi/loadTimes realistic timing from performance.timing
+- [x] navigator.platform override
+- [x] Stealth markers cleanup (__sp, __stealthProfile, __defineNativeGetter)
+- [x] Removed isTrusted:false castle events (06_castle_events.js deleted)
+- [x] Removed RuntimeEnable from SubscribeCDP
+- [x] navigator.connection spoofing
+- [x] eval_on_new_document action type
+- [x] TLS/HTTP2 fingerprint verified identical to real Chrome
+
+### go-social
+- [x] Castle token generator (Go port, 33 tests)
+- [x] Pure API login (ui_metrics solver + flow state machine, 32 tests)
+- [x] x-client-transaction-id generator
+- [x] Replaced botwitter.com with local generator
+
+### ox-browser
+- [x] Chrome 145 profiles (was 131/133)
+- [x] Firefox 138 profiles (was 133)
+- [x] Accept-Language middleware
+- [x] GREASE brand randomization
+- [x] sec-ch-ua-full-version-list header
+- [x] Removed deprecated Twitter login code (-1718 lines)
+
+### Documentation
+- [x] STEALTH-SPEC.md — full detection vector checklist
+- [x] STEALTH-ROADMAP.md — this file
+- [x] RESEARCH-LOG.md — 289 lines investigation history
+- [x] ARCHITECTURE.md — two-tier browser architecture
