@@ -95,6 +95,17 @@ func createKeepaliveContext(b *rod.Browser) (proto.BrowserBrowserContextID, erro
 	return res.BrowserContextID, nil
 }
 
+// DefaultContext returns the browser's default context (persistent profile).
+// Cookies, localStorage, and other state from manual login sessions are available.
+// No isolation — all requests share the same cookies.
+func (m *ChromeManager) DefaultContext() (*rod.Browser, error) {
+	b := m.getBrowser()
+	if b == nil {
+		return nil, ErrUnavailable
+	}
+	return b.NoDefaultDevice(), nil
+}
+
 // NewContext creates an isolated BrowserContext with optional proxy.
 // Returns a browser scoped to that context, the context ID for lifecycle management,
 // and a cleanup function for proxy auth handling.

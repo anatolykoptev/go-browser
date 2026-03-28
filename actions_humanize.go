@@ -85,23 +85,19 @@ func doTypeTextHumanized(
 			vk = int(ch - 32) // uppercase ASCII for VK code
 		}
 
-		// keyDown
+		// keyDown — no Text field (real Chrome sends text via separate char event)
 		_ = proto.InputDispatchKeyEvent{
 			Type:                  proto.InputDispatchKeyEventTypeKeyDown,
 			Key:                   char,
 			Code:                  code,
-			Text:                  char,
-			UnmodifiedText:        char,
 			WindowsVirtualKeyCode: vk,
 		}.Call(page)
 
-		// char (triggers input event)
+		// char — this is what actually inserts the character
 		_ = proto.InputDispatchKeyEvent{
 			Type:                  proto.InputDispatchKeyEventTypeChar,
 			Text:                  char,
 			UnmodifiedText:        char,
-			Key:                   char,
-			Code:                  code,
 			WindowsVirtualKeyCode: vk,
 		}.Call(page)
 
