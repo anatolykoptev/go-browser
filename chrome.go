@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -19,13 +20,16 @@ var complementJS string
 
 // ChromeManager manages a connection to a remote Chrome instance (CloakBrowser).
 type ChromeManager struct {
-	mu      sync.RWMutex
-	browser *rod.Browser
-	wsURL   string // original ws URL for discovery (e.g. ws://cloakbrowser:9222)
+	mu             sync.RWMutex
+	browser        *rod.Browser
+	wsURL          string                        // original ws URL for discovery
+	keepaliveCtxID proto.BrowserBrowserContextID // prevents Chrome exit when all user contexts close
 }
 
 // NewChromeManager connects to a remote Chrome via WebSocket debugger URL.
 // wsURL may be a ws:// address; the actual debugger URL is discovered via /json/version.
+// A keepalive browser context is created to prevent headless Chrome from exiting
+// when all user contexts are disposed.
 func NewChromeManager(wsURL string) (*ChromeManager, error) {
 	debuggerURL, err := discoverWSURL(wsURL)
 	if err != nil {
@@ -37,47 +41,157 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 		return nil, fmt.Errorf("chrome: connect: %w", err)
 	}
 
+	// Close any pre-existing pages (e.g. chrome://newtab) that CloakBrowser creates on startup.
+	// These can cause crashes when mixed with programmatic context lifecycle.
+	closeInitialPages(b)
+
+	// Create a keepalive context so Chrome doesn't exit when user contexts are disposed.
+	keepaliveCtxID, err := createKeepaliveContext(b)
+	if err != nil {
+		_ = b.Close()
+		return nil, fmt.Errorf("chrome: keepalive context: %w", err)
+	}
+
 	return &ChromeManager{
-		browser: b,
-		wsURL:   wsURL,
+		browser:        b,
+		wsURL:          wsURL,
+		keepaliveCtxID: keepaliveCtxID,
 	}, nil
 }
 
-// NewContext creates an isolated BrowserContext with optional proxy.
-// Returns a browser scoped to that context and the context ID for lifecycle management.
-// Automatically reconnects once if the CDP connection is dead.
-func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBrowserContextID, error) {
-	b := m.getBrowser()
-	if b == nil {
-		return nil, "", ErrUnavailable
+// closeInitialPages closes any pre-existing pages (e.g. chrome://newtab) created by
+// CloakBrowser on startup. These default pages can interfere with context lifecycle.
+func closeInitialPages(b *rod.Browser) {
+	targets, err := proto.TargetGetTargets{}.Call(b)
+	if err != nil {
+		return
+	}
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			_, _ = proto.TargetCloseTarget{TargetID: t.TargetID}.Call(b)
+		}
+	}
+}
+
+// createKeepaliveContext creates a browser context with a blank page that prevents
+// headless Chrome from terminating when all other contexts/pages are closed.
+func createKeepaliveContext(b *rod.Browser) (proto.BrowserBrowserContextID, error) {
+	res, err := proto.TargetCreateBrowserContext{}.Call(b)
+	if err != nil {
+		return "", fmt.Errorf("create keepalive context: %w", err)
 	}
 
-	res, err := proto.TargetCreateBrowserContext{
-		ProxyServer:     proxy,
-		DisposeOnDetach: true,
+	// Create a page inside the context — Chrome needs at least one target to stay alive.
+	_, err = proto.TargetCreateTarget{
+		URL:              "about:blank",
+		BrowserContextID: res.BrowserContextID,
 	}.Call(b)
 	if err != nil {
-		// Attempt reconnect once on connection error.
+		_ = proto.TargetDisposeBrowserContext{BrowserContextID: res.BrowserContextID}.Call(b)
+		return "", fmt.Errorf("create keepalive page: %w", err)
+	}
+
+	return res.BrowserContextID, nil
+}
+
+// NewContext creates an isolated BrowserContext with optional proxy.
+// Returns a browser scoped to that context, the context ID for lifecycle management,
+// and a cleanup function for proxy auth handling.
+// Supports authenticated proxies (http://user:pass@host:port) via CDP Fetch.authRequired.
+func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBrowserContextID, func(), error) {
+	b := m.getBrowser()
+	if b == nil {
+		return nil, "", nil, ErrUnavailable
+	}
+
+	proxyServer, proxyUser, proxyPass := parseProxy(proxy)
+
+	createCtx := func(browser *rod.Browser) (*proto.TargetCreateBrowserContextResult, error) {
+		return proto.TargetCreateBrowserContext{
+			ProxyServer:     proxyServer,
+			DisposeOnDetach: true,
+		}.Call(browser)
+	}
+
+	res, err := createCtx(b)
+	if err != nil {
 		if reconnErr := m.reconnect(); reconnErr != nil {
-			return nil, "", fmt.Errorf("chrome: create browser context: %w (reconnect failed: %v)", err, reconnErr)
+			return nil, "", nil, fmt.Errorf("chrome: create browser context: %w (reconnect failed: %v)", err, reconnErr)
 		}
 		b = m.getBrowser()
 		if b == nil {
-			return nil, "", fmt.Errorf("chrome: reconnect succeeded but browser is nil")
+			return nil, "", nil, fmt.Errorf("chrome: reconnect succeeded but browser is nil")
 		}
-		res, err = proto.TargetCreateBrowserContext{
-			ProxyServer:     proxy,
-			DisposeOnDetach: true,
-		}.Call(b)
+		res, err = createCtx(b)
 		if err != nil {
-			return nil, "", fmt.Errorf("chrome: create browser context after reconnect: %w", err)
+			return nil, "", nil, fmt.Errorf("chrome: create browser context after reconnect: %w", err)
 		}
 	}
 
 	scoped := b.NoDefaultDevice()
 	scoped.BrowserContextID = res.BrowserContextID
 
-	return scoped, res.BrowserContextID, nil
+	// Set up continuous proxy auth handler if credentials provided.
+	var cleanup func()
+	if proxyUser != "" {
+		cleanup = setupProxyAuth(scoped, proxyUser, proxyPass)
+	}
+
+	return scoped, res.BrowserContextID, cleanup, nil
+}
+
+// setupProxyAuth enables continuous Fetch.authRequired handling for proxy authentication.
+// Uses EachEvent to handle all auth challenges and paused requests.
+// Returns a cleanup function that stops the auth handler.
+func setupProxyAuth(b *rod.Browser, username, password string) func() {
+	// Enable fetch interception with auth handling.
+	_ = proto.FetchEnable{
+		HandleAuthRequests: true,
+	}.Call(b)
+
+	wait := b.EachEvent(
+		func(ev *proto.FetchRequestPaused) {
+			// Continue paused requests (don't block non-auth traffic).
+			_ = proto.FetchContinueRequest{RequestID: ev.RequestID}.Call(b)
+		},
+		func(ev *proto.FetchAuthRequired) {
+			// Respond to proxy auth challenges with credentials.
+			_ = proto.FetchContinueWithAuth{
+				RequestID: ev.RequestID,
+				AuthChallengeResponse: &proto.FetchAuthChallengeResponse{
+					Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
+					Username: username,
+					Password: password,
+				},
+			}.Call(b)
+		},
+	)
+
+	// Run event loop in background.
+	go wait()
+
+	return func() {
+		_ = proto.FetchDisable{}.Call(b)
+	}
+}
+
+// parseProxy extracts host:port and credentials from a proxy URL.
+// Input:  "http://user:pass@host:port" → ("host:port", "user", "pass")
+// Input:  "http://host:port"           → ("http://host:port", "", "")
+// Input:  ""                           → ("", "", "")
+func parseProxy(raw string) (server, user, pass string) {
+	if raw == "" {
+		return "", "", ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw, "", ""
+	}
+	pass, _ = u.User.Password()
+	user = u.User.Username()
+	// Reconstruct URL without credentials for Chrome's ProxyServer.
+	u.User = nil
+	return u.String(), user, pass
 }
 
 func (m *ChromeManager) getBrowser() *rod.Browser {
@@ -95,6 +209,7 @@ func (m *ChromeManager) reconnect() error {
 		_ = m.browser.Close()
 		m.browser = nil
 	}
+	m.keepaliveCtxID = ""
 
 	debuggerURL, err := discoverWSURL(m.wsURL)
 	if err != nil {
@@ -106,7 +221,14 @@ func (m *ChromeManager) reconnect() error {
 		return fmt.Errorf("connect: %w", err)
 	}
 
+	keepaliveCtxID, err := createKeepaliveContext(b)
+	if err != nil {
+		_ = b.Close()
+		return fmt.Errorf("keepalive context: %w", err)
+	}
+
 	m.browser = b
+	m.keepaliveCtxID = keepaliveCtxID
 	return nil
 }
 
@@ -139,9 +261,14 @@ func (m *ChromeManager) Close() {
 	m.mu.Lock()
 	b := m.browser
 	m.browser = nil
+	ctxID := m.keepaliveCtxID
+	m.keepaliveCtxID = ""
 	m.mu.Unlock()
 
 	if b != nil {
+		if ctxID != "" {
+			_ = proto.TargetDisposeBrowserContext{BrowserContextID: ctxID}.Call(b)
+		}
 		_ = b.Close()
 	}
 }
