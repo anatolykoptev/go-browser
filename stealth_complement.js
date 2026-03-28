@@ -1,6 +1,10 @@
 (() => {
-  // --- CDP automation marker cleanup ---
-  // Remove rod/ChromeDriver/Playwright markers from window
+
+  // === 01_cdp_markers.js ===
+  // CDP automation marker cleanup.
+  // Removes rod/ChromeDriver/Playwright markers from window
+  // and watches for dynamically injected marker attributes.
+  
   const markerPatterns = [/^\$cdc_/, /^\$chrome_/, /^__webdriver/, /^__selenium/, /^__playwright/, /^__pw_/];
   for (const key of Object.keys(window)) {
     if (markerPatterns.some(p => p.test(key))) {
@@ -8,8 +12,7 @@
     }
   }
   try { delete window.__cdp_runtime; } catch(e) {}
-
-  // Watch for dynamically injected marker attributes on <html>
+  
   const obs = new MutationObserver(mutations => {
     for (const m of mutations) {
       if (m.type === 'attributes' && markerPatterns.some(p => p.test(m.attributeName))) {
@@ -20,9 +23,8 @@
   if (document.documentElement) {
     obs.observe(document.documentElement, { attributes: true });
   }
-
-  // --- Error.prepareStackTrace protection ---
-  // Prevents stack-based CDP detection via Error.prepareStackTrace setter
+  
+  // Prevent stack-based CDP detection via Error.prepareStackTrace setter.
   const origPST = Error.prepareStackTrace;
   Object.defineProperty(Error, 'prepareStackTrace', {
     get: () => origPST,
@@ -30,75 +32,17 @@
     configurable: false,
   });
 
-  // --- navigator.webdriver ---
-  // Must be false (not undefined) — Chrome with --disable-blink-features=AutomationControlled
-  // returns false. Castle.io checks this distinction.
+  // === 02_navigator.js ===
+  // Navigator property overrides for headless detection evasion.
+  
+  // webdriver must be false (not undefined).
+  // Chrome with --disable-blink-features=AutomationControlled returns false.
   Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
     get: () => false, configurable: true, enumerable: true
   });
-
-  // --- Notification.permission ---
-  // Headless Chrome returns 'denied'; real browsers default to 'default'
-  if (typeof Notification !== 'undefined') {
-    Object.defineProperty(Notification, 'permission', {
-      get: () => 'default',
-      configurable: true,
-    });
-  }
-
-  // --- chrome object stubs ---
-  // Full chrome.runtime + chrome.csi/loadTimes/app — Castle.io checks these
-  if (!window.chrome) window.chrome = {};
-  if (!window.chrome.runtime) {
-    window.chrome.runtime = {
-      connect: () => ({
-        name: '', sender: undefined,
-        onDisconnect: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
-        onMessage: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
-        postMessage(){}, disconnect(){}
-      }),
-      sendMessage: () => {},
-      onMessage: {addListener: () => {}, removeListener: () => {}},
-      id: undefined,
-    };
-  }
-  if (!window.chrome.csi) {
-    window.chrome.csi = () => {
-      const now = Date.now();
-      return {startE: now, onloadT: now, pageT: now, tran: 15};
-    };
-  }
-  if (!window.chrome.loadTimes) {
-    window.chrome.loadTimes = () => {
-      const now = Date.now() / 1000;
-      return {
-        requestTime: now, startLoadTime: now, commitLoadTime: now,
-        finishDocumentLoadTime: now, finishLoadTime: now, firstPaintTime: now,
-        firstPaintAfterLoadTime: 0, navigationType: 'Other',
-        wasFetchedViaSpdy: false, wasNpnNegotiated: false, npnNegotiatedProtocol: '',
-        wasAlternateProtocolAvailable: false, connectionInfo: 'h2'
-      };
-    };
-  }
-  if (!window.chrome.app) {
-    window.chrome.app = {
-      isInstalled: false,
-      InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'},
-      RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'},
-      getDetails() {return null}, getIsInstalled() {return false}
-    };
-  }
-
-  // --- Media codecs ---
-  const origCPT = HTMLMediaElement.prototype.canPlayType;
-  HTMLMediaElement.prototype.canPlayType = function(type) {
-    if (type.includes('h264') || type.includes('avc1')) return 'probably';
-    if (type.includes('vp8') || type.includes('vp9')) return 'probably';
-    return origCPT.call(this, type);
-  };
-
-  // --- NavigatorUAData (Chrome Client Hints) ---
-  // Headless Chrome lacks navigator.userAgentData — critical detection vector
+  
+  // NavigatorUAData (Chrome Client Hints).
+  // Headless Chrome lacks navigator.userAgentData — critical for Castle.io.
   if (!navigator.userAgentData) {
     const brands = [
       {brand: 'Chromium', version: '145'},
@@ -126,8 +70,8 @@
       configurable: true,
     });
   }
-
-  // --- navigator.mediaDevices stub ---
+  
+  // mediaDevices stub — headless Chrome lacks media devices.
   if (!navigator.mediaDevices) {
     Object.defineProperty(navigator, 'mediaDevices', {
       get: () => ({
@@ -142,8 +86,75 @@
     });
   }
 
-  // --- Permissions.query ---
-  // Headless Chrome returns 'denied' for notifications; real Chrome respects Notification.permission
+  // === 03_chrome_object.js ===
+  // Chrome object stubs — Castle.io and other detectors check these.
+  // Headless Chrome has incomplete window.chrome; real Chrome has all of these.
+  
+  if (!window.chrome) window.chrome = {};
+  
+  if (!window.chrome.runtime) {
+    window.chrome.runtime = {
+      connect: () => ({
+        name: '', sender: undefined,
+        onDisconnect: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+        onMessage: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+        postMessage(){}, disconnect(){}
+      }),
+      sendMessage: () => {},
+      onMessage: {addListener: () => {}, removeListener: () => {}},
+      id: undefined,
+    };
+  }
+  
+  if (!window.chrome.csi) {
+    window.chrome.csi = () => {
+      const now = Date.now();
+      return {startE: now, onloadT: now, pageT: now, tran: 15};
+    };
+  }
+  
+  if (!window.chrome.loadTimes) {
+    window.chrome.loadTimes = () => {
+      const now = Date.now() / 1000;
+      return {
+        requestTime: now, startLoadTime: now, commitLoadTime: now,
+        finishDocumentLoadTime: now, finishLoadTime: now, firstPaintTime: now,
+        firstPaintAfterLoadTime: 0, navigationType: 'Other',
+        wasFetchedViaSpdy: false, wasNpnNegotiated: false, npnNegotiatedProtocol: '',
+        wasAlternateProtocolAvailable: false, connectionInfo: 'h2'
+      };
+    };
+  }
+  
+  if (!window.chrome.app) {
+    window.chrome.app = {
+      isInstalled: false,
+      InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'},
+      RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'},
+      getDetails() {return null}, getIsInstalled() {return false}
+    };
+  }
+
+  // === 04_media_permissions.js ===
+  // Media codecs, notifications, and permissions overrides.
+  
+  // Video codec support — headless may report different support.
+  const origCPT = HTMLMediaElement.prototype.canPlayType;
+  HTMLMediaElement.prototype.canPlayType = function(type) {
+    if (type.includes('h264') || type.includes('avc1')) return 'probably';
+    if (type.includes('vp8') || type.includes('vp9')) return 'probably';
+    return origCPT.call(this, type);
+  };
+  
+  // Notification.permission — headless returns 'denied', real browsers default to 'default'.
+  if (typeof Notification !== 'undefined') {
+    Object.defineProperty(Notification, 'permission', {
+      get: () => 'default',
+      configurable: true,
+    });
+  }
+  
+  // Permissions.query — headless returns 'denied' for notifications.
   if (typeof Permissions !== 'undefined') {
     const origQuery = Permissions.prototype.query;
     Permissions.prototype.query = function(desc) {
@@ -154,8 +165,10 @@
     };
   }
 
-  // --- Worker thread injection ---
-  // Castle.io checks navigator.webdriver inside Workers too
+  // === 05_worker_injection.js ===
+  // Worker thread injection — Castle.io checks navigator.webdriver inside Workers.
+  // Wraps the Worker constructor to prepend stealth overrides to worker code.
+  
   const OriginalWorker = Worker;
   const workerBootstrap = `
     Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
@@ -185,4 +198,5 @@
       return new OriginalWorker(url, options);
     }
   };
+
 })();
