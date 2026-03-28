@@ -122,6 +122,14 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		} else {
 			data = map[string]any{"network": []NetworkEntry{}, "console": []ConsoleEntry{}}
 		}
+	case "warmup":
+		waitMs := a.WaitMs
+		if waitMs <= 0 {
+			waitMs = 3000
+		}
+		var count int
+		count, err = doWarmup(ctx, page, waitMs, cursor)
+		data = count
 	case "scroll":
 		err = doScroll(ctx, page, a.Selector, a.DeltaX, a.DeltaY)
 	default:
