@@ -87,6 +87,12 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 			script = a.JS
 		}
 		data, err = doEvaluate(page, script)
+	case "eval_on_new_document":
+		script := a.Script
+		if script == "" {
+			script = a.JS
+		}
+		_, err = page.EvalOnNewDocument(script)
 	case "press":
 		err = doPress(page, a.Key)
 	case "sleep":
