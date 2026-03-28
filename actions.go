@@ -3,26 +3,29 @@ package browser
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/anatolykoptev/go-browser/humanize"
 	"github.com/go-rod/rod"
 )
 
 // Action describes a single Chrome interaction step.
 type Action struct {
-	Type     string        `json:"type"`
-	Selector string        `json:"selector,omitempty"`
-	Text     string        `json:"text,omitempty"`
-	Script   string        `json:"script,omitempty"`
-	JS       string        `json:"js,omitempty"`
-	Key      string        `json:"key,omitempty"`
-	URL      string        `json:"url,omitempty"`
-	Humanize bool          `json:"humanize,omitempty"`
-	WaitMs   int           `json:"wait_ms,omitempty"`
-	Format   string        `json:"format,omitempty"`
-	Cookies  []CookieInput `json:"cookies,omitempty"`
-	DeltaX   float64       `json:"delta_x,omitempty"`
-	DeltaY   float64       `json:"delta_y,omitempty"`
-	Accept   *bool         `json:"accept,omitempty"`
+	Type      string        `json:"type"`
+	Selector  string        `json:"selector,omitempty"`
+	Text      string        `json:"text,omitempty"`
+	Script    string        `json:"script,omitempty"`
+	JS        string        `json:"js,omitempty"`
+	Key       string        `json:"key,omitempty"`
+	URL       string        `json:"url,omitempty"`
+	Humanize  bool          `json:"humanize,omitempty"`
+	WaitMs    int           `json:"wait_ms,omitempty"`
+	TimeoutMs int           `json:"timeout_ms,omitempty"`
+	Format    string        `json:"format,omitempty"`
+	Cookies   []CookieInput `json:"cookies,omitempty"`
+	DeltaX    float64       `json:"delta_x,omitempty"`
+	DeltaY    float64       `json:"delta_y,omitempty"`
+	Accept    *bool         `json:"accept,omitempty"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -44,8 +47,11 @@ type ActionResult struct {
 }
 
 // ExecuteAction dispatches to the correct do* function based on a.Type.
-// Returns an ActionResult with Ok=false and Error set on failure.
-func ExecuteAction(ctx context.Context, page *rod.Page, a Action) ActionResult { //nolint:cyclop // dispatch switch — complexity inherent
+// When cursor is non-nil and a.Humanize is true, humanized variants are used
+// for click, type_text, and hover actions.
+func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
+	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor,
+) ActionResult {
 	var (
 		data any
 		err  error
@@ -53,11 +59,26 @@ func ExecuteAction(ctx context.Context, page *rod.Page, a Action) ActionResult {
 
 	switch a.Type {
 	case "click":
-		err = doClick(ctx, page, a.Selector)
+		if a.Humanize && cursor != nil {
+			err = doClickHumanized(ctx, page, a.Selector, cursor)
+		} else {
+			err = doClick(ctx, page, a.Selector)
+		}
 	case "type_text":
-		err = doTypeText(ctx, page, a.Selector, a.Text)
+		if a.Humanize && cursor != nil {
+			err = doTypeTextHumanized(ctx, page, a.Selector, a.Text, cursor)
+		} else {
+			err = doTypeText(ctx, page, a.Selector, a.Text)
+		}
 	case "wait_for":
-		err = doWaitFor(ctx, page, a.Selector)
+		if a.TimeoutMs > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(a.TimeoutMs)*time.Millisecond)
+			err = doWaitFor(ctx, page, a.Selector)
+			cancel()
+		} else {
+			err = doWaitFor(ctx, page, a.Selector)
+		}
 	case "screenshot":
 		data, err = doScreenshot(page)
 	case "evaluate":
@@ -87,7 +108,11 @@ func ExecuteAction(ctx context.Context, page *rod.Page, a Action) ActionResult {
 	case "destroy_session":
 		// No-op in action execution — session lifecycle managed by handler
 	case "hover":
-		err = doHover(ctx, page, a.Selector)
+		if a.Humanize && cursor != nil {
+			err = doHoverHumanized(ctx, page, a.Selector, cursor)
+		} else {
+			err = doHover(ctx, page, a.Selector)
+		}
 	case "go_back":
 		err = doGoBack(page)
 	case "get_logs":
