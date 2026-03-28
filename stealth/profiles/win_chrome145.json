@@ -1,0 +1,47 @@
+{
+  "id": "win_chrome145",
+  "os": "windows",
+  "browser": "chrome",
+  "version": "145",
+  "platform": "Win32",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+  "userAgentData": {
+    "brands": [
+      {"brand": "Chromium", "version": "145"},
+      {"brand": "Google Chrome", "version": "145"},
+      {"brand": "Not-A.Brand", "version": "24"}
+    ],
+    "mobile": false,
+    "platform": "Windows",
+    "fullVersion": "145.0.7632.159",
+    "platformVersion": "15.0.0",
+    "architecture": "x86",
+    "bitness": "64"
+  },
+  "screen": {
+    "width": 1920,
+    "height": 1080,
+    "availWidth": 1920,
+    "availHeight": 1040,
+    "colorDepth": 24,
+    "pixelDepth": 24,
+    "devicePixelRatio": 1
+  },
+  "gpu": {
+    "vendor": "Google Inc. (NVIDIA)",
+    "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+  },
+  "hardware": {
+    "hardwareConcurrency": 12,
+    "deviceMemory": 16,
+    "maxTouchPoints": 0
+  },
+  "languages": ["en-US", "en"],
+  "timezone": "America/New_York",
+  "connection": {
+    "type": "ethernet",
+    "downlink": 100,
+    "rtt": 25,
+    "effectiveType": "4g"
+  }
+}

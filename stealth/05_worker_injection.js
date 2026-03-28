@@ -2,12 +2,13 @@
 // Wraps the Worker constructor to prepend stealth overrides to worker code.
 
 const OriginalWorker = Worker;
+const hwc = window.__sp?.hardware?.hardwareConcurrency || 8;
 const workerBootstrap = `
   Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
     get: () => false, configurable: true, enumerable: true
   });
   Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
-    get: () => 8, configurable: true
+    get: () => ${hwc}, configurable: true
   });
 `;
 window.Worker = function(url, options) {
