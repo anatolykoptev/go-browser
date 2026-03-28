@@ -94,6 +94,9 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 	}
 	defer func() { _ = page.Close() }()
 
+	logs := NewLogCollector()
+	logs.SubscribeCDP(page)
+
 	if err := page.Context(ctx).Navigate(req.URL); err != nil {
 		return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + err.Error()}
 	}
@@ -108,7 +111,7 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 	var actionErr string
 
 	for _, a := range req.Actions {
-		res := ExecuteAction(ctx, page, a, cursor)
+		res := ExecuteAction(ctx, page, a, cursor, logs)
 		results = append(results, res)
 		if !res.Ok {
 			status = "error"

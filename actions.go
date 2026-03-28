@@ -50,7 +50,7 @@ type ActionResult struct {
 // When cursor is non-nil and a.Humanize is true, humanized variants are used
 // for click, type_text, and hover actions.
 func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
-	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor,
+	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector,
 ) ActionResult {
 	var (
 		data any
@@ -116,7 +116,12 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 	case "go_back":
 		err = doGoBack(page)
 	case "get_logs":
-		data = doGetLogs()
+		if logs != nil {
+			net, con := logs.Collect()
+			data = map[string]any{"network": net, "console": con}
+		} else {
+			data = map[string]any{"network": []NetworkEntry{}, "console": []ConsoleEntry{}}
+		}
 	case "scroll":
 		err = doScroll(ctx, page, a.Selector, a.DeltaX, a.DeltaY)
 	default:

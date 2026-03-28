@@ -198,10 +198,6 @@ func doGoBack(page *rod.Page) error {
 	return nil
 }
 
-func doGetLogs() string {
-	return "log capture requires event listener setup"
-}
-
 func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float64) error {
 	if selector != "" {
 		el, err := page.Context(ctx).Element(selector)
