@@ -96,6 +96,17 @@ func (p *SessionPool) Destroy(id string) bool {
 	return ok
 }
 
+// List returns a copy of all active sessions.
+func (p *SessionPool) List() []Session {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]Session, 0, len(p.sessions))
+	for _, s := range p.sessions {
+		result = append(result, *s)
+	}
+	return result
+}
+
 // Count returns the number of active sessions.
 func (p *SessionPool) Count() int {
 	p.mu.Lock()

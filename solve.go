@@ -32,6 +32,32 @@ type SolveResponse struct {
 	Error   string            `json:"error,omitempty"`
 }
 
+// SolveCF navigates to a URL via Chrome, waits for CF clearance cookie, returns all cookies.
+func SolveCF(ctx context.Context, chrome *ChromeManager, url string, proxy string) (map[string]string, error) {
+	scopedBrowser, ctxID, authCleanup, err := chrome.NewContext(proxy)
+	if err != nil {
+		return nil, fmt.Errorf("create browser context: %w", err)
+	}
+	if authCleanup != nil {
+		defer authCleanup()
+	}
+	defer func() {
+		_ = proto.TargetDisposeBrowserContext{BrowserContextID: ctxID}.Call(scopedBrowser)
+	}()
+
+	page, err := chrome.NewStealthPage(scopedBrowser, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create stealth page: %w", err)
+	}
+	defer func() { _ = page.Close() }()
+
+	if err := page.Navigate(url); err != nil {
+		return nil, fmt.Errorf("navigate: %w", err)
+	}
+
+	return waitForCFClearance(ctx, page, url)
+}
+
 // handleSolve navigates to a URL, waits for CF clearance cookie, and returns all cookies.
 func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	if s.chrome == nil {
@@ -67,38 +93,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutSecs)*time.Second)
 	defer cancel()
 
-	scopedBrowser, ctxID, authCleanup, err := s.chrome.NewContext(req.Proxy)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, SolveResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("create browser context: %s", err.Error()),
-		})
-		return
-	}
-	if authCleanup != nil {
-		defer authCleanup()
-	}
-	defer s.disposeContext(scopedBrowser, ctxID)
-
-	page, err := s.chrome.NewStealthPage(scopedBrowser, nil)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, SolveResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("create stealth page: %s", err.Error()),
-		})
-		return
-	}
-	defer func() { _ = page.Close() }()
-
-	if err := page.Navigate(req.URL); err != nil {
-		writeJSON(w, http.StatusBadGateway, SolveResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("navigate: %s", err.Error()),
-		})
-		return
-	}
-
-	cookies, err := waitForCFClearance(ctx, page, req.URL)
+	cookies, err := SolveCF(ctx, s.chrome, req.URL, req.Proxy)
 	if err != nil {
 		writeJSON(w, http.StatusGatewayTimeout, SolveResponse{
 			Status: "error",
@@ -111,11 +106,6 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		Status:  "ok",
 		Cookies: cookies,
 	})
-}
-
-// disposeContext removes the browser context from Chrome.
-func (s *Server) disposeContext(b *rod.Browser, ctxID proto.BrowserBrowserContextID) {
-	_ = proto.TargetDisposeBrowserContext{BrowserContextID: ctxID}.Call(b)
 }
 
 // waitForCFClearance polls page cookies every 500ms until cf_clearance is present or ctx expires.
