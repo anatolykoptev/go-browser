@@ -1,58 +1,74 @@
+// Native toString masking — make overridden getters look like [native code]
+(function() {
+  const _toString = Function.prototype.toString;
+  const _nativeMap = new WeakMap();
+
+  Function.prototype.toString = function() {
+    const native = _nativeMap.get(this);
+    if (native) return native;
+    return _toString.call(this);
+  };
+
+  // Helper: define a property with a getter that reports as native code
+  window.__defineNativeGetter = function(obj, prop, getter, nativeName) {
+    _nativeMap.set(getter, 'function get ' + (nativeName || prop) + '() { [native code] }');
+    Object.defineProperty(obj, prop, {
+      get: getter,
+      configurable: true,
+      enumerable: true
+    });
+  };
+
+  // Also mask Function.prototype.toString itself
+  _nativeMap.set(Function.prototype.toString, 'function toString() { [native code] }');
+})();
+
 // Navigator property overrides — all values from active stealth profile.
 const sp = window.__sp;
 
 if (sp) {
   // webdriver = false (not undefined)
-  Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
-    get: () => false, configurable: true, enumerable: true
-  });
+  window.__defineNativeGetter(Object.getPrototypeOf(navigator), 'webdriver', () => false);
 
   // userAgentData from profile
   if (!navigator.userAgentData && sp.userAgentData) {
     const uad = sp.userAgentData;
-    Object.defineProperty(navigator, 'userAgentData', {
-      get: () => ({
+    const fvl = uad.fullVersionList || uad.brands.map(b => ({...b}));
+    window.__defineNativeGetter(navigator, 'userAgentData', () => ({
+      brands: uad.brands,
+      mobile: uad.mobile,
+      platform: uad.platform,
+      getHighEntropyValues: (hints) => Promise.resolve({
         brands: uad.brands,
         mobile: uad.mobile,
         platform: uad.platform,
-        getHighEntropyValues: (hints) => Promise.resolve({
-          brands: uad.brands,
-          mobile: uad.mobile,
-          platform: uad.platform,
-          platformVersion: uad.platformVersion,
-          architecture: uad.architecture,
-          bitness: uad.bitness,
-          model: '',
-          uaFullVersion: uad.fullVersion,
-          fullVersionList: uad.brands.map(b => ({...b})),
-        }),
-        toJSON: () => ({brands: uad.brands, mobile: uad.mobile, platform: uad.platform}),
+        platformVersion: uad.platformVersion,
+        architecture: uad.architecture,
+        bitness: uad.bitness,
+        model: '',
+        uaFullVersion: uad.fullVersion,
+        fullVersionList: fvl,
       }),
-      configurable: true,
-    });
+      toJSON: () => ({brands: uad.brands, mobile: uad.mobile, platform: uad.platform}),
+    }));
   }
 
   // Hardware from profile
   if (sp.hardware) {
-    Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
-      get: () => sp.hardware.hardwareConcurrency, configurable: true
-    });
-    Object.defineProperty(Navigator.prototype, 'deviceMemory', {
-      get: () => sp.hardware.deviceMemory, configurable: true
-    });
-    Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
-      get: () => sp.hardware.maxTouchPoints, configurable: true
-    });
+    window.__defineNativeGetter(Navigator.prototype, 'hardwareConcurrency',
+      () => sp.hardware.hardwareConcurrency);
+    window.__defineNativeGetter(Navigator.prototype, 'deviceMemory',
+      () => sp.hardware.deviceMemory);
+    window.__defineNativeGetter(Navigator.prototype, 'maxTouchPoints',
+      () => sp.hardware.maxTouchPoints);
   }
 
   // Languages from profile
   if (sp.languages) {
-    Object.defineProperty(Navigator.prototype, 'languages', {
-      get: () => Object.freeze([...sp.languages]), configurable: true
-    });
-    Object.defineProperty(Navigator.prototype, 'language', {
-      get: () => sp.languages[0], configurable: true
-    });
+    window.__defineNativeGetter(Navigator.prototype, 'languages',
+      () => Object.freeze([...sp.languages]));
+    window.__defineNativeGetter(Navigator.prototype, 'language',
+      () => sp.languages[0]);
   }
 
   // Screen from profile
@@ -60,9 +76,9 @@ if (sp) {
     const s = sp.screen;
     for (const [k, v] of Object.entries(s)) {
       if (k === 'devicePixelRatio') {
-        Object.defineProperty(window, 'devicePixelRatio', {get: () => v, configurable: true});
+        window.__defineNativeGetter(window, 'devicePixelRatio', () => v);
       } else {
-        Object.defineProperty(screen, k, {get: () => v, configurable: true});
+        window.__defineNativeGetter(screen, k, () => v);
       }
     }
   }
@@ -83,18 +99,49 @@ if (sp) {
     }
   }
 
+  // NetworkInformation API from profile
+  if (sp.connection && 'connection' in navigator) {
+    const conn = sp.connection;
+    const connProxy = {};
+    for (const [k, v] of Object.entries(conn)) {
+      window.__defineNativeGetter(connProxy, k, () => v);
+    }
+    connProxy.addEventListener = function() {};
+    connProxy.removeEventListener = function() {};
+    connProxy.onchange = null;
+    window.__defineNativeGetter(navigator, 'connection', () => connProxy);
+  }
+
   // mediaDevices stub
   if (!navigator.mediaDevices) {
-    Object.defineProperty(navigator, 'mediaDevices', {
-      get: () => ({
-        enumerateDevices: () => Promise.resolve([
-          {deviceId: '', groupId: '', kind: 'audioinput', label: ''},
-          {deviceId: '', groupId: '', kind: 'videoinput', label: ''},
-          {deviceId: '', groupId: '', kind: 'audiooutput', label: ''},
-        ]),
-        getUserMedia: () => Promise.reject(new DOMException('Permission denied')),
-      }),
-      configurable: true,
+    window.__defineNativeGetter(navigator, 'mediaDevices', () => ({
+      enumerateDevices: () => Promise.resolve([
+        {deviceId: '', groupId: '', kind: 'audioinput', label: ''},
+        {deviceId: '', groupId: '', kind: 'videoinput', label: ''},
+        {deviceId: '', groupId: '', kind: 'audiooutput', label: ''},
+      ]),
+      getUserMedia: () => Promise.reject(new DOMException('Permission denied')),
+    }));
+  }
+
+  // document.hasFocus — headless returns false, real browser returns true
+  document.hasFocus = function() { return true; };
+  document.hasFocus.toString = function() { return 'function hasFocus() { [native code] }'; };
+
+  // outerWidth/outerHeight — headless returns 0, real browser matches window
+  if (sp.screen) {
+    Object.defineProperty(window, 'outerWidth', {
+      get: () => sp.screen.width, configurable: true
     });
+    Object.defineProperty(window, 'outerHeight', {
+      get: () => sp.screen.height + 77, configurable: true // 77px = title+toolbar on macOS
+    });
+    Object.defineProperty(window, 'screenX', {get: () => 0, configurable: true});
+    Object.defineProperty(window, 'screenY', {get: () => 25, configurable: true}); // below menu bar
+  }
+
+  // navigator.platform from profile
+  if (sp.platform) {
+    window.__defineNativeGetter(Navigator.prototype, 'platform', () => sp.platform);
   }
 }

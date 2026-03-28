@@ -41,61 +41,77 @@
   });
 
   // === 02_navigator.js ===
+  // Native toString masking — make overridden getters look like [native code]
+  (function() {
+    const _toString = Function.prototype.toString;
+    const _nativeMap = new WeakMap();
+  
+    Function.prototype.toString = function() {
+      const native = _nativeMap.get(this);
+      if (native) return native;
+      return _toString.call(this);
+    };
+  
+    // Helper: define a property with a getter that reports as native code
+    window.__defineNativeGetter = function(obj, prop, getter, nativeName) {
+      _nativeMap.set(getter, 'function get ' + (nativeName || prop) + '() { [native code] }');
+      Object.defineProperty(obj, prop, {
+        get: getter,
+        configurable: true,
+        enumerable: true
+      });
+    };
+  
+    // Also mask Function.prototype.toString itself
+    _nativeMap.set(Function.prototype.toString, 'function toString() { [native code] }');
+  })();
+  
   // Navigator property overrides — all values from active stealth profile.
   const sp = window.__sp;
   
   if (sp) {
     // webdriver = false (not undefined)
-    Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
-      get: () => false, configurable: true, enumerable: true
-    });
+    window.__defineNativeGetter(Object.getPrototypeOf(navigator), 'webdriver', () => false);
   
     // userAgentData from profile
     if (!navigator.userAgentData && sp.userAgentData) {
       const uad = sp.userAgentData;
-      Object.defineProperty(navigator, 'userAgentData', {
-        get: () => ({
+      const fvl = uad.fullVersionList || uad.brands.map(b => ({...b}));
+      window.__defineNativeGetter(navigator, 'userAgentData', () => ({
+        brands: uad.brands,
+        mobile: uad.mobile,
+        platform: uad.platform,
+        getHighEntropyValues: (hints) => Promise.resolve({
           brands: uad.brands,
           mobile: uad.mobile,
           platform: uad.platform,
-          getHighEntropyValues: (hints) => Promise.resolve({
-            brands: uad.brands,
-            mobile: uad.mobile,
-            platform: uad.platform,
-            platformVersion: uad.platformVersion,
-            architecture: uad.architecture,
-            bitness: uad.bitness,
-            model: '',
-            uaFullVersion: uad.fullVersion,
-            fullVersionList: uad.brands.map(b => ({...b})),
-          }),
-          toJSON: () => ({brands: uad.brands, mobile: uad.mobile, platform: uad.platform}),
+          platformVersion: uad.platformVersion,
+          architecture: uad.architecture,
+          bitness: uad.bitness,
+          model: '',
+          uaFullVersion: uad.fullVersion,
+          fullVersionList: fvl,
         }),
-        configurable: true,
-      });
+        toJSON: () => ({brands: uad.brands, mobile: uad.mobile, platform: uad.platform}),
+      }));
     }
   
     // Hardware from profile
     if (sp.hardware) {
-      Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
-        get: () => sp.hardware.hardwareConcurrency, configurable: true
-      });
-      Object.defineProperty(Navigator.prototype, 'deviceMemory', {
-        get: () => sp.hardware.deviceMemory, configurable: true
-      });
-      Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
-        get: () => sp.hardware.maxTouchPoints, configurable: true
-      });
+      window.__defineNativeGetter(Navigator.prototype, 'hardwareConcurrency',
+        () => sp.hardware.hardwareConcurrency);
+      window.__defineNativeGetter(Navigator.prototype, 'deviceMemory',
+        () => sp.hardware.deviceMemory);
+      window.__defineNativeGetter(Navigator.prototype, 'maxTouchPoints',
+        () => sp.hardware.maxTouchPoints);
     }
   
     // Languages from profile
     if (sp.languages) {
-      Object.defineProperty(Navigator.prototype, 'languages', {
-        get: () => Object.freeze([...sp.languages]), configurable: true
-      });
-      Object.defineProperty(Navigator.prototype, 'language', {
-        get: () => sp.languages[0], configurable: true
-      });
+      window.__defineNativeGetter(Navigator.prototype, 'languages',
+        () => Object.freeze([...sp.languages]));
+      window.__defineNativeGetter(Navigator.prototype, 'language',
+        () => sp.languages[0]);
     }
   
     // Screen from profile
@@ -103,9 +119,9 @@
       const s = sp.screen;
       for (const [k, v] of Object.entries(s)) {
         if (k === 'devicePixelRatio') {
-          Object.defineProperty(window, 'devicePixelRatio', {get: () => v, configurable: true});
+          window.__defineNativeGetter(window, 'devicePixelRatio', () => v);
         } else {
-          Object.defineProperty(screen, k, {get: () => v, configurable: true});
+          window.__defineNativeGetter(screen, k, () => v);
         }
       }
     }
@@ -126,19 +142,50 @@
       }
     }
   
+    // NetworkInformation API from profile
+    if (sp.connection && 'connection' in navigator) {
+      const conn = sp.connection;
+      const connProxy = {};
+      for (const [k, v] of Object.entries(conn)) {
+        window.__defineNativeGetter(connProxy, k, () => v);
+      }
+      connProxy.addEventListener = function() {};
+      connProxy.removeEventListener = function() {};
+      connProxy.onchange = null;
+      window.__defineNativeGetter(navigator, 'connection', () => connProxy);
+    }
+  
     // mediaDevices stub
     if (!navigator.mediaDevices) {
-      Object.defineProperty(navigator, 'mediaDevices', {
-        get: () => ({
-          enumerateDevices: () => Promise.resolve([
-            {deviceId: '', groupId: '', kind: 'audioinput', label: ''},
-            {deviceId: '', groupId: '', kind: 'videoinput', label: ''},
-            {deviceId: '', groupId: '', kind: 'audiooutput', label: ''},
-          ]),
-          getUserMedia: () => Promise.reject(new DOMException('Permission denied')),
-        }),
-        configurable: true,
+      window.__defineNativeGetter(navigator, 'mediaDevices', () => ({
+        enumerateDevices: () => Promise.resolve([
+          {deviceId: '', groupId: '', kind: 'audioinput', label: ''},
+          {deviceId: '', groupId: '', kind: 'videoinput', label: ''},
+          {deviceId: '', groupId: '', kind: 'audiooutput', label: ''},
+        ]),
+        getUserMedia: () => Promise.reject(new DOMException('Permission denied')),
+      }));
+    }
+  
+    // document.hasFocus — headless returns false, real browser returns true
+    document.hasFocus = function() { return true; };
+    document.hasFocus.toString = function() { return 'function hasFocus() { [native code] }'; };
+  
+    // outerWidth/outerHeight — headless returns 0, real browser matches window
+    if (sp.screen) {
+      Object.defineProperty(window, 'outerWidth', {
+        get: () => sp.screen.width, configurable: true
       });
+      Object.defineProperty(window, 'outerHeight', {
+        get: () => sp.screen.height + 77, configurable: true // 77px = title+toolbar on macOS
+      });
+      Object.defineProperty(window, 'screenX', {get: () => 0, configurable: true});
+      Object.defineProperty(window, 'screenY', {get: () => 25, configurable: true}); // below menu bar
+    }
+  
+    // navigator.platform from profile
+    if (sp.platform) {
+      window.__defineNativeGetter(Navigator.prototype, 'platform', () => sp.platform);
     }
   }
 
@@ -222,101 +269,113 @@
   }
 
   // === 05_worker_injection.js ===
-  // Worker thread injection — Castle.io checks navigator.webdriver inside Workers.
-  // Wraps the Worker constructor to prepend stealth overrides to worker code.
+  // Worker thread injection — patches navigator in all Worker contexts.
+  // Handles string URLs, blob: URLs, and data: URLs.
   
   const OriginalWorker = Worker;
-  const hwc = window.__sp?.hardware?.hardwareConcurrency || 8;
-  const workerBootstrap = `
-    Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
-      get: () => false, configurable: true, enumerable: true
-    });
-    Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
-      get: () => ${hwc}, configurable: true
-    });
-  `;
-  window.Worker = function(url, options) {
-    try {
-      const wP = fetch(url).then(r => r.text()).then(code => {
-        const blob = new Blob([workerBootstrap + code], {type: 'application/javascript'});
-        return new OriginalWorker(URL.createObjectURL(blob), options);
+  
+  const workerBootstrap = (function() {
+    const sp = window.__sp;
+    const hwc = sp?.hardware?.hardwareConcurrency || 8;
+    const dm = sp?.hardware?.deviceMemory || 8;
+    const platform = sp?.platform || 'MacIntel';
+    const langs = sp?.languages ? JSON.stringify(sp.languages) : '["en-US","en"]';
+  
+    return `
+      Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+        get: () => false, configurable: true, enumerable: true
       });
-      let real = null;
-      const pending = [];
-      wP.then(w => { real = w; pending.forEach(m => w.postMessage(m)); });
+      Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
+        get: () => ${hwc}, configurable: true
+      });
+      Object.defineProperty(Navigator.prototype, 'deviceMemory', {
+        get: () => ${dm}, configurable: true
+      });
+      Object.defineProperty(Navigator.prototype, 'platform', {
+        get: () => '${platform}', configurable: true
+      });
+      Object.defineProperty(Navigator.prototype, 'languages', {
+        get: () => Object.freeze(${langs}), configurable: true
+      });
+      Object.defineProperty(Navigator.prototype, 'language', {
+        get: () => ${langs}[0], configurable: true
+      });
+    `;
+  })();
+  
+  function createPatchedWorker(originalUrl, options) {
+    // For blob: and data: URLs, we can't fetch them.
+    // Instead, create a new blob that imports the original.
+    if (typeof originalUrl === 'string' &&
+        (originalUrl.startsWith('blob:') || originalUrl.startsWith('data:'))) {
+      try {
+        var code = workerBootstrap + '\nimportScripts("' + originalUrl + '");';
+        var blob = new Blob([code], {type: 'application/javascript'});
+        var blobUrl = URL.createObjectURL(blob);
+        return new OriginalWorker(blobUrl, options);
+      } catch(e) {
+        return new OriginalWorker(originalUrl, options);
+      }
+    }
+  
+    // For regular URLs, fetch + prepend bootstrap
+    try {
+      var pending = [];
+      var real = null;
+      var handlers = {};
+  
+      fetch(originalUrl).then(function(r) { return r.text(); }).then(function(code) {
+        var blob = new Blob([workerBootstrap + '\n' + code], {type: 'application/javascript'});
+        var w = new OriginalWorker(URL.createObjectURL(blob), options);
+        real = w;
+        // Replay pending messages
+        pending.forEach(function(m) { w.postMessage(m); });
+        pending = null;
+        // Attach saved handlers
+        if (handlers.message) w.onmessage = handlers.message;
+        if (handlers.error) w.onerror = handlers.error;
+      }).catch(function() {
+        real = new OriginalWorker(originalUrl, options);
+        if (pending) { pending.forEach(function(m) { real.postMessage(m); }); pending = null; }
+        if (handlers.message) real.onmessage = handlers.message;
+      });
+  
       return {
-        postMessage(msg) { if (real) real.postMessage(msg); else pending.push(msg); },
-        set onmessage(fn) { wP.then(w => w.onmessage = fn); },
-        terminate() { wP.then(w => w.terminate()); },
-        addEventListener(...args) { wP.then(w => w.addEventListener(...args)); },
-        removeEventListener(...args) { wP.then(w => w.removeEventListener(...args)); },
+        postMessage: function(msg) { if (real) real.postMessage(msg); else pending.push(msg); },
+        terminate: function() { if (real) real.terminate(); },
+        set onmessage(fn) { if (real) real.onmessage = fn; else handlers.message = fn; },
+        get onmessage() { return real ? real.onmessage : handlers.message; },
+        set onerror(fn) { if (real) real.onerror = fn; else handlers.error = fn; },
+        get onerror() { return real ? real.onerror : handlers.error; },
+        addEventListener: function() {
+          var args = arguments;
+          if (real) real.addEventListener.apply(real, args);
+          else setTimeout(function() { if (real) real.addEventListener.apply(real, args); }, 100);
+        },
+        removeEventListener: function() {
+          if (real) real.removeEventListener.apply(real, arguments);
+        },
+        dispatchEvent: function(e) { if (real) return real.dispatchEvent(e); return false; }
       };
     } catch(e) {
-      return new OriginalWorker(url, options);
+      return new OriginalWorker(originalUrl, options);
     }
+  }
+  
+  window.Worker = function(url, options) {
+    return createPatchedWorker(url, options);
   };
-
-  // === 06_castle_events.js ===
-  // Castle.io behavioral event generation.
-  // Castle SDK Part 3 captures DOM interaction events (mousemove, click, keydown, scroll).
-  // CDP Input.dispatch* bypasses DOM event listeners, so Castle sees no human activity.
-  // This module dispatches synthetic DOM events that Castle's listeners can capture.
   
-  window.__castleWarmup = function(durationMs) {
-    durationMs = durationMs || 3000;
-    const start = Date.now();
-    let eventCount = 0;
+  // Preserve constructor identity
+  Object.defineProperty(window.Worker, 'prototype', {
+    value: OriginalWorker.prototype,
+    writable: false,
+    configurable: false
+  });
   
-    // Random point within viewport
-    const randX = () => Math.floor(Math.random() * (window.innerWidth - 100)) + 50;
-    const randY = () => Math.floor(Math.random() * (window.innerHeight - 100)) + 50;
-  
-    return new Promise(resolve => {
-      const interval = setInterval(() => {
-        const elapsed = Date.now() - start;
-        if (elapsed >= durationMs) {
-          clearInterval(interval);
-          resolve(eventCount);
-          return;
-        }
-  
-        const x = randX(), y = randY();
-        const opts = {bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0};
-  
-        // Mousemove — most important for Castle behavioral tracking
-        document.dispatchEvent(new MouseEvent('mousemove', opts));
-        eventCount++;
-  
-        // Occasional click (every ~500ms)
-        if (Math.random() < 0.15) {
-          document.dispatchEvent(new PointerEvent('pointerdown', opts));
-          document.dispatchEvent(new MouseEvent('mousedown', opts));
-          document.dispatchEvent(new PointerEvent('pointerup', opts));
-          document.dispatchEvent(new MouseEvent('mouseup', opts));
-          eventCount += 4;
-        }
-  
-        // Occasional scroll
-        if (Math.random() < 0.1) {
-          window.dispatchEvent(new WheelEvent('wheel', {
-            deltaY: (Math.random() - 0.5) * 200,
-            bubbles: true
-          }));
-          eventCount++;
-        }
-  
-        // Occasional keydown (focus events)
-        if (Math.random() < 0.05) {
-          document.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'Tab', code: 'Tab', bubbles: true
-          }));
-          document.dispatchEvent(new KeyboardEvent('keyup', {
-            key: 'Tab', code: 'Tab', bubbles: true
-          }));
-          eventCount += 2;
-        }
-      }, 50); // ~20 events/sec = 60+ events in 3 seconds
-    });
-  };
+  // Clean up stealth markers
+  delete window.__stealthProfile;
+  delete window.__sp;
+  delete window.__defineNativeGetter;
 
 })();
