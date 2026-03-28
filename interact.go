@@ -106,6 +106,17 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 
 	cursor := humanize.NewCursor(390, 290)
 
+	// Start idle drift
+	driftFunc := func(x, y float64) error {
+		return proto.InputDispatchMouseEvent{
+			Type: proto.InputDispatchMouseEventTypeMouseMoved,
+			X:    x,
+			Y:    y,
+		}.Call(page)
+	}
+	stopDrift := humanize.StartIdleDrift(ctx, cursor, driftFunc)
+	defer stopDrift()
+
 	results := make([]ActionResult, 0, len(req.Actions))
 	status := "ok"
 	var actionErr string
