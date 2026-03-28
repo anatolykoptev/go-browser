@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/anatolykoptev/go-browser/humanize"
@@ -66,7 +67,8 @@ func dispatchMouseClick(page *rod.Page, x, y float64) error {
 	return nil
 }
 
-// doTypeTextHumanized types text character by character with human-like delays.
+// doTypeTextHumanized types text character by character with human-like delays,
+// dispatching real keydown/char/keyup CDP events so keyboard listeners see authentic input.
 func doTypeTextHumanized(
 	ctx context.Context, page *rod.Page, selector, text string, cursor *humanize.Cursor,
 ) error {
@@ -76,15 +78,76 @@ func doTypeTextHumanized(
 
 	delays := humanize.TypingDelays(text)
 	for i, ch := range text {
-		ev := proto.InputInsertText{Text: string(ch)}
-		if err := ev.Call(page); err != nil {
-			return fmt.Errorf("type_text: insert %q: %w", string(ch), err)
+		char := string(ch)
+		code := charToCode(ch)
+		vk := int(ch)
+		if ch >= 'a' && ch <= 'z' {
+			vk = int(ch - 32) // uppercase ASCII for VK code
 		}
+
+		// keyDown
+		_ = proto.InputDispatchKeyEvent{
+			Type:                  proto.InputDispatchKeyEventTypeKeyDown,
+			Key:                   char,
+			Code:                  code,
+			Text:                  char,
+			UnmodifiedText:        char,
+			WindowsVirtualKeyCode: vk,
+		}.Call(page)
+
+		// char (triggers input event)
+		_ = proto.InputDispatchKeyEvent{
+			Type:                  proto.InputDispatchKeyEventTypeChar,
+			Text:                  char,
+			UnmodifiedText:        char,
+			Key:                   char,
+			Code:                  code,
+			WindowsVirtualKeyCode: vk,
+		}.Call(page)
+
+		// keyUp
+		_ = proto.InputDispatchKeyEvent{
+			Type:                  proto.InputDispatchKeyEventTypeKeyUp,
+			Key:                   char,
+			Code:                  code,
+			WindowsVirtualKeyCode: vk,
+		}.Call(page)
+
 		if i < len(delays) {
 			sleepCtx(ctx, time.Duration(delays[i])*time.Millisecond)
 		}
 	}
 	return nil
+}
+
+// charToCode maps a character to its DOM KeyboardEvent.code value.
+func charToCode(ch rune) string {
+	switch {
+	case ch >= 'a' && ch <= 'z':
+		return "Key" + strings.ToUpper(string(ch))
+	case ch >= 'A' && ch <= 'Z':
+		return "Key" + string(ch)
+	case ch >= '0' && ch <= '9':
+		return "Digit" + string(ch)
+	case ch == ' ':
+		return "Space"
+	case ch == '.':
+		return "Period"
+	case ch == ',':
+		return "Comma"
+	case ch == '-':
+		return "Minus"
+	case ch == '=':
+		return "Equal"
+	case ch == '@':
+		return "Digit2"
+	case ch == '_':
+		return "Minus"
+	case ch == '!':
+		return "Digit1"
+	default:
+		return ""
+	}
 }
 
 // doHoverHumanized moves mouse to element via bezier path without clicking.
