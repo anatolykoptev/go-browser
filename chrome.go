@@ -104,7 +104,9 @@ func (m *ChromeManager) DefaultContext() (*rod.Browser, error) {
 	if b == nil {
 		return nil, ErrUnavailable
 	}
-	return b.NoDefaultDevice(), nil
+	scoped := b.NoDefaultDevice()
+	scoped.BrowserContextID = "" // empty = default context (persistent profile)
+	return scoped, nil
 }
 
 // NewContext creates an isolated BrowserContext with optional proxy.
