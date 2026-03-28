@@ -147,11 +147,20 @@ func doSnapshot(page *rod.Page, _ string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("snapshot: %w", err)
 	}
-	var sb strings.Builder
+
+	// Build parent→children map.
+	type nodeInfo struct {
+		role, name string
+		children   []string
+	}
+	nodes := make(map[string]*nodeInfo, len(res.Nodes))
+	var rootID string
+
 	for _, node := range res.Nodes {
 		if node.Ignored {
 			continue
 		}
+		id := string(node.NodeID)
 		role := ""
 		if node.Role != nil {
 			role = fmt.Sprintf("%v", node.Role.Value.Val())
@@ -160,10 +169,35 @@ func doSnapshot(page *rod.Page, _ string) (string, error) {
 		if node.Name != nil {
 			name = fmt.Sprintf("%v", node.Name.Value.Val())
 		}
-		if role != "" || name != "" {
-			fmt.Fprintf(&sb, "[%s] %s\n", role, name)
+		childIDs := make([]string, 0, len(node.ChildIDs))
+		for _, cid := range node.ChildIDs {
+			childIDs = append(childIDs, string(cid))
+		}
+		nodes[id] = &nodeInfo{role: role, name: name, children: childIDs}
+		if node.ParentID == "" && rootID == "" {
+			rootID = id
 		}
 	}
+
+	var sb strings.Builder
+	var walk func(id string, depth int)
+	walk = func(id string, depth int) {
+		n, ok := nodes[id]
+		if !ok {
+			return
+		}
+		if n.role != "" || n.name != "" {
+			indent := strings.Repeat("  ", depth)
+			fmt.Fprintf(&sb, "%s[%s] %s\n", indent, n.role, n.name)
+		}
+		for _, cid := range n.children {
+			walk(cid, depth+1)
+		}
+	}
+	if rootID != "" {
+		walk(rootID, 0)
+	}
+
 	return sb.String(), nil
 }
 
