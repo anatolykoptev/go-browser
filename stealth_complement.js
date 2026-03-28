@@ -31,7 +31,11 @@
   });
 
   // --- navigator.webdriver ---
-  Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+  // Must be false (not undefined) — Chrome with --disable-blink-features=AutomationControlled
+  // returns false. Castle.io checks this distinction.
+  Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+    get: () => false, configurable: true, enumerable: true
+  });
 
   // --- Notification.permission ---
   // Headless Chrome returns 'denied'; real browsers default to 'default'
@@ -42,13 +46,46 @@
     });
   }
 
-  // --- chrome.runtime stub ---
+  // --- chrome object stubs ---
+  // Full chrome.runtime + chrome.csi/loadTimes/app — Castle.io checks these
   if (!window.chrome) window.chrome = {};
   if (!window.chrome.runtime) {
     window.chrome.runtime = {
-      connect: () => {}, sendMessage: () => {},
+      connect: () => ({
+        name: '', sender: undefined,
+        onDisconnect: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+        onMessage: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+        postMessage(){}, disconnect(){}
+      }),
+      sendMessage: () => {},
       onMessage: {addListener: () => {}, removeListener: () => {}},
       id: undefined,
+    };
+  }
+  if (!window.chrome.csi) {
+    window.chrome.csi = () => {
+      const now = Date.now();
+      return {startE: now, onloadT: now, pageT: now, tran: 15};
+    };
+  }
+  if (!window.chrome.loadTimes) {
+    window.chrome.loadTimes = () => {
+      const now = Date.now() / 1000;
+      return {
+        requestTime: now, startLoadTime: now, commitLoadTime: now,
+        finishDocumentLoadTime: now, finishLoadTime: now, firstPaintTime: now,
+        firstPaintAfterLoadTime: 0, navigationType: 'Other',
+        wasFetchedViaSpdy: false, wasNpnNegotiated: false, npnNegotiatedProtocol: '',
+        wasAlternateProtocolAvailable: false, connectionInfo: 'h2'
+      };
+    };
+  }
+  if (!window.chrome.app) {
+    window.chrome.app = {
+      isInstalled: false,
+      InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'},
+      RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'},
+      getDetails() {return null}, getIsInstalled() {return false}
     };
   }
 
@@ -105,8 +142,47 @@
     });
   }
 
-  // --- Worker scope ---
-  if (typeof WorkerGlobalScope !== 'undefined') {
-    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+  // --- Permissions.query ---
+  // Headless Chrome returns 'denied' for notifications; real Chrome respects Notification.permission
+  if (typeof Permissions !== 'undefined') {
+    const origQuery = Permissions.prototype.query;
+    Permissions.prototype.query = function(desc) {
+      if (desc.name === 'notifications') {
+        return Promise.resolve({state: Notification.permission});
+      }
+      return origQuery.apply(this, arguments);
+    };
   }
+
+  // --- Worker thread injection ---
+  // Castle.io checks navigator.webdriver inside Workers too
+  const OriginalWorker = Worker;
+  const workerBootstrap = `
+    Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+      get: () => false, configurable: true, enumerable: true
+    });
+    Object.defineProperty(Navigator.prototype, 'hardwareConcurrency', {
+      get: () => 8, configurable: true
+    });
+  `;
+  window.Worker = function(url, options) {
+    try {
+      const wP = fetch(url).then(r => r.text()).then(code => {
+        const blob = new Blob([workerBootstrap + code], {type: 'application/javascript'});
+        return new OriginalWorker(URL.createObjectURL(blob), options);
+      });
+      let real = null;
+      const pending = [];
+      wP.then(w => { real = w; pending.forEach(m => w.postMessage(m)); });
+      return {
+        postMessage(msg) { if (real) real.postMessage(msg); else pending.push(msg); },
+        set onmessage(fn) { wP.then(w => w.onmessage = fn); },
+        terminate() { wP.then(w => w.terminate()); },
+        addEventListener(...args) { wP.then(w => w.addEventListener(...args)); },
+        removeEventListener(...args) { wP.then(w => w.removeEventListener(...args)); },
+      };
+    } catch(e) {
+      return new OriginalWorker(url, options);
+    }
+  };
 })();
