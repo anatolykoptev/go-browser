@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/anatolykoptev/go-browser/humanize"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -100,12 +101,14 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + err.Error()}
 	}
 
+	cursor := humanize.NewCursor(390, 290)
+
 	results := make([]ActionResult, 0, len(req.Actions))
 	status := "ok"
 	var actionErr string
 
 	for _, a := range req.Actions {
-		res := ExecuteAction(ctx, page, a)
+		res := ExecuteAction(ctx, page, a, cursor)
 		results = append(results, res)
 		if !res.Ok {
 			status = "error"
