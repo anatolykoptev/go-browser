@@ -75,7 +75,7 @@ func (s *Server) renderURL(req RenderRequest, timeout time.Duration) (*RenderRes
 		_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(browser)
 	}()
 
-	page, err := s.chrome.NewStealthPage(browser)
+	page, err := s.chrome.NewStealthPage(browser, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create stealth page: %w", err)
 	}

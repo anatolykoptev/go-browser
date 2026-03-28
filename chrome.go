@@ -235,10 +235,18 @@ func (m *ChromeManager) reconnect() error {
 // NewStealthPage creates a page with stealth evasions applied.
 // It runs go-rod/stealth JS patches followed by the complement JS that fills gaps
 // not covered by CloakBrowser's C++ patches.
-func (m *ChromeManager) NewStealthPage(ctx *rod.Browser) (*rod.Page, error) {
+func (m *ChromeManager) NewStealthPage(ctx *rod.Browser, profile *StealthProfile) (*rod.Page, error) {
 	page, err := stealth.Page(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("chrome: stealth page: %w", err)
+	}
+
+	// Inject profile data before complement JS so modules can read __sp.
+	if profile != nil {
+		if _, err := page.EvalOnNewDocument(profile.InjectJS()); err != nil {
+			_ = page.Close()
+			return nil, fmt.Errorf("chrome: inject profile: %w", err)
+		}
 	}
 
 	if _, err := page.EvalOnNewDocument(complementJS); err != nil {
