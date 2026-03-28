@@ -95,6 +95,9 @@ window.Worker = function(url, options) {
   return createPatchedWorker(url, options);
 };
 
+// Mask Worker.toString() to look native
+window.Worker.toString = function() { return 'function Worker() { [native code] }'; };
+
 // Preserve constructor identity
 Object.defineProperty(window.Worker, 'prototype', {
   value: OriginalWorker.prototype,
