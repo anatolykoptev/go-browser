@@ -27,7 +27,7 @@ type InteractRequest struct {
 	Profile     string   `json:"profile,omitempty"`
 	UseProfile  bool     `json:"use_profile,omitempty"` // use default Chrome profile (persistent cookies)
 	ReusePage   bool     `json:"reuse_page,omitempty"`
-	NoStealth   bool     `json:"no_stealth,omitempty"`  // plain page without stealth JS injection
+	NoStealth   bool     `json:"no_stealth,omitempty"` // plain page without stealth JS injection
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -76,7 +76,14 @@ func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy string) InteractResponse {
+// RunInteract executes a Chrome interaction sequence.
+// It reads req.Proxy to set up the browser context; pool may be nil if session persistence is not needed.
+func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, req InteractRequest) InteractResponse {
+	proxy := ""
+	if req.Proxy != nil {
+		proxy = *req.Proxy
+	}
+
 	wantSession := req.SessionID != nil && *req.SessionID == sessionIDNew
 
 	var browser *rod.Browser
@@ -86,13 +93,13 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 
 	if req.UseProfile {
 		// Use default Chrome profile — persistent cookies, localStorage, etc.
-		browser, err = s.chrome.DefaultContext()
+		browser, err = chrome.DefaultContext()
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
 		// Don't dispose — it's the default context
 	} else {
-		browser, contextID, authCleanup, err = s.chrome.NewContext(proxy)
+		browser, contextID, authCleanup, err = chrome.NewContext(proxy)
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
@@ -114,13 +121,15 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 	if req.ReusePage {
 		// Attach to existing page — no TargetCreateTarget CDP call.
 		// This bypasses Google/Twitter CDP page-creation detection.
-		page, err = s.chrome.FindPage("")
+		page, err = chrome.FindPage("")
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
 		}
-		// Navigate via JS (CDP Navigate hangs on SPA redirects like Google/Twitter)
+		// Navigate via raw CDP — avoids callFunctionOn hang on SPA redirects.
 		if req.URL != "" && req.URL != "about:blank" {
-			_, _ = page.Eval(`window.location.href = ` + "`" + req.URL + "`")
+			if err := doNavigate(ctx, page, req.URL); err != nil {
+				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+			}
 		}
 	} else if req.NoStealth {
 		// Plain page without stealth injection — for sites that detect stealth JS.
@@ -130,28 +139,22 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		}
 		defer func() { _ = page.Close() }()
 
-		if err := page.Context(ctx).Navigate(req.URL); err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + err.Error()}
-		}
-		if err := page.Context(ctx).WaitLoad(); err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + err.Error()}
+		if err := doNavigate(ctx, page, req.URL); err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
 	} else {
 		profile, err := LoadProfile(req.Profile)
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err)}
 		}
-		page, err = s.chrome.NewStealthPage(browser, profile)
+		page, err = chrome.NewStealthPage(browser, profile)
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
 		defer func() { _ = page.Close() }()
 
-		if err := page.Context(ctx).Navigate(req.URL); err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + err.Error()}
-		}
-		if err := page.Context(ctx).WaitLoad(); err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + err.Error()}
+		if err := doNavigate(ctx, page, req.URL); err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
 	}
 
@@ -192,8 +195,8 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 	}
 
 	var sessionID string
-	if wantSession && s.pool != nil {
-		id, err := s.pool.Create(proxy)
+	if wantSession && pool != nil {
+		id, err := pool.Create(proxy)
 		if err == nil {
 			sessionID = id
 			disposeCtx = false // pool owns the context now
@@ -207,6 +210,12 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		SessionID: sessionID,
 		Error:     actionErr,
 	}
+}
+
+func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy string) InteractResponse {
+	// Normalize proxy into req.Proxy so RunInteract can read it uniformly.
+	req.Proxy = &proxy
+	return RunInteract(ctx, s.chrome, s.pool, req)
 }
 
 func (s *Server) handleDestroySession(w http.ResponseWriter, r *http.Request) {

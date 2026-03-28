@@ -62,9 +62,9 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// renderURL performs the actual Chrome navigation and HTML extraction.
-func (s *Server) renderURL(req RenderRequest, timeout time.Duration) (*RenderResponse, error) {
-	browser, contextID, authCleanup, err := s.chrome.NewContext(req.Proxy)
+// RenderURL renders a URL in a stealth Chrome page and returns HTML.
+func RenderURL(chrome *ChromeManager, req RenderRequest, timeout time.Duration) (*RenderResponse, error) {
+	browser, contextID, authCleanup, err := chrome.NewContext(req.Proxy)
 	if err != nil {
 		return nil, fmt.Errorf("create context: %w", err)
 	}
@@ -75,7 +75,7 @@ func (s *Server) renderURL(req RenderRequest, timeout time.Duration) (*RenderRes
 		_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(browser)
 	}()
 
-	page, err := s.chrome.NewStealthPage(browser, nil)
+	page, err := chrome.NewStealthPage(browser, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create stealth page: %w", err)
 	}
@@ -110,4 +110,9 @@ func (s *Server) renderURL(req RenderRequest, timeout time.Duration) (*RenderRes
 		Status:    http.StatusOK,
 		ElapsedMs: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+// renderURL performs the actual Chrome navigation and HTML extraction.
+func (s *Server) renderURL(req RenderRequest, timeout time.Duration) (*RenderResponse, error) {
+	return RenderURL(s.chrome, req, timeout)
 }
