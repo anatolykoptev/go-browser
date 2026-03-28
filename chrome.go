@@ -153,9 +153,13 @@ func (m *ChromeManager) FindPage(urlPrefix string) (*rod.Page, error) {
 		return nil, fmt.Errorf("list targets: %w", err)
 	}
 
-	// Find page matching URL prefix in default context.
+	// Find page matching URL prefix (prefer non-keepalive pages).
 	for _, t := range targets.TargetInfos {
-		if t.Type != "page" || t.BrowserContextID != "" {
+		if t.Type != "page" {
+			continue
+		}
+		// Skip keepalive context pages
+		if t.BrowserContextID == m.keepaliveCtxID && m.keepaliveCtxID != "" {
 			continue
 		}
 		if urlPrefix == "" || strings.HasPrefix(t.URL, urlPrefix) {
@@ -167,15 +171,19 @@ func (m *ChromeManager) FindPage(urlPrefix string) (*rod.Page, error) {
 		}
 	}
 
-	// Fallback: any page in default context.
+	// Fallback: any non-keepalive page.
 	for _, t := range targets.TargetInfos {
-		if t.Type == "page" && t.BrowserContextID == "" {
-			page, err := b.PageFromTarget(t.TargetID)
-			if err != nil {
-				continue
-			}
-			return page, nil
+		if t.Type != "page" {
+			continue
 		}
+		if t.BrowserContextID == m.keepaliveCtxID && m.keepaliveCtxID != "" {
+			continue
+		}
+		page, err := b.PageFromTarget(t.TargetID)
+		if err != nil {
+			continue
+		}
+		return page, nil
 	}
 
 	return nil, fmt.Errorf("no existing page found in default context")
