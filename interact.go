@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/anatolykoptev/go-browser/humanize"
+	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -24,6 +25,7 @@ type InteractRequest struct {
 	Proxy       *string  `json:"proxy,omitempty"`
 	SessionID   *string  `json:"session_id,omitempty"`
 	Profile     string   `json:"profile,omitempty"`
+	UseProfile  bool     `json:"use_profile,omitempty"` // use default Chrome profile (persistent cookies)
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -75,20 +77,32 @@ func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy string) InteractResponse {
 	wantSession := req.SessionID != nil && *req.SessionID == sessionIDNew
 
-	browser, contextID, authCleanup, err := s.chrome.NewContext(proxy)
-	if err != nil {
-		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
-	}
-	if authCleanup != nil {
-		defer authCleanup()
+	var browser *rod.Browser
+	var contextID proto.BrowserBrowserContextID
+	var authCleanup func()
+	var err error
+
+	if req.UseProfile {
+		// Use default Chrome profile — persistent cookies, localStorage, etc.
+		browser, err = s.chrome.DefaultContext()
+		if err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+		}
+		// Don't dispose — it's the default context
+	} else {
+		browser, contextID, authCleanup, err = s.chrome.NewContext(proxy)
+		if err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+		}
+		if authCleanup != nil {
+			defer authCleanup()
+		}
 	}
 
-	// Dispose context when done, unless we're persisting as a session.
-	// Session persistence is tracked via wantSession; dispose runs regardless
-	// if session creation fails below.
-	disposeCtx := true
+	// Dispose context when done, unless using default profile or persisting as a session.
+	disposeCtx := !req.UseProfile
 	defer func() {
-		if disposeCtx {
+		if disposeCtx && contextID != "" {
 			_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(browser)
 		}
 	}()
