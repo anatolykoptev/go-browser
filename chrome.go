@@ -141,33 +141,35 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 }
 
 // setupProxyAuth enables continuous Fetch.authRequired handling for proxy authentication.
-// Uses EachEvent to handle all auth challenges and paused requests.
-// Returns a cleanup function that stops the auth handler.
+// Intercepts all requests but immediately continues non-auth ones in goroutines
+// to avoid blocking page XHR. Auth challenges get credentials.
+// Returns a cleanup function that disables the fetch domain.
 func setupProxyAuth(b *rod.Browser, username, password string) func() {
-	// Enable fetch interception with auth handling.
 	_ = proto.FetchEnable{
 		HandleAuthRequests: true,
 	}.Call(b)
 
 	wait := b.EachEvent(
 		func(ev *proto.FetchRequestPaused) {
-			// Continue paused requests (don't block non-auth traffic).
-			_ = proto.FetchContinueRequest{RequestID: ev.RequestID}.Call(b)
+			// Continue immediately in goroutine — don't block the event loop.
+			go func() {
+				_ = proto.FetchContinueRequest{RequestID: ev.RequestID}.Call(b)
+			}()
 		},
 		func(ev *proto.FetchAuthRequired) {
-			// Respond to proxy auth challenges with credentials.
-			_ = proto.FetchContinueWithAuth{
-				RequestID: ev.RequestID,
-				AuthChallengeResponse: &proto.FetchAuthChallengeResponse{
-					Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
-					Username: username,
-					Password: password,
-				},
-			}.Call(b)
+			go func() {
+				_ = proto.FetchContinueWithAuth{
+					RequestID: ev.RequestID,
+					AuthChallengeResponse: &proto.FetchAuthChallengeResponse{
+						Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
+						Username: username,
+						Password: password,
+					},
+				}.Call(b)
+			}()
 		},
 	)
 
-	// Run event loop in background.
 	go wait()
 
 	return func() {
