@@ -8,6 +8,8 @@ Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
 
 // NavigatorUAData (Chrome Client Hints).
 // Headless Chrome lacks navigator.userAgentData — critical for Castle.io.
+// Platform must match CloakBrowser's --fingerprint-platform and GPU renderer.
+// CloakBrowser with SwiftShader reports "Intel Iris OpenGL Engine" = macOS GPU.
 if (!navigator.userAgentData) {
   const brands = [
     {brand: 'Chromium', version: '145'},
@@ -18,19 +20,19 @@ if (!navigator.userAgentData) {
     get: () => ({
       brands: brands,
       mobile: false,
-      platform: 'Windows',
+      platform: 'macOS',
       getHighEntropyValues: (hints) => Promise.resolve({
         brands: brands,
         mobile: false,
-        platform: 'Windows',
-        platformVersion: '15.0.0',
-        architecture: 'x86',
+        platform: 'macOS',
+        platformVersion: '14.5.0',
+        architecture: 'arm',
         bitness: '64',
         model: '',
         uaFullVersion: '145.0.7632.159',
         fullVersionList: brands.map(b => ({...b})),
       }),
-      toJSON: () => ({brands: brands, mobile: false, platform: 'Windows'}),
+      toJSON: () => ({brands: brands, mobile: false, platform: 'macOS'}),
     }),
     configurable: true,
   });
