@@ -64,9 +64,12 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 
 // renderURL performs the actual Chrome navigation and HTML extraction.
 func (s *Server) renderURL(req RenderRequest, timeout time.Duration) (*RenderResponse, error) {
-	browser, contextID, err := s.chrome.NewContext(req.Proxy)
+	browser, contextID, authCleanup, err := s.chrome.NewContext(req.Proxy)
 	if err != nil {
 		return nil, fmt.Errorf("create context: %w", err)
+	}
+	if authCleanup != nil {
+		defer authCleanup()
 	}
 	defer func() {
 		_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(browser)

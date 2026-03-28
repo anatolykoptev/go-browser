@@ -73,9 +73,12 @@ func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy string) InteractResponse {
 	wantSession := req.SessionID != nil && *req.SessionID == sessionIDNew
 
-	browser, contextID, err := s.chrome.NewContext(proxy)
+	browser, contextID, authCleanup, err := s.chrome.NewContext(proxy)
 	if err != nil {
 		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+	}
+	if authCleanup != nil {
+		defer authCleanup()
 	}
 
 	// Dispose context when done, unless we're persisting as a session.

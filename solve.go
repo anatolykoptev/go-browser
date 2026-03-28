@@ -67,13 +67,16 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutSecs)*time.Second)
 	defer cancel()
 
-	scopedBrowser, ctxID, err := s.chrome.NewContext(req.Proxy)
+	scopedBrowser, ctxID, authCleanup, err := s.chrome.NewContext(req.Proxy)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, SolveResponse{
 			Status: "error",
 			Error:  fmt.Sprintf("create browser context: %s", err.Error()),
 		})
 		return
+	}
+	if authCleanup != nil {
+		defer authCleanup()
 	}
 	defer s.disposeContext(scopedBrowser, ctxID)
 
