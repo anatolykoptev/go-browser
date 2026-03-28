@@ -26,7 +26,8 @@ type InteractRequest struct {
 	SessionID   *string  `json:"session_id,omitempty"`
 	Profile     string   `json:"profile,omitempty"`
 	UseProfile  bool     `json:"use_profile,omitempty"` // use default Chrome profile (persistent cookies)
-	ReusePage   bool     `json:"reuse_page,omitempty"`  // attach to existing page (bypasses CDP page-creation detection)
+	ReusePage   bool     `json:"reuse_page,omitempty"`
+	NoStealth   bool     `json:"no_stealth,omitempty"` // plain page without stealth injection  // attach to existing page (bypasses CDP page-creation detection)
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -117,15 +118,21 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
 		}
-		// Navigate to URL if specified
+		// Navigate to URL if specified (no WaitLoad — SPA pages never fully "load")
 		if req.URL != "" && req.URL != "about:blank" {
 			if navErr := page.Context(ctx).Navigate(req.URL); navErr != nil {
 				return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + navErr.Error()}
 			}
-			if loadErr := page.Context(ctx).WaitLoad(); loadErr != nil {
-				return InteractResponse{URL: req.URL, Status: "error", Error: "wait_load: " + loadErr.Error()}
-			}
+			// Wait for DOMContentLoaded, not full load (Google/Twitter are SPAs)
+			_ = page.Context(ctx).WaitDOMStable(time.Second, 0.1)
 		}
+	} else if req.NoStealth {
+		// Plain page without stealth injection — for sites that detect stealth JS.
+		page, err = browser.Page(proto.TargetCreateTarget{URL: "about:blank"})
+		if err != nil {
+			return InteractResponse{URL: req.URL, Status: "error", Error: "plain page: " + err.Error()}
+		}
+		defer func() { _ = page.Close() }()
 	} else {
 		profile, err := LoadProfile(req.Profile)
 		if err != nil {
