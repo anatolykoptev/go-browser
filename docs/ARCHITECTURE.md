@@ -1,177 +1,196 @@
-# go-browser Architecture
+# Browser Architecture — Two-Tier System
 
-Shared Go library for headless browser automation. Replaces per-service `chromedp` boilerplate
-and the external `browserless` Docker container with a unified, multi-backend interface.
+## Overview
 
-## Problem
-
-- **go-wp** and **go-search** both have ~100-line `browser_init.go` with identical chromedp logic
-- Both connect to a shared `browserless` container (384MB RAM, separate process)
-- Duplication: remote allocator setup, concurrency semaphore, render timeout, hydration wait
-- No fallback: if browserless is down, browser features silently degrade to nothing
-
-## Solution
-
-One library with pluggable backends behind a `Browser` interface.
-
-## Interface
-
-```go
-package browser
-
-type Browser interface {
-    // Render navigates to URL, waits for JS, returns rendered HTML.
-    Render(ctx context.Context, url string) (*Page, error)
-
-    // Close shuts down browser and releases resources.
-    Close() error
-
-    // Available reports whether the browser backend is connected and usable.
-    Available() bool
-}
-
-type Page struct {
-    URL     string            // Final URL after redirects
-    HTML    string            // Rendered outerHTML
-    Title   string            // Page title
-    Status  int               // HTTP status code
-    Headers map[string]string // Response headers
-}
-```
-
-## Backends
-
-### 1. Rod (primary)
-
-In-process Chromium via Chrome DevTools Protocol.
+Two independent browser services working together:
 
 ```
-go-browser/rod/
-├── rod.go          -- Browser impl: launch, pool, render
-└── options.go      -- WithProxy, WithHeadless, WithBin
+                    ┌─────────────────────────────┐
+                    │         Consumers            │
+                    │  go-search, go-wp, go-social │
+                    │  go-enriche, go-code         │
+                    └─────────┬───────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              │                               │
+     ┌────────▼────────┐           ┌──────────▼─────────┐
+     │  ox-browser      │           │  go-browser         │
+     │  :8901 (Rust)    │           │  :8906 (Go)         │
+     │                  │           │                     │
+     │  HTTP stealth    │           │  Chrome automation  │
+     │  wreq+BoringSSL  │           │  go-rod + CloakBrowser │
+     │  16-1400ms/req   │           │  300-6300ms/req     │
+     └──────────────────┘           └─────────┬───────────┘
+                                              │ CDP (ws://)
+                                    ┌─────────▼───────────┐
+                                    │  CloakBrowser        │
+                                    │  :9222 (C++ patched  │
+                                    │  Chromium 145)       │
+                                    │  Headed via Xvfb     │
+                                    └─────────────────────┘
 ```
 
-- Manages Chromium lifecycle (auto-download or custom binary)
-- Built-in page pool with concurrency limit
-- Proxy integration via go-stealth ProxyPool
-- Replaces `browserless` container entirely
+## When to Use What
 
-### 2. Lightpanda (lightweight)
+| Need | Use | Why |
+|------|-----|-----|
+| Fetch HTML (no JS) | ox-browser `/fetch` | 16ms, lightweight |
+| Extract text/readability | ox-browser `/read` | Built-in trafilatura |
+| CF-protected page | ox-browser `/fetch` | wreq TLS bypass, 1.4s |
+| JS-rendered SPA | go-browser `/render` | Real Chrome renders JS |
+| Form interaction (login, search) | go-browser `/chrome/interact` | CDP actions |
+| Screenshot | go-browser `/chrome/interact` | Real rendering |
+| Technology detection | ox-browser `/analyze` | Wappalyzer DB |
+| Security scan | ox-browser `/security` | Header analysis |
+| Crawling | ox-browser `/crawl` | BFS with rate limits |
+| Media download | ox-browser `/media/download` | yt-dlp + ffmpeg |
 
-External CDP-compatible process. 9x less memory than Chrome.
+## Tier 1: ox-browser (Rust HTTP)
 
-```
-go-browser/lightpanda/
-├── lightpanda.go   -- Browser impl: connect via CDP ws://
-└── options.go      -- WithEndpoint, WithCloudToken
-```
+**Port**: 8901 | **RAM**: ~50MB | **Speed**: 16-1400ms
 
-- Connects via `chromedp.NewRemoteAllocator` (same CDP protocol)
-- Local binary or Lightpanda Cloud endpoint
-- No screenshots/PDF (DOM + JS only)
-- Ideal for high-volume fetch where JS execution needed
+Stealth HTTP client without a real browser. Uses wreq (BoringSSL) for Chrome-identical TLS/HTTP2 fingerprints.
 
-### 3. Remote (compatibility)
+### Key Features
+- **TLS fingerprinting**: JA4, Akamai H2 — identical to real Chrome via BoringSSL
+- **16 browser profiles**: Chrome/Firefox/Safari/Edge × Win/Mac/Linux/Mobile
+- **Proxy pool**: Webshare (215K residential), round-robin, health tracking
+- **CF detection**: JsChallenge/Turnstile/Block → auto-retry with different proxy
+- **Middleware chain**: logging → rate_limit → retry → cloudflare → client_hints → wreq
+- **MCP server**: 11 tools via rmcp (Streamable HTTP)
 
-Connect to any CDP-compatible endpoint (browserless, Chrome, Lightpanda).
+### Endpoints
+| Endpoint | Purpose |
+|----------|---------|
+| `/fetch` | Raw HTML fetch with stealth headers |
+| `/read` | Fetch + readability extraction (trafilatura) |
+| `/fetch-smart` | /read alias |
+| `/analyze` | Technology detection (Wappalyzer) |
+| `/security` | Security header scan |
+| `/crawl` | BFS web crawler |
+| `/solve_cf` | Cloudflare challenge solver |
+| `/images/search` | Image search (5 engines) |
+| `/images/reverse` | Reverse image search |
+| `/media/download` | Media download (YouTube, etc.) |
+| `/site-audit` | Full site SEO/security audit |
 
-```
-go-browser/remote/
-├── remote.go       -- Browser impl: connect to ws:// endpoint
-└── options.go      -- WithEndpoint, WithMaxTabs
-```
+### Architecture Detail
+See `ox-browser/docs/ARCHITECTURE.md` for full crate dependency graph, middleware chain, proxy pool, and CF bypass architecture.
 
-- Drop-in replacement for current go-wp/go-search chromedp code
-- Backward compatible with existing `BROWSER_WS_URL` config
-- Migration path: remote → rod → lightpanda
+## Tier 2: go-browser (Chrome Automation)
 
-## Package Structure
+**Port**: 8906 | **RAM**: ~300MB (with CloakBrowser) | **Speed**: 300-6300ms
 
-```
-go-browser/                        (~800 LOC target)
-├── browser.go                     -- Browser + Page interfaces
-├── options.go                     -- Common options (timeout, concurrency, user-agent)
-├── pool.go                        -- Page pool (semaphore + reuse)
-├── rod/
-│   ├── rod.go                     -- Rod backend
-│   └── options.go                 -- Rod-specific options
-├── lightpanda/
-│   ├── lightpanda.go              -- Lightpanda backend
-│   └── options.go                 -- Lightpanda-specific options
-├── remote/
-│   ├── remote.go                  -- Generic CDP remote backend
-│   └── options.go                 -- Remote-specific options
-└── docs/
-    ├── ARCHITECTURE.md            -- This file
-    └── ROADMAP.md                 -- Implementation phases
-```
+Real Chrome browser (CloakBrowser) controlled via CDP (go-rod). Full JS rendering, form interaction, screenshots.
 
-## Integration with go-stealth
+### Key Features
+- **Headed Chrome** via Xvfb (not headless) — eliminates 8+ detection vectors natively
+- **CloakBrowser**: 33 C++ patches (canvas, WebGL, audio, fonts, locale, CDP input)
+- **Stealth JS**: 6 modules, Function.prototype.toString masking, Worker Blob/data: URL proxy
+- **17 action types**: click, type_text, wait_for, evaluate, screenshot, scroll, warmup, etc.
+- **Humanized interaction**: Bezier mouse paths, keyDown/char/keyUp typing, idle drift
+- **Session pool**: Persistent browser contexts with cookies
+- **Proxy auth**: CDP Fetch.authRequired handler (Webshare support)
 
-go-browser imports go-stealth for proxy rotation, not the other way around.
+### Endpoints
+| Endpoint | Purpose |
+|----------|---------|
+| `/render` | Navigate + wait load + return HTML |
+| `/chrome/interact` | Execute action sequence (click, type, eval, etc.) |
+| `/solve` | Cloudflare challenge solver (via Chrome) |
+| `/health` | Health check |
 
-```
-go-stealth (HTTP client, TLS fingerprinting, proxy pool)
-     ↑
-go-browser (headless browser, JS rendering)
-     ↑
-go-enriche / go-wp / go-search (consumers)
-```
-
-Proxy flow:
-```go
-pool, _ := proxypool.NewWebshare(apiKey)
-
-b, _ := rod.New(
-    browser.WithConcurrency(3),
-    browser.WithTimeout(20 * time.Second),
-    rod.WithProxyPool(pool),  // go-stealth ProxyPool
-)
-
-page, _ := b.Render(ctx, "https://example.com")
-fmt.Println(page.HTML)
-```
-
-## Concurrency Model
-
-Each backend manages a page pool internally:
-
-```
-Browser
-  └── Pool (semaphore, default 3)
-       ├── Page 1 (in use)
-       ├── Page 2 (in use)
-       └── Page 3 (idle, reusable)
+### CloakBrowser Configuration
+```yaml
+# Headed Chrome with Xvfb virtual display
+command: >
+  bash -c "dbus-daemon --system --fork;
+  dbus-daemon --session --fork;
+  Xvfb :99 -screen 0 1440x900x24 &
+  chrome --use-gl=angle --use-angle=swiftshader --enable-webgl
+  --window-size=1440,900 --fingerprint-platform=macos
+  --timezone=America/Los_Angeles"
 ```
 
-- Semaphore limits concurrent renders (configurable via `WithConcurrency`)
-- Pages are reused across requests (navigate, not create)
-- Context cancellation aborts render and releases slot
+### Stealth System
+See `go-browser/docs/STEALTH-SPEC.md` for full detection vector checklist.
+See `go-browser/docs/STEALTH-ROADMAP.md` for planned improvements.
+See `go-browser/docs/RESEARCH-LOG.md` for investigation history.
 
-## Current Consumers
+### Three-Layer Stealth Stack
+```
+Layer 3: go-rod/stealth        (puppeteer-extra JS evasions)
+Layer 2: stealth_complement.js (6 modules, toString masking, Worker proxy)
+Layer 1: CloakBrowser C++      (33 chromium patches)
+```
 
-| Service | Current Code | Browser Use | Migration |
-|---------|-------------|-------------|-----------|
-| go-wp | `browser_init.go` (87 LOC) | Yandex Maps org pages (SPA) | `rod` backend |
-| go-search | `browser.go` (101 LOC) | Fallback for JS-heavy pages | `rod` or `lightpanda` |
-| go-enriche | None | Future: JS-rendered content | `lightpanda` (lightweight) |
+### Action Types
+| Action | Description |
+|--------|-------------|
+| `click` | Click element (humanized: Bezier path + CDP mousePressed) |
+| `type_text` | Type text (humanized: keyDown/char/keyUp per character) |
+| `wait_for` | Wait for CSS selector |
+| `evaluate` | Execute JS in page context |
+| `eval_on_new_document` | Inject JS before page load |
+| `navigate` | Navigate to URL |
+| `screenshot` | Capture page screenshot (base64 PNG) |
+| `snapshot` | Accessibility tree snapshot |
+| `press` | Press keyboard key |
+| `sleep` | Wait N milliseconds |
+| `scroll` | Scroll element or page |
+| `warmup` | Generate random mouse/scroll events (isTrusted:true) |
+| `set_cookies` | Set cookies before navigation |
+| `get_cookies` | Extract all page cookies |
+| `get_logs` | Get network + console logs |
+| `handle_dialog` | Accept/dismiss dialog |
+| `hover` | Hover over element (humanized) |
+| `go_back` | Navigate back |
 
-## Configuration
+## Performance Comparison
 
-Environment variables (backward compatible):
+Tested 2026-03-28:
 
-| Var | Description | Default |
-|-----|-------------|---------|
-| `BROWSER_BACKEND` | `rod`, `lightpanda`, `remote` | `rod` |
-| `BROWSER_WS_URL` | Remote CDP endpoint (remote/lightpanda) | — |
-| `BROWSER_CONCURRENCY` | Max concurrent renders | `3` |
-| `BROWSER_TIMEOUT` | Render timeout | `20s` |
-| `BROWSER_BIN` | Custom browser binary path | auto-detect |
+| Site | ox-browser (HTTP) | go-browser (Chrome) | Raw curl |
+|------|:---:|:---:|:---:|
+| HackerNews (simple) | 212ms ✅ | 322ms ✅ | 182ms ✅ |
+| Amazon (CF protected) | 1,415ms ✅ | 6,299ms ✅ | 268ms ❌ blocked |
+| bot.sannysoft.com | N/A | 56/56 tests pass | N/A |
 
-## Error Handling
+## Anti-Bot Test Results (go-browser, 2026-03-28)
 
-- `ErrUnavailable` — backend not connected / binary not found
-- `ErrTimeout` — render exceeded deadline
-- `ErrNavigate` — page load failed (DNS, TLS, HTTP error)
-- All errors are wrapped with backend name for debugging
-- `Available()` allows graceful degradation (same pattern as current code)
+| Site | Status |
+|------|--------|
+| Amazon | ✅ 235 links, 19K chars |
+| Booking.com | ✅ 104 links, 12K chars |
+| StackOverflow | ✅ 67 links |
+| GitHub Trending | ✅ 141 links |
+| Авито | ✅ 53 links |
+| 2ГИС | ✅ 12 links |
+| Reddit | ✅ 190K chars |
+| Хабр | ✅ 310K chars |
+| Medium | ✅ 428K chars |
+| Twitter (profile) | ✅ 318K chars |
+| bot.sannysoft.com | ✅ **56/56 all pass** |
+
+## Deployment
+
+Both services in `~/deploy/krolik-server/compose/search.yml`:
+
+```bash
+# ox-browser (Rust HTTP)
+docker compose build ox-browser && docker compose up -d --no-deps --force-recreate ox-browser
+
+# go-browser + CloakBrowser (Chrome)
+docker compose build go-browser && docker compose up -d --no-deps --force-recreate go-browser cloakbrowser
+```
+
+## Source Code
+
+| Component | Path | Language | Tests |
+|-----------|------|----------|-------|
+| ox-browser | `~/src/ox-browser/` | Rust | 187 |
+| go-browser | `~/src/go-browser/` | Go | 111 |
+| go-stealth | `~/src/go-stealth/` | Go | — |
+| CloakBrowser | Docker `cloakhq/cloakbrowser:latest` | C++ | — |
+| Stealth JS | `~/src/go-browser/stealth/` | JS | — |
+| Stealth profiles | `~/src/go-browser/stealth/profiles/` | JSON | — |
