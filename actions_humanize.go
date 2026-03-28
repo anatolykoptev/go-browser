@@ -80,12 +80,8 @@ func doTypeTextHumanized(
 	for i, ch := range text {
 		char := string(ch)
 		code := charToCode(ch)
-		vk := int(ch)
-		if ch >= 'a' && ch <= 'z' {
-			vk = int(ch - 32) // uppercase ASCII for VK code
-		}
+		vk := charToVK(ch)
 
-		// keyDown — no Text field (real Chrome sends text via separate char event)
 		_ = proto.InputDispatchKeyEvent{
 			Type:                  proto.InputDispatchKeyEventTypeKeyDown,
 			Key:                   char,
@@ -93,7 +89,6 @@ func doTypeTextHumanized(
 			WindowsVirtualKeyCode: vk,
 		}.Call(page)
 
-		// char — this is what actually inserts the character
 		_ = proto.InputDispatchKeyEvent{
 			Type:                  proto.InputDispatchKeyEventTypeChar,
 			Text:                  char,
@@ -101,7 +96,6 @@ func doTypeTextHumanized(
 			WindowsVirtualKeyCode: vk,
 		}.Call(page)
 
-		// keyUp
 		_ = proto.InputDispatchKeyEvent{
 			Type:                  proto.InputDispatchKeyEventTypeKeyUp,
 			Key:                   char,
@@ -114,6 +108,42 @@ func doTypeTextHumanized(
 		}
 	}
 	return nil
+}
+
+// charToVK maps a character to its Windows Virtual Key code.
+func charToVK(ch rune) int {
+	switch {
+	case ch >= 'a' && ch <= 'z':
+		return int(ch - 32) // VK_A=65 .. VK_Z=90
+	case ch >= 'A' && ch <= 'Z':
+		return int(ch)
+	case ch >= '0' && ch <= '9':
+		return int(ch) // VK_0=48 .. VK_9=57
+	case ch == ' ':
+		return 32 // VK_SPACE
+	case ch == '.':
+		return 190 // VK_OEM_PERIOD
+	case ch == ',':
+		return 188 // VK_OEM_COMMA
+	case ch == '-':
+		return 189 // VK_OEM_MINUS
+	case ch == '=':
+		return 187 // VK_OEM_PLUS
+	case ch == '@':
+		return 50 // Shift+2
+	case ch == '_':
+		return 189 // Shift+Minus
+	case ch == '!':
+		return 49 // Shift+1
+	case ch == '/':
+		return 191 // VK_OEM_2
+	case ch == ':':
+		return 186 // Shift+;
+	case ch == ';':
+		return 186 // VK_OEM_1
+	default:
+		return int(ch)
+	}
 }
 
 // charToCode maps a character to its DOM KeyboardEvent.code value.
