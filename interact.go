@@ -118,11 +118,9 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
 		}
-		// Navigate to URL — no WaitLoad (use wait_for/sleep actions for SPA pages)
+		// Navigate via JS (CDP Navigate hangs on SPA redirects like Google/Twitter)
 		if req.URL != "" && req.URL != "about:blank" {
-			if navErr := page.Context(ctx).Navigate(req.URL); navErr != nil {
-				return InteractResponse{URL: req.URL, Status: "error", Error: "navigate: " + navErr.Error()}
-			}
+			_, _ = page.Eval(`window.location.href = ` + "`" + req.URL + "`")
 		}
 	} else if req.NoStealth {
 		// Plain page without stealth injection — for sites that detect stealth JS.
