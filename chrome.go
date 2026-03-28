@@ -21,7 +21,7 @@ var complementJS string
 type ChromeManager struct {
 	mu      sync.RWMutex
 	browser *rod.Browser
-	wsURL   string
+	wsURL   string // original ws URL for discovery (e.g. ws://cloakbrowser:9222)
 }
 
 // NewChromeManager connects to a remote Chrome via WebSocket debugger URL.
@@ -39,17 +39,15 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 
 	return &ChromeManager{
 		browser: b,
-		wsURL:   debuggerURL,
+		wsURL:   wsURL,
 	}, nil
 }
 
 // NewContext creates an isolated BrowserContext with optional proxy.
 // Returns a browser scoped to that context and the context ID for lifecycle management.
+// Automatically reconnects once if the CDP connection is dead.
 func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBrowserContextID, error) {
-	m.mu.RLock()
-	b := m.browser
-	m.mu.RUnlock()
-
+	b := m.getBrowser()
 	if b == nil {
 		return nil, "", ErrUnavailable
 	}
@@ -59,13 +57,57 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 		DisposeOnDetach: true,
 	}.Call(b)
 	if err != nil {
-		return nil, "", fmt.Errorf("chrome: create browser context: %w", err)
+		// Attempt reconnect once on connection error.
+		if reconnErr := m.reconnect(); reconnErr != nil {
+			return nil, "", fmt.Errorf("chrome: create browser context: %w (reconnect failed: %v)", err, reconnErr)
+		}
+		b = m.getBrowser()
+		if b == nil {
+			return nil, "", fmt.Errorf("chrome: reconnect succeeded but browser is nil")
+		}
+		res, err = proto.TargetCreateBrowserContext{
+			ProxyServer:     proxy,
+			DisposeOnDetach: true,
+		}.Call(b)
+		if err != nil {
+			return nil, "", fmt.Errorf("chrome: create browser context after reconnect: %w", err)
+		}
 	}
 
 	scoped := b.NoDefaultDevice()
 	scoped.BrowserContextID = res.BrowserContextID
 
 	return scoped, res.BrowserContextID, nil
+}
+
+func (m *ChromeManager) getBrowser() *rod.Browser {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.browser
+}
+
+// reconnect closes the old connection and establishes a new one.
+func (m *ChromeManager) reconnect() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.browser != nil {
+		_ = m.browser.Close()
+		m.browser = nil
+	}
+
+	debuggerURL, err := discoverWSURL(m.wsURL)
+	if err != nil {
+		return fmt.Errorf("discover ws url: %w", err)
+	}
+
+	b := rod.New().ControlURL(debuggerURL)
+	if err := b.Connect(); err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	m.browser = b
+	return nil
 }
 
 // NewStealthPage creates a page with stealth evasions applied.
