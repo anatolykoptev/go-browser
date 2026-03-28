@@ -117,11 +117,16 @@ Overridden properties:
 
 ## CloakBrowser Configuration
 
+**Mode: HEADED** (not headless) via Xvfb virtual framebuffer. This eliminates 8+ headless detection vectors natively without any JS overrides.
+
 ```yaml
 # compose/search.yml
 command: >
+  bash -c "dbus-daemon --system --fork;
+  dbus-daemon --session --address=unix:path=/tmp/dbus-session --fork;
+  Xvfb :99 -screen 0 1440x900x24 -nolisten tcp &
+  sleep 1 &&
   chrome
-  --headless=new
   --use-gl=angle --use-angle=swiftshader --enable-webgl
   --window-size=1440,900
   --fingerprint=79849
