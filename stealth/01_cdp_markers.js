@@ -28,3 +28,26 @@ Object.defineProperty(Error, 'prepareStackTrace', {
   set: () => {},
   configurable: false,
 });
+
+// Block localhost port scanning (PerimeterX, eBay use this)
+(function() {
+  var origFetch = window.fetch;
+  window.fetch = function(url) {
+    if (typeof url === 'string' && /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(url)) {
+      return Promise.reject(new TypeError('Failed to fetch'));
+    }
+    return origFetch.apply(this, arguments);
+  };
+  var OrigWebSocket = window.WebSocket;
+  window.WebSocket = function(url) {
+    if (/^wss?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(url)) {
+      throw new DOMException("Failed to construct 'WebSocket'", 'SecurityError');
+    }
+    return new OrigWebSocket(url, arguments[1]);
+  };
+  window.WebSocket.prototype = OrigWebSocket.prototype;
+  window.WebSocket.CONNECTING = 0;
+  window.WebSocket.OPEN = 1;
+  window.WebSocket.CLOSING = 2;
+  window.WebSocket.CLOSED = 3;
+})();

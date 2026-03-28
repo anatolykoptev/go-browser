@@ -39,6 +39,29 @@
     set: () => {},
     configurable: false,
   });
+  
+  // Block localhost port scanning (PerimeterX, eBay use this)
+  (function() {
+    var origFetch = window.fetch;
+    window.fetch = function(url) {
+      if (typeof url === 'string' && /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(url)) {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      return origFetch.apply(this, arguments);
+    };
+    var OrigWebSocket = window.WebSocket;
+    window.WebSocket = function(url) {
+      if (/^wss?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(url)) {
+        throw new DOMException("Failed to construct 'WebSocket'", 'SecurityError');
+      }
+      return new OrigWebSocket(url, arguments[1]);
+    };
+    window.WebSocket.prototype = OrigWebSocket.prototype;
+    window.WebSocket.CONNECTING = 0;
+    window.WebSocket.OPEN = 1;
+    window.WebSocket.CLOSING = 2;
+    window.WebSocket.CLOSED = 3;
+  })();
 
   // === 02_navigator.js ===
   // Native toString masking — make overridden getters look like [native code]
@@ -187,6 +210,22 @@
     if (sp.platform) {
       window.__defineNativeGetter(Navigator.prototype, 'platform', () => sp.platform);
     }
+  
+    // Battery API fallback for environments where it's not available
+    if (typeof navigator.getBattery !== 'function') {
+      navigator.getBattery = function() {
+        return Promise.resolve({
+          charging: true, chargingTime: 0, dischargingTime: Infinity,
+          level: 0.87 + Math.random() * 0.1,
+          addEventListener: function() {}, removeEventListener: function() {}
+        });
+      };
+    }
+  
+    // Gamepad API — real Chrome returns [null, null, null, null]
+    if (typeof navigator.getGamepads !== 'function') {
+      navigator.getGamepads = function() { return [null, null, null, null]; };
+    }
   }
 
   // === 03_chrome_object.js ===
@@ -210,21 +249,36 @@
   }
   
   if (!window.chrome.csi) {
-    window.chrome.csi = () => {
-      const now = Date.now();
-      return {startE: now, onloadT: now, pageT: now, tran: 15};
+    window.chrome.csi = function() {
+      var t = performance.timing || {};
+      var navStart = t.navigationStart || (Date.now() - 5000);
+      return {
+        startE: navStart,
+        onloadT: (t.loadEventEnd || navStart + 2000),
+        pageT: performance.now(),
+        tran: 15
+      };
     };
   }
   
   if (!window.chrome.loadTimes) {
-    window.chrome.loadTimes = () => {
-      const now = Date.now() / 1000;
+    window.chrome.loadTimes = function() {
+      var t = performance.timing || {};
+      var navStart = (t.navigationStart || Date.now() - 5000) / 1000;
       return {
-        requestTime: now, startLoadTime: now, commitLoadTime: now,
-        finishDocumentLoadTime: now, finishLoadTime: now, firstPaintTime: now,
-        firstPaintAfterLoadTime: 0, navigationType: 'Other',
-        wasFetchedViaSpdy: false, wasNpnNegotiated: false, npnNegotiatedProtocol: '',
-        wasAlternateProtocolAvailable: false, connectionInfo: 'h2'
+        requestTime: navStart,
+        startLoadTime: navStart + 0.1,
+        commitLoadTime: navStart + 0.3,
+        finishDocumentLoadTime: navStart + 1.2,
+        finishLoadTime: navStart + 1.5,
+        firstPaintTime: navStart + 0.8,
+        firstPaintAfterLoadTime: 0,
+        navigationType: 'Other',
+        wasFetchedViaSpdy: true,
+        wasNpnNegotiated: true,
+        npnNegotiatedProtocol: 'h2',
+        wasAlternateProtocolAvailable: false,
+        connectionInfo: 'h2'
       };
     };
   }
@@ -280,6 +334,7 @@
     const dm = sp?.hardware?.deviceMemory || 8;
     const platform = sp?.platform || 'MacIntel';
     const langs = sp?.languages ? JSON.stringify(sp.languages) : '["en-US","en"]';
+    const ua = sp?.userAgent || navigator.userAgent;
   
     return `
       Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
@@ -299,6 +354,9 @@
       });
       Object.defineProperty(Navigator.prototype, 'language', {
         get: () => ${langs}[0], configurable: true
+      });
+      Object.defineProperty(Object.getPrototypeOf(navigator), 'userAgent', {
+        get: () => '${ua}', configurable: true
       });
     `;
   })();

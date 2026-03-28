@@ -144,4 +144,20 @@ if (sp) {
   if (sp.platform) {
     window.__defineNativeGetter(Navigator.prototype, 'platform', () => sp.platform);
   }
+
+  // Battery API fallback for environments where it's not available
+  if (typeof navigator.getBattery !== 'function') {
+    navigator.getBattery = function() {
+      return Promise.resolve({
+        charging: true, chargingTime: 0, dischargingTime: Infinity,
+        level: 0.87 + Math.random() * 0.1,
+        addEventListener: function() {}, removeEventListener: function() {}
+      });
+    };
+  }
+
+  // Gamepad API — real Chrome returns [null, null, null, null]
+  if (typeof navigator.getGamepads !== 'function') {
+    navigator.getGamepads = function() { return [null, null, null, null]; };
+  }
 }
