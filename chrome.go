@@ -42,9 +42,9 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 		return nil, fmt.Errorf("chrome: connect: %w", err)
 	}
 
-	// Close any pre-existing pages (e.g. chrome://newtab) that CloakBrowser creates on startup.
-	// These can cause crashes when mixed with programmatic context lifecycle.
-	closeInitialPages(b)
+	// Ensure at least one default-context page exists; close extras.
+	// Keeps one page in the default context so FindPage can reuse it later.
+	ensureDefaultPage(b)
 
 	// Create a keepalive context so Chrome doesn't exit when user contexts are disposed.
 	// Non-fatal: headed Chrome with Xvfb doesn't need keepalive.
@@ -63,6 +63,9 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 
 // closeInitialPages closes any pre-existing pages (e.g. chrome://newtab) created by
 // CloakBrowser on startup. These default pages can interfere with context lifecycle.
+// Retained for callers that need a hard reset; normal startup uses ensureDefaultPage.
+//
+//nolint:unused
 func closeInitialPages(b *rod.Browser) {
 	targets, err := proto.TargetGetTargets{}.Call(b)
 	if err != nil {
@@ -72,6 +75,33 @@ func closeInitialPages(b *rod.Browser) {
 		if t.Type == "page" {
 			_, _ = proto.TargetCloseTarget{TargetID: t.TargetID}.Call(b)
 		}
+	}
+}
+
+// ensureDefaultPage makes sure at least one page exists in the default context.
+// If none exist, creates one at about:blank.
+func ensureDefaultPage(b *rod.Browser) {
+	targets, err := proto.TargetGetTargets{}.Call(b)
+	if err != nil {
+		return
+	}
+
+	var defaultPages []proto.TargetTargetInfo
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" && t.BrowserContextID == "" {
+			defaultPages = append(defaultPages, *t)
+		}
+	}
+
+	if len(defaultPages) == 0 {
+		// No default pages — create one.
+		_, _ = proto.TargetCreateTarget{URL: "about:blank"}.Call(b)
+		return
+	}
+
+	// Close extra default pages (keep the first one).
+	for i := 1; i < len(defaultPages); i++ {
+		_, _ = proto.TargetCloseTarget{TargetID: defaultPages[i].TargetID}.Call(b)
 	}
 }
 
@@ -107,6 +137,48 @@ func (m *ChromeManager) DefaultContext() (*rod.Browser, error) {
 	scoped := b.NoDefaultDevice()
 	scoped.BrowserContextID = "" // empty = default context (persistent profile)
 	return scoped, nil
+}
+
+// FindPage finds an existing page in the default browser context.
+// Avoids creating a new CDP target which Google/Twitter detect.
+// If urlPrefix is empty, returns any page in the default context.
+func (m *ChromeManager) FindPage(urlPrefix string) (*rod.Page, error) {
+	b := m.getBrowser()
+	if b == nil {
+		return nil, ErrUnavailable
+	}
+
+	targets, err := proto.TargetGetTargets{}.Call(b)
+	if err != nil {
+		return nil, fmt.Errorf("list targets: %w", err)
+	}
+
+	// Find page matching URL prefix in default context.
+	for _, t := range targets.TargetInfos {
+		if t.Type != "page" || t.BrowserContextID != "" {
+			continue
+		}
+		if urlPrefix == "" || strings.HasPrefix(t.URL, urlPrefix) {
+			page, err := b.PageFromTarget(t.TargetID)
+			if err != nil {
+				continue
+			}
+			return page, nil
+		}
+	}
+
+	// Fallback: any page in default context.
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" && t.BrowserContextID == "" {
+			page, err := b.PageFromTarget(t.TargetID)
+			if err != nil {
+				continue
+			}
+			return page, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no existing page found in default context")
 }
 
 // NewContext creates an isolated BrowserContext with optional proxy.
