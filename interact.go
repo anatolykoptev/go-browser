@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -22,6 +23,7 @@ type InteractRequest struct {
 	TimeoutSecs int      `json:"timeout_secs,omitempty"`
 	Proxy       *string  `json:"proxy,omitempty"`
 	SessionID   *string  `json:"session_id,omitempty"`
+	Profile     string   `json:"profile,omitempty"`
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -91,7 +93,12 @@ func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy str
 		}
 	}()
 
-	page, err := s.chrome.NewStealthPage(browser)
+	profile, err := LoadProfile(req.Profile)
+	if err != nil {
+		return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err)}
+	}
+
+	page, err := s.chrome.NewStealthPage(browser, profile)
 	if err != nil {
 		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 	}

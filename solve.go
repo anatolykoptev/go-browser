@@ -80,7 +80,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.disposeContext(scopedBrowser, ctxID)
 
-	page, err := s.chrome.NewStealthPage(scopedBrowser)
+	page, err := s.chrome.NewStealthPage(scopedBrowser, nil)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, SolveResponse{
 			Status: "error",
