@@ -13,6 +13,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
+	"github.com/ysmood/gson"
 )
 
 //go:embed stealth_complement.js
@@ -254,6 +255,22 @@ func (m *ChromeManager) NewStealthPage(ctx *rod.Browser, profile *StealthProfile
 	if _, err := page.EvalOnNewDocument(complementJS); err != nil {
 		_ = page.Close()
 		return nil, fmt.Errorf("chrome: eval complement js: %w", err)
+	}
+
+	// Set Accept-Language header to match profile languages so HTTP headers
+	// and navigator.languages are consistent (detection scripts compare both).
+	if profile != nil && len(profile.Langs) > 0 {
+		langs := profile.Langs[0]
+		for i, l := range profile.Langs[1:] {
+			q := 0.9 - float64(i)*0.1
+			if q < 0.1 {
+				q = 0.1
+			}
+			langs += fmt.Sprintf(",%s;q=%.1f", l, q)
+		}
+		_ = proto.NetworkSetExtraHTTPHeaders{
+			Headers: proto.NetworkHeaders{"Accept-Language": gson.New(langs)},
+		}.Call(page)
 	}
 
 	return page, nil
