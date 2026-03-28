@@ -8,8 +8,52 @@
 ## Предыстория
 
 **Цель**: Автоматический логин в Twitter аккаунты для go-social (управление соцсетями).
+**go-social** (:8905) — централизованный менеджер аккаунтов: PostgreSQL + Redis, AES-256 encryption, pool rotation, REST API. Потребители: go-hully, ox-browser, vaelor.
 
-**Предыдущий подход** (ox-browser, Rust + chromiumoxide): работал частично — `enter_username` проходил, но Castle.io зависал на неопределённое время. chromiumoxide заброшен автором → решили мигрировать на Go.
+### Этап 0: ox-browser (Rust + chromiumoxide) — до 2026-03-27
+
+**ox-browser** — Rust сервис с `chromiumoxide` + `wreq` для HTTP/Chrome.
+
+**Что было сделано (10+ коммитов):**
+- stealth.js (9 модулей): screen dims, webdriver, plugins, canvas fingerprint
+- SessionPool, get/set/destroy cookies
+- InsertTextParams CDP typing (Playwright approach)
+- nativeInputValueSetter + _valueTracker для React
+- API login (`api_login.rs` + `api_flow.rs`) — twikit-style HTTP flow
+- Dual stealth profiles (full/lite для CloakBrowser)
+
+**Ключевые находки ox-browser эпохи:**
+- `DispatchKeyEvent` типирует текст в DOM но НЕ обновляет React state
+- `nativeInputValueSetter` + `_valueTracker.setValue('')` + `Event('input')` — правильный React bypass
+- `element.click()` через CDP mouse dispatch работает для React кнопок
+- Guest token работает для активации, но НЕ для TweetDetail (404)
+
+**Блокеры:**
+- chromiumoxide `.arg()` не передавал `--fingerprint-*` флаги CloakBrowser → navigator.platform = `Linux x86_64` вместо `Win32`
+- Решение: CloakBrowser как Docker sidecar + `Browser::connect("ws://cloakbrowser:9222")`
+- Castle.io зависал (spinner) или возвращал 399
+
+**Промежуточное решение — Playwright:**
+- Рассматривали Playwright MCP (`@playwright/mcp`) внутри ox-browser контейнера
+- Вывод: Playwright имеет battle-tested stealth, но snap proxy несовместимость + CORS блокировали
+
+**Решение: миграция на Go.** go-rod (Grade A, 18K stars) + CloakBrowser sidecar.
+
+### CloakBrowser Sidecar (2026-03-27)
+
+- Docker sidecar `cloakhq/cloakbrowser:latest` (:9222)
+- WS URL discovery через `/json/version`
+- Host header override для Chrome DevTools
+- 33 C++ патча: canvas, webgl, audio, screen, navigator, fonts, locale
+- reCAPTCHA 0.9, Turnstile PASS
+
+### Castle Solver — botwitter.com (2026-03-27)
+
+- `castle.botwitter.com/generate-token` REST API
+- Rate limit: 2 запроса/час per IP (free tier)
+- Обход: Webshare proxy rotation (215K residential IPs, каждый порт = свежий IP)
+- XHR interceptor в браузере инжектил castle_token в task.json `settings_list`
+- Токены генерировались (2246-3008 chars), но Twitter отвечал 399
 
 **Текущий стек**: go-browser (Go + go-rod) + CloakBrowser (patched Chromium 145, 33 C++ патча) + go-social (workflow engine).
 
