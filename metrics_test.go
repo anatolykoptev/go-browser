@@ -12,13 +12,48 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 )
 
+// connectTestBrowser connects to a running Chrome or launches a local one.
+// Priority: CLOAKBROWSER_WS_URL → BROWSER_BIN → rod auto-detect.
+// Skips the test if no browser is available.
+func connectTestBrowser(t *testing.T) *rod.Browser {
+	t.Helper()
+
+	// 1. Remote CloakBrowser
+	if wsURL := os.Getenv("CLOAKBROWSER_WS_URL"); wsURL != "" {
+		debugURL, err := discoverWSURL(wsURL)
+		if err != nil {
+			t.Skipf("CloakBrowser at %s not reachable: %v", wsURL, err)
+		}
+		b := rod.New().ControlURL(debugURL)
+		if err := b.Connect(); err != nil {
+			t.Skipf("CloakBrowser connect failed: %v", err)
+		}
+		return b
+	}
+
+	// 2. Local binary
+	l := launcher.New().Headless(true)
+	if bin := os.Getenv("BROWSER_BIN"); bin != "" {
+		l = l.Bin(bin)
+	}
+	u, err := l.Launch()
+	if err != nil {
+		t.Skipf("no browser available: %v", err)
+	}
+	b := rod.New().ControlURL(u)
+	if err := b.Connect(); err != nil {
+		t.Skipf("browser connect failed: %v", err)
+	}
+	return b
+}
+
 func TestCollectCWV(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
 	// Local test page with content that triggers CWV metrics.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`<!DOCTYPE html>
@@ -34,13 +69,7 @@ func TestCollectCWV(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	// Launch headless Chrome via rod.
-	l := launcher.New().Headless(true)
-	if bin := os.Getenv("BROWSER_BIN"); bin != "" {
-		l = l.Bin(bin)
-	}
-	u := l.MustLaunch()
-	b := rod.New().ControlURL(u).MustConnect()
+	b := connectTestBrowser(t)
 	defer b.MustClose()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -72,8 +101,6 @@ func TestCollectCWV(t *testing.T) {
 	if report.CLS < 0 {
 		t.Errorf("expected CLS >= 0, got %.4f", report.CLS)
 	}
-	// INP = -1 is expected (no user interaction in test).
-	// Just check it's a valid number.
 
 	// Grades should work.
 	grades := report.CWVGrade()
