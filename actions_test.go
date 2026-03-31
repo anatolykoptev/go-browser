@@ -41,6 +41,7 @@ func TestParseAction_AllTypes(t *testing.T) {
 		{"click", `{"type":"click","selector":"a"}`},
 		{"type_text", `{"type":"type_text","selector":"input","text":"x"}`},
 		{"wait_for", `{"type":"wait_for","selector":".ready"}`},
+		{"wait", `{"type":"wait","wait_ms":1000}`},
 		{"screenshot", `{"type":"screenshot"}`},
 		{"evaluate", `{"type":"evaluate","script":"return 1"}`},
 		{"press", `{"type":"press","key":"Enter"}`},
@@ -133,5 +134,30 @@ func TestParseAction_CookieInputSecureHTTPOnly(t *testing.T) {
 	}
 	if !c.HTTPOnly {
 		t.Error("HTTPOnly = false, want true")
+	}
+}
+
+func TestParseAction_WaitForText(t *testing.T) {
+	raw := `{"type":"wait_for","text":"Welcome","timeout_ms":5000}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Text != "Welcome" {
+		t.Errorf("Text = %q, want %q", a.Text, "Welcome")
+	}
+	if a.TimeoutMs != 5000 {
+		t.Errorf("TimeoutMs = %d, want 5000", a.TimeoutMs)
+	}
+}
+
+func TestParseAction_WaitForTextGone(t *testing.T) {
+	raw := `{"type":"wait_for","text_gone":"Loading...","timeout_ms":3000}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.TextGone != "Loading..." {
+		t.Errorf("TextGone = %q, want %q", a.TextGone, "Loading...")
 	}
 }

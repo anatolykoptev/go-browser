@@ -93,6 +93,46 @@ func doWaitFor(ctx context.Context, page *rod.Page, selector string) error {
 	return nil
 }
 
+// doWaitForText polls until text appears in page body.
+func doWaitForText(ctx context.Context, page *rod.Page, text string) error {
+	for {
+		content, err := proto.RuntimeEvaluate{
+			Expression:    "document.body ? document.body.innerText : ''",
+			ReturnByValue: true,
+		}.Call(page)
+		if err == nil {
+			if strings.Contains(fmt.Sprintf("%v", content.Result.Value.Val()), text) {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait_for text %q: %w", text, ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// doWaitForTextGone polls until text disappears from page body.
+func doWaitForTextGone(ctx context.Context, page *rod.Page, text string) error {
+	for {
+		content, err := proto.RuntimeEvaluate{
+			Expression:    "document.body ? document.body.innerText : ''",
+			ReturnByValue: true,
+		}.Call(page)
+		if err == nil {
+			if !strings.Contains(fmt.Sprintf("%v", content.Result.Value.Val()), text) {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait_for text_gone %q: %w", text, ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
 func doScreenshot(page *rod.Page) (string, error) {
 	buf, err := page.Screenshot(true, nil)
 	if err != nil {
