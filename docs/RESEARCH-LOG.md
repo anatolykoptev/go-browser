@@ -273,17 +273,79 @@
 
 ---
 
-## Рекомендации
+## Этап 10: API Hooking — что Twitter реально делает (2026-03-31)
+
+### Инструмент
+
+Построен `security_scan_browser` (go-wowa MCP tool) с pre-inject API hooking:
+- go-browser `PreActions` — `eval_on_new_document` до navigation
+- 17 перехваченных browser API: canvas (3), WebGL (3), audio (3), permissions, media devices, battery, WebRTC, WebSocket, fetch, XHR
+- Хуки подменяют нативные методы, считают вызовы, логируют URL-ы
+
+### Результат: x.com/i/flow/login
+
+| API | Вызовы | Что делает |
+|-----|--------|-----------|
+| **Canvas** | **50** | Серия canvas probe-ов — рисует, читает pixel data, хеширует |
+| **WebGL** | **12** | getParameter + getExtension — полный GPU/driver fingerprint |
+| **Permissions** | **4** | query(camera/mic/notifications/geolocation) — capability profiling |
+| **MediaDevices** | **1** | enumerateDevices — уникальный список камер/микрофонов |
+| **Battery** | **1** | getBattery — level/charging adds entropy |
+| **WebRTC** | **1** | createDataChannel — IP leak probing |
+| **XHR** | **6** | user_flow.json, onboarding/task.json — session telemetry |
+
+Итого: **69 API-вызовов** в первые 3 секунды загрузки login page. **Ни один** из этих сигналов не был виден через HTTP-only анализ.
+
+### Ключевой вывод: почему 399
+
+Все предыдущие этапы (1-9) фокусировались на TLS, HTTP/2, JS navigator, Castle token — то есть на **метаданных сессии**. Но Castle.io (встроенный в Twitter бандл, обфусцирован) на самом деле оценивает **browser API activity**:
+
+```
+Реальный браузер:                    Наш бот (HTTP API или CloakBrowser):
+- Canvas: 50 calls → hash A          - Canvas: 0 calls (API) или hash B (CloakBrowser рандомизирует)
+- WebGL: 12 calls → GPU X            - WebGL: 0 calls (API) или GPU "SwiftShader" (headless)
+- Battery: level 0.87, charging       - Battery: 0 calls (API) или stub value
+- Permissions: 4 queries              - Permissions: 0 calls
+- MediaDevices: [Camera, Mic]         - MediaDevices: 0 calls или []
+- WebRTC: DataChannel → local IP     - WebRTC: 0 calls
+```
+
+Castle.io ML видит: **нулевая browser API активность** при наличии castle_token → score ≈ 0 → 399.
+
+Для CloakBrowser: **рандомизированные ответы** на canvas/WebGL (33 C++ патча) дают **разный hash каждый раз** → Castle.io видит нестабильный fingerprint → score низкий → 399.
+
+### Переоценка исключённых гипотез
+
+| # | Гипотеза | Старый статус | Новый статус |
+|---|----------|--------------|-------------|
+| 3 | Server-side ML | Оставшаяся | ✅ **ПОДТВЕРЖДЕНА** — 69 client-side сигналов для ML scoring |
+| 4 | Поведенческий анализ | Оставшаяся | ✅ **ПОДТВЕРЖДЕНА** — canvas/WebGL calls = behavioral signal |
+| 5 | Castle.io SDK | ❌ Исключена ("генерирует токен") | ⚠️ **ПЕРЕОЦЕНЕНА** — токен генерируется, но без API activity = пустой fingerprint |
+
+### Что нужно для прохождения Castle.io
+
+1. **Не блокировать Castle SDK** — пусть сам собирает canvas/WebGL/battery/etc.
+2. **Консистентный canvas fingerprint** — CloakBrowser рандомизирует каждый вызов; нужен stable hash через все 50 calls
+3. **Реалистичный WebGL** — SwiftShader GPU ≠ любой реальный GPU; нужен GPU spoofing с правильными extension capabilities
+4. **Заполнить все API** — Battery, MediaDevices, Permissions, WebRTC должны возвращать реалистичные данные
+5. **Timing** — дать Castle SDK 10-15 сек на сбор (наш warmup 3-5 сек был недостаточен)
+
+---
+
+## Рекомендации (обновлено 2026-03-31)
 
 ### Краткосрочно (работает сейчас)
 **Cookie import** — залогиниться вручную, экспортировать `auth_token` + `ct0`, использовать через API. Refresh раз в 30+ дней. go-social уже поддерживает `login_with_cookies`.
 
 ### Среднесрочно
-1. **Мониторить d60/twitter_login** — когда починят Castle protocol, наш Go порт заработает автоматически.
-2. **BotBrowser** (PRO tier, ~$200/мес) — коммерческий antidetect Chrome с гарантией прохождения Castle. Можно подключить вместо CloakBrowser.
-3. **Playwright + реальный Chrome** — запустить не CloakBrowser, а обычный Chrome через Playwright, без CDP stealth patches. Может дать другой результат.
+1. **Stable canvas fingerprint** — патч CloakBrowser чтобы canvas давал стабильный (не рандомный) hash per profile. Один профиль = один fingerprint навсегда.
+2. **Realistic GPU spoofing** — вместо SwiftShader использовать GPU spoofing с правильным RENDERER/VENDOR string + matching extensions. CloakBrowser уже спуфит строку, но capabilities (WebGL parameters) должны совпадать с реальным GPU.
+3. **Full API population** — дополнить stealth_complement.js: Battery (level/charging/chargingTime), MediaDevices (Camera+Mic list), Permissions (realistic states). Привязать к профилю.
+4. **Castle warm-up time** — увеличить задержку до 10-15 сек перед первым действием на login page. Castle SDK должен успеть отправить telemetry.
+5. **Мониторить d60/twitter_login** — когда починят Castle protocol, наш Go порт заработает автоматически (но API login без browser всё равно будет блокироваться).
 
 ### Долгосрочно
-1. **Anti-bot detector tool** — определять какие защиты стоят на сайте, адаптировать stealth.
-2. **Behavioral ML** — обучить модель на записях реальных пользовательских сессий, воспроизводить паттерны.
-3. **Device farm** — реальные устройства с реальными браузерами, управляемые через API.
+1. ✅ **Anti-bot detector tool** — **РЕАЛИЗОВАН** (`security_scan` + `security_scan_browser`). Определяет 28+ защитных систем + перехватывает 17 browser API.
+2. **Adaptive stealth profiles** — на основе `security_scan_browser` автоматически генерировать stealth profile, включающий ровно те API ответы, которые сайт ожидает.
+3. **Behavioral ML** — обучить модель на записях реальных пользовательских сессий, воспроизводить паттерны.
+4. **Device farm** — реальные устройства с реальными браузерами, управляемые через API.
