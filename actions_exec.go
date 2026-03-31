@@ -269,14 +269,15 @@ func doSleep(ctx context.Context, waitMs int) error {
 	}
 }
 
-// doNavigate uses rod's Navigate (which resets JS context) + DOMContentLoaded wait.
-// rod's Navigate() returns immediately — the hang was in WaitLoad(), not Navigate().
-// We replace WaitLoad() with WaitNavigation(DOMContentLoaded) which is SPA-safe.
+// doNavigate uses rod's Navigate + WaitRequestIdle for SPA-safe navigation.
+// WaitRequestIdle excludes WebSocket/SSE by default — won't hang on Twitter.
+// Falls back to ctx timeout if the page never goes idle.
 func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 	p := page.Context(ctx)
 
-	// Set up DOMContentLoaded listener BEFORE firing navigation.
-	wait := p.WaitNavigation(proto.PageLifecycleEventNameDOMContentLoaded)
+	// Set up network idle listener BEFORE firing navigation.
+	// Default excludeTypes: WebSocket, EventSource, Media, Image, Font.
+	waitIdle := p.WaitRequestIdle(500*time.Millisecond, nil, nil, nil)
 
 	// rod's Navigate: fires proto.PageNavigate + calls unsetJSCtxID().
 	// Returns immediately — does NOT wait for load event.
@@ -284,8 +285,8 @@ func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 		return fmt.Errorf("navigate %q: %w", url, err)
 	}
 
-	// Block until DOMContentLoaded (bounded by ctx timeout).
-	wait()
+	// Block until 500ms of HTTP silence (bounded by ctx timeout).
+	waitIdle()
 	return nil
 }
 
