@@ -21,6 +21,7 @@ const (
 type InteractRequest struct {
 	URL         string   `json:"url"`
 	Actions     []Action `json:"actions"`
+	PreActions  []Action `json:"pre_actions,omitempty"` // executed after page creation, before navigation
 	TimeoutSecs int      `json:"timeout_secs,omitempty"`
 	Proxy       *string  `json:"proxy,omitempty"`
 	SessionID   *string  `json:"session_id,omitempty"`
@@ -120,25 +121,28 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 
 	if req.ReusePage {
 		// Attach to existing page — no TargetCreateTarget CDP call.
-		// This bypasses Google/Twitter CDP page-creation detection.
 		page, err = chrome.FindPage("")
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
 		}
-		// Navigate via raw CDP — avoids callFunctionOn hang on SPA redirects.
+		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
+			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
+		}
 		if req.URL != "" && req.URL != "about:blank" {
 			if err := doNavigate(ctx, page, req.URL); err != nil {
 				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 			}
 		}
 	} else if req.NoStealth {
-		// Plain page without stealth injection — for sites that detect stealth JS.
 		page, err = browser.Page(proto.TargetCreateTarget{URL: "about:blank"})
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "plain page: " + err.Error()}
 		}
 		defer func() { _ = page.Close() }()
 
+		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
+			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
+		}
 		if err := doNavigate(ctx, page, req.URL); err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
@@ -153,6 +157,9 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 		}
 		defer func() { _ = page.Close() }()
 
+		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
+			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
+		}
 		if err := doNavigate(ctx, page, req.URL); err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
@@ -210,6 +217,17 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 		SessionID: sessionID,
 		Error:     actionErr,
 	}
+}
+
+// runPreActions executes actions that must run before navigation (e.g. eval_on_new_document, set_cookies).
+func runPreActions(ctx context.Context, page *rod.Page, actions []Action) string {
+	for _, a := range actions {
+		result := ExecuteAction(ctx, page, a, nil, nil)
+		if !result.Ok {
+			return fmt.Sprintf("pre_action %s: %s", a.Type, result.Error)
+		}
+	}
+	return ""
 }
 
 func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy string) InteractResponse {
