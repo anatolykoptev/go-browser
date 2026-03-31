@@ -112,7 +112,7 @@ func doClick(ctx context.Context, page *rod.Page, a Action) error {
 	return nil
 }
 
-func doTypeText(ctx context.Context, page *rod.Page, selector, text string) error {
+func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slowly, submit bool) error {
 	el, err := resolveElement(ctx, page, selector)
 	if err != nil {
 		return fmt.Errorf("type_text: find %q: %w", selector, err)
@@ -120,8 +120,55 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string) erro
 	if err := el.SelectAllText(); err != nil {
 		return fmt.Errorf("type_text: select all: %w", err)
 	}
-	if err := el.Input(text); err != nil {
-		return fmt.Errorf("type_text: input: %w", err)
+	if slowly {
+		for _, ch := range text {
+			if err := el.Input(string(ch)); err != nil {
+				return fmt.Errorf("type_text: char %q: %w", string(ch), err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	} else {
+		if err := el.Input(text); err != nil {
+			return fmt.Errorf("type_text: input: %w", err)
+		}
+	}
+	if submit {
+		if err := page.Keyboard.Press(input.Enter); err != nil {
+			return fmt.Errorf("type_text: submit: %w", err)
+		}
+	}
+	return nil
+}
+
+func doFillForm(ctx context.Context, page *rod.Page, fields []FormField) error {
+	for _, f := range fields {
+		el, err := resolveElement(ctx, page, f.Selector)
+		if err != nil {
+			return fmt.Errorf("fill_form: find %q: %w", f.Selector, err)
+		}
+		switch f.Type {
+		case "checkbox":
+			checked, _ := el.Property("checked")
+			want := f.Value == "true"
+			if checked.Bool() != want {
+				if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+					return fmt.Errorf("fill_form: checkbox %q: %w", f.Selector, err)
+				}
+			}
+		case "combobox":
+			if err := el.Select([]string{f.Value}, true, rod.SelectorTypeText); err != nil {
+				return fmt.Errorf("fill_form: select %q: %w", f.Selector, err)
+			}
+		default: // textbox
+			_ = el.SelectAllText()
+			if err := el.Input(f.Value); err != nil {
+				return fmt.Errorf("fill_form: input %q: %w", f.Selector, err)
+			}
+		}
 	}
 	return nil
 }

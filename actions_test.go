@@ -58,6 +58,7 @@ func TestParseAction_AllTypes(t *testing.T) {
 		{"destroy_session", `{"type":"destroy_session"}`},
 		{"select_option", `{"type":"select_option","selector":"#lang","values":["en"]}`},
 		{"resize", `{"type":"resize","width":800,"height":600}`},
+		{"fill_form", `{"type":"fill_form","fields":[{"selector":"#x","value":"y"}]}`},
 	}
 
 	for _, tc := range types {
@@ -183,6 +184,37 @@ func TestParseAction_Resize(t *testing.T) {
 	}
 	if a.Width != 1920 || a.Height != 1080 {
 		t.Errorf("Width=%d Height=%d, want 1920x1080", a.Width, a.Height)
+	}
+}
+
+func TestParseAction_FillForm(t *testing.T) {
+	raw := `{"type":"fill_form","fields":[{"selector":"#name","value":"John"},{"selector":"#agree","value":"true","type":"checkbox"}]}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(a.Fields) != 2 {
+		t.Fatalf("Fields len = %d, want 2", len(a.Fields))
+	}
+	if a.Fields[0].Selector != "#name" || a.Fields[0].Value != "John" {
+		t.Errorf("Field[0] = %+v", a.Fields[0])
+	}
+	if a.Fields[1].Type != "checkbox" {
+		t.Errorf("Field[1].Type = %q, want checkbox", a.Fields[1].Type)
+	}
+}
+
+func TestParseAction_TypeTextSlowly(t *testing.T) {
+	raw := `{"type":"type_text","selector":"input","text":"hello","slowly":true,"submit":true}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !a.Slowly {
+		t.Error("Slowly = false, want true")
+	}
+	if !a.Submit {
+		t.Error("Submit = false, want true")
 	}
 }
 
