@@ -271,9 +271,14 @@ func doSleep(ctx context.Context, waitMs int) error {
 
 // doNavigate uses rod's Navigate + WaitRequestIdle for SPA-safe navigation.
 // WaitRequestIdle excludes WebSocket/SSE by default — won't hang on Twitter.
-// Falls back to ctx timeout if the page never goes idle.
+// Navigation wait is capped at 7s — sites with continuous HTTP polling (Yandex, ad-heavy)
+// never reach 500ms of silence, so we proceed after the cap.
 func doNavigate(ctx context.Context, page *rod.Page, url string) error {
-	p := page.Context(ctx)
+	// Cap navigation wait: don't block more than 7s waiting for idle.
+	navCtx, cancel := context.WithTimeout(ctx, 7*time.Second)
+	defer cancel()
+
+	p := page.Context(navCtx)
 
 	// Set up network idle listener BEFORE firing navigation.
 	// Default excludeTypes: WebSocket, EventSource, Media, Image, Font.
@@ -281,11 +286,11 @@ func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 
 	// rod's Navigate: fires proto.PageNavigate + calls unsetJSCtxID().
 	// Returns immediately — does NOT wait for load event.
-	if err := p.Navigate(url); err != nil {
+	if err := page.Context(ctx).Navigate(url); err != nil {
 		return fmt.Errorf("navigate %q: %w", url, err)
 	}
 
-	// Block until 500ms of HTTP silence (bounded by ctx timeout).
+	// Block until 500ms of HTTP silence or 7s cap (whichever comes first).
 	waitIdle()
 	return nil
 }
