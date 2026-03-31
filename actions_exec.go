@@ -382,6 +382,16 @@ func doSelectOption(ctx context.Context, page *rod.Page, selector string, values
 	return nil
 }
 
+func doResize(page *rod.Page, width, height int) error {
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("resize: width and height must be positive")
+	}
+	return page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
+		Width:  width,
+		Height: height,
+	})
+}
+
 func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float64) error {
 	if selector != "" {
 		el, err := resolveElement(ctx, page, selector)

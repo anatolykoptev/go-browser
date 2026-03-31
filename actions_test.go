@@ -57,6 +57,7 @@ func TestParseAction_AllTypes(t *testing.T) {
 		{"get_cookies", `{"type":"get_cookies"}`},
 		{"destroy_session", `{"type":"destroy_session"}`},
 		{"select_option", `{"type":"select_option","selector":"#lang","values":["en"]}`},
+		{"resize", `{"type":"resize","width":800,"height":600}`},
 	}
 
 	for _, tc := range types {
@@ -171,6 +172,17 @@ func TestParseAction_SelectOption(t *testing.T) {
 	}
 	if len(a.Values) != 2 || a.Values[0] != "Russia" {
 		t.Errorf("Values = %v, want [Russia Germany]", a.Values)
+	}
+}
+
+func TestParseAction_Resize(t *testing.T) {
+	raw := `{"type":"resize","width":1920,"height":1080}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Width != 1920 || a.Height != 1080 {
+		t.Errorf("Width=%d Height=%d, want 1920x1080", a.Width, a.Height)
 	}
 }
 
