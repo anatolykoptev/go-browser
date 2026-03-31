@@ -11,21 +11,21 @@ import (
 
 // Action describes a single Chrome interaction step.
 type Action struct {
-	Type      string        `json:"type" jsonschema:"enum=click,enum=type_text,enum=wait_for,enum=screenshot,enum=evaluate,enum=eval_on_new_document,enum=press,enum=sleep,enum=navigate,enum=set_cookies,enum=snapshot,enum=handle_dialog,enum=get_cookies,enum=destroy_session,enum=hover,enum=go_back,enum=get_logs,enum=warmup,enum=scroll,description=Action type. Use 'snapshot' to get page accessibility tree as text (best for AI). Use 'screenshot' only when visual image is needed."`
-	Selector  string        `json:"selector,omitempty" jsonschema:"description=CSS selector for click/type_text/wait_for/hover/scroll"`
-	Text      string        `json:"text,omitempty" jsonschema:"description=Text to type (type_text) or prompt response (handle_dialog)"`
-	Script    string        `json:"script,omitempty" jsonschema:"description=JavaScript code for evaluate/eval_on_new_document"`
-	JS        string        `json:"js,omitempty" jsonschema:"description=Alias for script"`
-	Key       string        `json:"key,omitempty" jsonschema:"description=Key name for press action (Enter/Tab/Escape/etc)"`
-	URL       string        `json:"url,omitempty" jsonschema:"description=URL for navigate action"`
-	Humanize  bool          `json:"humanize,omitempty" jsonschema:"description=Use human-like mouse movement for click/type_text/hover"`
-	WaitMs    int           `json:"wait_ms,omitempty" jsonschema:"description=Milliseconds to wait (sleep) or warmup duration"`
-	TimeoutMs int           `json:"timeout_ms,omitempty" jsonschema:"description=Timeout in ms for wait_for action"`
+	Type      string        `json:"type" jsonschema:"Action type: click, type_text, wait_for, snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate, eval_on_new_document, press, sleep, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll. Prefer snapshot over screenshot."`
+	Selector  string        `json:"selector,omitempty" jsonschema:"CSS selector for click/type_text/wait_for/hover/scroll"`
+	Text      string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
+	Script    string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
+	JS        string        `json:"js,omitempty" jsonschema:"Alias for script"`
+	Key       string        `json:"key,omitempty" jsonschema:"Key name for press action (Enter/Tab/Escape/etc)"`
+	URL       string        `json:"url,omitempty" jsonschema:"URL for navigate action"`
+	Humanize  bool          `json:"humanize,omitempty" jsonschema:"Use human-like mouse movement for click/type_text/hover"`
+	WaitMs    int           `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait (sleep) or warmup duration"`
+	TimeoutMs int           `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms for wait_for action"`
 	Format    string        `json:"format,omitempty"`
-	Cookies   []CookieInput `json:"cookies,omitempty" jsonschema:"description=Cookies for set_cookies action"`
-	DeltaX    float64       `json:"delta_x,omitempty" jsonschema:"description=Horizontal scroll delta for scroll action"`
-	DeltaY    float64       `json:"delta_y,omitempty" jsonschema:"description=Vertical scroll delta for scroll action"`
-	Accept    *bool         `json:"accept,omitempty" jsonschema:"description=Accept or dismiss dialog (handle_dialog)"`
+	Cookies   []CookieInput `json:"cookies,omitempty" jsonschema:"Cookies for set_cookies action"`
+	DeltaX    float64       `json:"delta_x,omitempty" jsonschema:"Horizontal scroll delta for scroll action"`
+	DeltaY    float64       `json:"delta_y,omitempty" jsonschema:"Vertical scroll delta for scroll action"`
+	Accept    *bool         `json:"accept,omitempty" jsonschema:"Accept or dismiss dialog (handle_dialog)"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
