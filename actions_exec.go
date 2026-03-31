@@ -368,6 +368,17 @@ func doGoBack(page *rod.Page) error {
 	return nil
 }
 
+func doSelectOption(ctx context.Context, page *rod.Page, selector string, values []string) error {
+	el, err := resolveElement(ctx, page, selector)
+	if err != nil {
+		return fmt.Errorf("select_option: find %q: %w", selector, err)
+	}
+	if err := el.Select(values, true, rod.SelectorTypeText); err != nil {
+		return fmt.Errorf("select_option: %w", err)
+	}
+	return nil
+}
+
 func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float64) error {
 	if selector != "" {
 		el, err := resolveElement(ctx, page, selector)
