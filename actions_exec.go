@@ -96,22 +96,19 @@ func doSleep(ctx context.Context, waitMs int) error {
 	}
 }
 
-// doNavigate uses raw CDP Page.navigate with DOMContentLoaded wait.
-// go-rod's page.Navigate() + WaitLoad() hangs on SPA pages (Google, Twitter)
-// because the load event never fires during redirect chains.
+// doNavigate uses rod's Navigate (which resets JS context) + DOMContentLoaded wait.
+// rod's Navigate() returns immediately — the hang was in WaitLoad(), not Navigate().
+// We replace WaitLoad() with WaitNavigation(DOMContentLoaded) which is SPA-safe.
 func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 	p := page.Context(ctx)
 
 	// Set up DOMContentLoaded listener BEFORE firing navigation.
 	wait := p.WaitNavigation(proto.PageLifecycleEventNameDOMContentLoaded)
 
-	// Raw CDP navigate — doesn't wait for frameNavigated like rod's Navigate().
-	res, err := proto.PageNavigate{URL: url}.Call(p)
-	if err != nil {
+	// rod's Navigate: fires proto.PageNavigate + calls unsetJSCtxID().
+	// Returns immediately — does NOT wait for load event.
+	if err := p.Navigate(url); err != nil {
 		return fmt.Errorf("navigate %q: %w", url, err)
-	}
-	if res.ErrorText != "" {
-		return fmt.Errorf("navigate %q: %s", url, res.ErrorText)
 	}
 
 	// Block until DOMContentLoaded (bounded by ctx timeout).
