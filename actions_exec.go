@@ -61,12 +61,52 @@ func resolveElement(ctx context.Context, page *rod.Page, selector string) (*rod.
 	}
 }
 
-func doClick(ctx context.Context, page *rod.Page, selector string) error {
-	el, err := resolveElement(ctx, page, selector)
-	if err != nil {
-		return fmt.Errorf("click: find %q: %w", selector, err)
+//nolint:gochecknoglobals // static modifier key mapping
+var modifierKeyMap = map[string]input.Key{
+	"Alt":     input.AltLeft,
+	"Control": input.ControlLeft,
+	"Shift":   input.ShiftLeft,
+	"Meta":    input.MetaLeft,
+}
+
+func holdModifiers(page *rod.Page, modifiers []string) func() {
+	var held []input.Key
+	for _, m := range modifiers {
+		if k, ok := modifierKeyMap[m]; ok {
+			_ = page.Keyboard.Press(k)
+			held = append(held, k)
+		}
 	}
-	if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+	return func() {
+		for _, k := range held {
+			_ = page.Keyboard.Release(k)
+		}
+	}
+}
+
+func doClick(ctx context.Context, page *rod.Page, a Action) error {
+	el, err := resolveElement(ctx, page, a.Selector)
+	if err != nil {
+		return fmt.Errorf("click: find %q: %w", a.Selector, err)
+	}
+
+	release := holdModifiers(page, a.Modifiers)
+	defer release()
+
+	btn := proto.InputMouseButtonLeft
+	switch a.Button {
+	case "right":
+		btn = proto.InputMouseButtonRight
+	case "middle":
+		btn = proto.InputMouseButtonMiddle
+	}
+
+	clicks := 1
+	if a.DoubleClick {
+		clicks = 2
+	}
+
+	if err := el.Click(btn, clicks); err != nil {
 		return fmt.Errorf("click: %w", err)
 	}
 	return nil
