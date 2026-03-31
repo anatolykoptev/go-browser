@@ -11,7 +11,7 @@ import (
 
 // Action describes a single Chrome interaction step.
 type Action struct {
-	Type      string        `json:"type" jsonschema:"Action type: click, type_text, wait_for, snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll. Selectors support CSS, text=, xpath= prefixes. Prefer snapshot over screenshot."`
+	Type      string        `json:"type" jsonschema:"Action type: click, type_text, wait_for (CSS selector, text, text_gone, or wait_ms for time-based wait), snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll. Selectors support CSS, text=, xpath= prefixes. Prefer snapshot over screenshot."`
 	Selector  string        `json:"selector,omitempty" jsonschema:"CSS selector for click/type_text/wait_for/hover/scroll"`
 	Text      string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
 	Script    string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
@@ -26,6 +26,7 @@ type Action struct {
 	DeltaX    float64       `json:"delta_x,omitempty" jsonschema:"Horizontal scroll delta for scroll action"`
 	DeltaY    float64       `json:"delta_y,omitempty" jsonschema:"Vertical scroll delta for scroll action"`
 	Accept    *bool         `json:"accept,omitempty" jsonschema:"Accept or dismiss dialog (handle_dialog)"`
+	TextGone  string        `json:"text_gone,omitempty" jsonschema:"Text to wait for to disappear (wait_for action)"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -71,13 +72,21 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 			err = doTypeText(ctx, page, a.Selector, a.Text)
 		}
 	case "wait_for":
+		waitCtx := ctx
 		if a.TimeoutMs > 0 {
 			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, time.Duration(a.TimeoutMs)*time.Millisecond)
-			err = doWaitFor(ctx, page, a.Selector)
-			cancel()
-		} else {
-			err = doWaitFor(ctx, page, a.Selector)
+			waitCtx, cancel = context.WithTimeout(ctx, time.Duration(a.TimeoutMs)*time.Millisecond)
+			defer cancel()
+		}
+		switch {
+		case a.Text != "":
+			err = doWaitForText(waitCtx, page, a.Text)
+		case a.TextGone != "":
+			err = doWaitForTextGone(waitCtx, page, a.TextGone)
+		case a.WaitMs > 0 && a.Selector == "":
+			err = doSleep(waitCtx, a.WaitMs)
+		default:
+			err = doWaitFor(waitCtx, page, a.Selector)
 		}
 	case "screenshot":
 		data, err = doScreenshot(page)
