@@ -31,6 +31,7 @@ type Action struct {
 	DoubleClick bool          `json:"double_click,omitempty" jsonschema:"Double click instead of single"`
 	Modifiers   []string      `json:"modifiers,omitempty" jsonschema:"Modifier keys to hold: Alt, Control, Shift, Meta"`
 	Values      []string      `json:"values,omitempty" jsonschema:"Values for select_option action"`
+	Depth       int           `json:"depth,omitempty" jsonschema:"Limit snapshot tree depth (0 = unlimited)"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -115,7 +116,7 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 	case "set_cookies":
 		err = doSetCookies(page, a.Cookies)
 	case "snapshot":
-		data, err = doSnapshot(page, a.Format)
+		data, err = doSnapshot(page, a.Depth)
 	case "handle_dialog":
 		accept := true
 		if a.Accept != nil {

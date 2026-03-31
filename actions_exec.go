@@ -278,7 +278,7 @@ func doGetCookies(page *rod.Page) ([]map[string]any, error) {
 	return result, nil
 }
 
-func doSnapshot(page *rod.Page, _ string) (string, error) {
+func doSnapshot(page *rod.Page, maxDepth int) (string, error) {
 	res, err := proto.AccessibilityGetFullAXTree{}.Call(page)
 	if err != nil {
 		return "", fmt.Errorf("snapshot: %w", err)
@@ -316,18 +316,21 @@ func doSnapshot(page *rod.Page, _ string) (string, error) {
 	}
 
 	var sb strings.Builder
-	var walk func(id string, depth int)
-	walk = func(id string, depth int) {
+	var walk func(id string, level int)
+	walk = func(id string, level int) {
+		if maxDepth > 0 && level >= maxDepth {
+			return
+		}
 		n, ok := nodes[id]
 		if !ok {
 			return
 		}
 		if n.role != "" || n.name != "" {
-			indent := strings.Repeat("  ", depth)
+			indent := strings.Repeat("  ", level)
 			fmt.Fprintf(&sb, "%s[%s] %s\n", indent, n.role, n.name)
 		}
 		for _, cid := range n.children {
-			walk(cid, depth+1)
+			walk(cid, level+1)
 		}
 	}
 	if rootID != "" {

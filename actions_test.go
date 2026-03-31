@@ -174,6 +174,17 @@ func TestParseAction_SelectOption(t *testing.T) {
 	}
 }
 
+func TestParseAction_SnapshotDepth(t *testing.T) {
+	raw := `{"type":"snapshot","depth":3}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Depth != 3 {
+		t.Errorf("Depth = %d, want 3", a.Depth)
+	}
+}
+
 func TestParseAction_ClickModifiers(t *testing.T) {
 	raw := `{"type":"click","selector":"a.link","button":"right","double_click":true,"modifiers":["Control","Shift"]}`
 	var a Action
