@@ -13,20 +13,56 @@ import (
 )
 
 // keyMap maps action key names to rod input keys.
+//
+//nolint:gochecknoglobals // static key mapping
 var keyMap = map[string]input.Key{
 	"Enter":      input.Enter,
 	"Tab":        input.Tab,
 	"Escape":     input.Escape,
 	"Backspace":  input.Backspace,
+	"Delete":     input.Delete,
 	"ArrowUp":    input.ArrowUp,
 	"ArrowDown":  input.ArrowDown,
 	"ArrowLeft":  input.ArrowLeft,
 	"ArrowRight": input.ArrowRight,
 	"Space":      input.Space,
+	"Home":       input.Home,
+	"End":        input.End,
+	"PageUp":     input.PageUp,
+	"PageDown":   input.PageDown,
+	"F1":         input.F1,
+	"F2":         input.F2,
+	"F3":         input.F3,
+	"F4":         input.F4,
+	"F5":         input.F5,
+	"F6":         input.F6,
+	"F7":         input.F7,
+	"F8":         input.F8,
+	"F9":         input.F9,
+	"F10":        input.F10,
+	"F11":        input.F11,
+	"F12":        input.F12,
+}
+
+// resolveElement finds an element using CSS, text=, or xpath= selector.
+//
+//nolint:cyclop // simple prefix dispatch
+func resolveElement(ctx context.Context, page *rod.Page, selector string) (*rod.Element, error) {
+	p := page.Context(ctx)
+	switch {
+	case strings.HasPrefix(selector, "text="):
+		text := strings.TrimPrefix(selector, "text=")
+		return p.ElementR("*", text)
+	case strings.HasPrefix(selector, "xpath="):
+		xpath := strings.TrimPrefix(selector, "xpath=")
+		return p.ElementX(xpath)
+	default:
+		return p.Element(selector)
+	}
 }
 
 func doClick(ctx context.Context, page *rod.Page, selector string) error {
-	el, err := page.Context(ctx).Element(selector)
+	el, err := resolveElement(ctx, page, selector)
 	if err != nil {
 		return fmt.Errorf("click: find %q: %w", selector, err)
 	}
@@ -37,7 +73,7 @@ func doClick(ctx context.Context, page *rod.Page, selector string) error {
 }
 
 func doTypeText(ctx context.Context, page *rod.Page, selector, text string) error {
-	el, err := page.Context(ctx).Element(selector)
+	el, err := resolveElement(ctx, page, selector)
 	if err != nil {
 		return fmt.Errorf("type_text: find %q: %w", selector, err)
 	}
@@ -51,7 +87,7 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string) erro
 }
 
 func doWaitFor(ctx context.Context, page *rod.Page, selector string) error {
-	if _, err := page.Context(ctx).Element(selector); err != nil {
+	if _, err := resolveElement(ctx, page, selector); err != nil {
 		return fmt.Errorf("wait_for %q: %w", selector, err)
 	}
 	return nil
@@ -65,12 +101,22 @@ func doScreenshot(page *rod.Page) (string, error) {
 	return base64.StdEncoding.EncodeToString(buf), nil
 }
 
+// doEvaluate runs JS as a raw expression via CDP RuntimeEvaluate.
+// Unlike rod's page.Eval (which wraps in function(){}.apply()), this accepts
+// any JS expression: "document.title", "1+1", "JSON.stringify({a:1})", etc.
 func doEvaluate(page *rod.Page, script string) (any, error) {
-	res, err := page.Eval(script)
+	res, err := proto.RuntimeEvaluate{
+		Expression:    script,
+		ReturnByValue: true,
+		AwaitPromise:  true,
+	}.Call(page)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate: %w", err)
 	}
-	return res.Value.Val(), nil
+	if res.ExceptionDetails != nil {
+		return nil, fmt.Errorf("evaluate: %s", res.ExceptionDetails.Text)
+	}
+	return res.Result.Value.Val(), nil
 }
 
 func doPress(page *rod.Page, key string) error {
@@ -225,7 +271,7 @@ func doHandleDialog(page *rod.Page, accept bool, promptText string) (string, err
 }
 
 func doHover(ctx context.Context, page *rod.Page, selector string) error {
-	el, err := page.Context(ctx).Element(selector)
+	el, err := resolveElement(ctx, page, selector)
 	if err != nil {
 		return fmt.Errorf("hover: find %q: %w", selector, err)
 	}
@@ -244,7 +290,7 @@ func doGoBack(page *rod.Page) error {
 
 func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float64) error {
 	if selector != "" {
-		el, err := page.Context(ctx).Element(selector)
+		el, err := resolveElement(ctx, page, selector)
 		if err != nil {
 			return fmt.Errorf("scroll: find %q: %w", selector, err)
 		}

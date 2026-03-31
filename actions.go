@@ -11,7 +11,7 @@ import (
 
 // Action describes a single Chrome interaction step.
 type Action struct {
-	Type      string        `json:"type" jsonschema:"Action type: click, type_text, wait_for, snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate, eval_on_new_document, press, sleep, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll. Prefer snapshot over screenshot."`
+	Type      string        `json:"type" jsonschema:"Action type: click, type_text, wait_for, snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll. Selectors support CSS, text=, xpath= prefixes. Prefer snapshot over screenshot."`
 	Selector  string        `json:"selector,omitempty" jsonschema:"CSS selector for click/type_text/wait_for/hover/scroll"`
 	Text      string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
 	Script    string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
@@ -95,7 +95,7 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		_, err = page.EvalOnNewDocument(script)
 	case "press":
 		err = doPress(page, a.Key)
-	case "sleep":
+	case "sleep", "wait":
 		err = doSleep(ctx, a.WaitMs)
 	case "navigate":
 		err = doNavigate(ctx, page, a.URL)
