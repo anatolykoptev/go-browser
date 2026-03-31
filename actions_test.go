@@ -56,6 +56,7 @@ func TestParseAction_AllTypes(t *testing.T) {
 		{"scroll", `{"type":"scroll","selector":".item","delta_x":0,"delta_y":300}`},
 		{"get_cookies", `{"type":"get_cookies"}`},
 		{"destroy_session", `{"type":"destroy_session"}`},
+		{"select_option", `{"type":"select_option","selector":"#lang","values":["en"]}`},
 	}
 
 	for _, tc := range types {
@@ -159,6 +160,17 @@ func TestParseAction_WaitForTextGone(t *testing.T) {
 	}
 	if a.TextGone != "Loading..." {
 		t.Errorf("TextGone = %q, want %q", a.TextGone, "Loading...")
+	}
+}
+
+func TestParseAction_SelectOption(t *testing.T) {
+	raw := `{"type":"select_option","selector":"#country","values":["Russia","Germany"]}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(a.Values) != 2 || a.Values[0] != "Russia" {
+		t.Errorf("Values = %v, want [Russia Germany]", a.Values)
 	}
 }
 

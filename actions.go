@@ -11,7 +11,7 @@ import (
 
 // Action describes a single Chrome interaction step.
 type Action struct {
-	Type        string        `json:"type" jsonschema:"Action type: click, type_text, wait_for (CSS selector, text, text_gone, or wait_ms for time-based wait), snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll. Selectors support CSS, text=, xpath= prefixes. Prefer snapshot over screenshot."`
+	Type        string        `json:"type" jsonschema:"Action type: click, type_text, wait_for (CSS selector, text, text_gone, or wait_ms for time-based wait), snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll, select_option (select dropdown values by text). Selectors support CSS, text=, xpath= prefixes. Prefer snapshot over screenshot."`
 	Selector    string        `json:"selector,omitempty" jsonschema:"CSS selector for click/type_text/wait_for/hover/scroll"`
 	Text        string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
 	Script      string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
@@ -30,6 +30,7 @@ type Action struct {
 	Button      string        `json:"button,omitempty" jsonschema:"Mouse button: left (default), right, middle"`
 	DoubleClick bool          `json:"double_click,omitempty" jsonschema:"Double click instead of single"`
 	Modifiers   []string      `json:"modifiers,omitempty" jsonschema:"Modifier keys to hold: Alt, Control, Shift, Meta"`
+	Values      []string      `json:"values,omitempty" jsonschema:"Values for select_option action"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -150,6 +151,8 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		data = count
 	case "scroll":
 		err = doScroll(ctx, page, a.Selector, a.DeltaX, a.DeltaY)
+	case "select_option":
+		err = doSelectOption(ctx, page, a.Selector, a.Values)
 	default:
 		err = fmt.Errorf("unknown action type: %q", a.Type)
 	}
