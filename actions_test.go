@@ -161,3 +161,20 @@ func TestParseAction_WaitForTextGone(t *testing.T) {
 		t.Errorf("TextGone = %q, want %q", a.TextGone, "Loading...")
 	}
 }
+
+func TestParseAction_ClickModifiers(t *testing.T) {
+	raw := `{"type":"click","selector":"a.link","button":"right","double_click":true,"modifiers":["Control","Shift"]}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Button != "right" {
+		t.Errorf("Button = %q, want %q", a.Button, "right")
+	}
+	if !a.DoubleClick {
+		t.Error("DoubleClick = false, want true")
+	}
+	if len(a.Modifiers) != 2 || a.Modifiers[0] != "Control" {
+		t.Errorf("Modifiers = %v, want [Control Shift]", a.Modifiers)
+	}
+}
