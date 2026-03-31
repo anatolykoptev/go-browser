@@ -32,6 +32,8 @@ type Action struct {
 	Modifiers   []string      `json:"modifiers,omitempty" jsonschema:"Modifier keys to hold: Alt, Control, Shift, Meta"`
 	Values      []string      `json:"values,omitempty" jsonschema:"Values for select_option action"`
 	Depth       int           `json:"depth,omitempty" jsonschema:"Limit snapshot tree depth (0 = unlimited)"`
+	Width       int           `json:"width,omitempty" jsonschema:"Viewport width for resize action"`
+	Height      int           `json:"height,omitempty" jsonschema:"Viewport height for resize action"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -154,6 +156,8 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		err = doScroll(ctx, page, a.Selector, a.DeltaX, a.DeltaY)
 	case "select_option":
 		err = doSelectOption(ctx, page, a.Selector, a.Values)
+	case "resize":
+		err = doResize(page, a.Width, a.Height)
 	default:
 		err = fmt.Errorf("unknown action type: %q", a.Type)
 	}
