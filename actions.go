@@ -34,6 +34,9 @@ type Action struct {
 	Depth       int           `json:"depth,omitempty" jsonschema:"Limit snapshot tree depth (0 = unlimited)"`
 	Width       int           `json:"width,omitempty" jsonschema:"Viewport width for resize action"`
 	Height      int           `json:"height,omitempty" jsonschema:"Viewport height for resize action"`
+	Slowly      bool          `json:"slowly,omitempty" jsonschema:"Type one character at a time (type_text)"`
+	Submit      bool          `json:"submit,omitempty" jsonschema:"Press Enter after typing (type_text)"`
+	Fields      []FormField   `json:"fields,omitempty" jsonschema:"Fields for fill_form batch action"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -44,6 +47,13 @@ type CookieInput struct {
 	Path     string `json:"path,omitempty"`
 	Secure   bool   `json:"secure,omitempty"`
 	HTTPOnly bool   `json:"http_only,omitempty"`
+}
+
+// FormField is a single field for the fill_form batch action.
+type FormField struct {
+	Selector string `json:"selector"`
+	Value    string `json:"value"`
+	Type     string `json:"type,omitempty"` // textbox (default), checkbox, combobox
 }
 
 // ActionResult is the outcome of a single executed action.
@@ -76,7 +86,7 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		if a.Humanize && cursor != nil {
 			err = doTypeTextHumanized(ctx, page, a.Selector, a.Text, cursor)
 		} else {
-			err = doTypeText(ctx, page, a.Selector, a.Text)
+			err = doTypeText(ctx, page, a.Selector, a.Text, a.Slowly, a.Submit)
 		}
 	case "wait_for":
 		waitCtx := ctx
@@ -158,6 +168,8 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		err = doSelectOption(ctx, page, a.Selector, a.Values)
 	case "resize":
 		err = doResize(page, a.Width, a.Height)
+	case "fill_form":
+		err = doFillForm(ctx, page, a.Fields)
 	default:
 		err = fmt.Errorf("unknown action type: %q", a.Type)
 	}
