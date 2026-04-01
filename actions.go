@@ -38,6 +38,7 @@ type Action struct {
 	Slowly      bool          `json:"slowly,omitempty" jsonschema:"Type one character at a time (type_text)"`
 	Submit      bool          `json:"submit,omitempty" jsonschema:"Press Enter after typing (type_text)"`
 	Fields      []FormField   `json:"fields,omitempty" jsonschema:"Fields for fill_form batch action"`
+	Cookie      string        `json:"cookie,omitempty" jsonschema:"Cookie name to wait for (wait_for action — polls until cookie appears)"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -103,6 +104,8 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 			defer cancel()
 		}
 		switch {
+		case a.Cookie != "":
+			err = doWaitForCookie(waitCtx, page, a.Cookie)
 		case a.Text != "":
 			err = doWaitForText(waitCtx, page, a.Text)
 		case a.TextGone != "":

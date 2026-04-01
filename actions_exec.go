@@ -280,6 +280,26 @@ func doWaitForTextGone(ctx context.Context, page *rod.Page, text string) error {
 	}
 }
 
+// doWaitForCookie polls until a cookie with the given name appears.
+// Used for PerimeterX (_px3), DataDome (datadome), CF (__cf_bm) challenge cookies.
+func doWaitForCookie(ctx context.Context, page *rod.Page, name string) error {
+	for {
+		cookies, err := page.Cookies(nil)
+		if err == nil {
+			for _, c := range cookies {
+				if c.Name == name {
+					return nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait_for cookie %q: %w", name, ctx.Err())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 func doScreenshot(page *rod.Page) (string, error) {
 	buf, err := page.Screenshot(true, nil)
 	if err != nil {
