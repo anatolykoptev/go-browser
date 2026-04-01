@@ -28,7 +28,8 @@ type InteractRequest struct {
 	Profile     string   `json:"profile,omitempty"`
 	UseProfile  bool     `json:"use_profile,omitempty"` // use default Chrome profile (persistent cookies)
 	ReusePage   bool     `json:"reuse_page,omitempty"`
-	NoStealth   bool     `json:"no_stealth,omitempty"` // plain page without stealth JS injection
+	NoStealth   bool     `json:"no_stealth,omitempty"`   // plain page without stealth JS injection
+	StealthMode bool     `json:"stealth_mode,omitempty"` // route actions through cdputil (no Runtime.callFunctionOn)
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -186,7 +187,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 	var actionErr string
 
 	for _, a := range req.Actions {
-		res := ExecuteAction(ctx, page, a, cursor, logs)
+		res := ExecuteAction(ctx, page, a, cursor, logs, req.StealthMode)
 		results = append(results, res)
 		if !res.Ok {
 			status = "error"
@@ -222,7 +223,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 // runPreActions executes actions that must run before navigation (e.g. eval_on_new_document, set_cookies).
 func runPreActions(ctx context.Context, page *rod.Page, actions []Action) string {
 	for _, a := range actions {
-		result := ExecuteAction(ctx, page, a, nil, nil)
+		result := ExecuteAction(ctx, page, a, nil, nil, false)
 		if !result.Ok {
 			return fmt.Sprintf("pre_action %s: %s", a.Type, result.Error)
 		}

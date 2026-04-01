@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/anatolykoptev/go-browser/cdputil"
 	"github.com/anatolykoptev/go-browser/humanize"
 	"github.com/go-rod/rod"
 )
@@ -67,8 +68,10 @@ type ActionResult struct {
 // ExecuteAction dispatches to the correct do* function based on a.Type.
 // When cursor is non-nil and a.Humanize is true, humanized variants are used
 // for click, type_text, and hover actions.
+// When stealthMode is true, actions that would trigger Runtime.callFunctionOn
+// are routed through cdputil using pure CDP DOM/Input methods instead.
 func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
-	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector,
+	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool,
 ) ActionResult {
 	var (
 		data any
@@ -77,13 +80,17 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 
 	switch a.Type {
 	case "click":
-		if a.Humanize && cursor != nil {
+		if stealthMode {
+			err = doClickStealth(ctx, page, a)
+		} else if a.Humanize && cursor != nil {
 			err = doClickHumanized(ctx, page, a.Selector, cursor)
 		} else {
 			err = doClick(ctx, page, a)
 		}
 	case "type_text":
-		if a.Humanize && cursor != nil {
+		if stealthMode || a.Slowly {
+			err = doTypeTextCDP(ctx, page, a.Selector, a.Text, a.Submit)
+		} else if a.Humanize && cursor != nil {
 			err = doTypeTextHumanized(ctx, page, a.Selector, a.Text, cursor)
 		} else {
 			err = doTypeText(ctx, page, a.Selector, a.Text, a.Slowly, a.Submit)
@@ -103,7 +110,11 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		case a.WaitMs > 0 && a.Selector == "":
 			err = doSleep(waitCtx, a.WaitMs)
 		default:
-			err = doWaitFor(waitCtx, page, a.Selector)
+			if stealthMode {
+				err = doWaitForStealth(waitCtx, page, a.Selector)
+			} else {
+				err = doWaitFor(waitCtx, page, a.Selector)
+			}
 		}
 	case "screenshot":
 		data, err = doScreenshot(page)
@@ -140,7 +151,9 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 	case "destroy_session":
 		// No-op in action execution — session lifecycle managed by handler
 	case "hover":
-		if a.Humanize && cursor != nil {
+		if stealthMode {
+			err = doHoverStealth(ctx, page, a.Selector)
+		} else if a.Humanize && cursor != nil {
 			err = doHoverHumanized(ctx, page, a.Selector, cursor)
 		} else {
 			err = doHover(ctx, page, a.Selector)
@@ -163,13 +176,25 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 		count, err = doWarmup(ctx, page, waitMs, cursor)
 		data = count
 	case "scroll":
-		err = doScroll(ctx, page, a.Selector, a.DeltaX, a.DeltaY)
+		if stealthMode && a.Selector != "" {
+			var nodeID cdputil.NodeID
+			nodeID, err = cdputil.QuerySelector(page, a.Selector)
+			if err == nil {
+				err = cdputil.ScrollIntoView(page, nodeID)
+			}
+		} else {
+			err = doScroll(ctx, page, a.Selector, a.DeltaX, a.DeltaY)
+		}
 	case "select_option":
 		err = doSelectOption(ctx, page, a.Selector, a.Values)
 	case "resize":
 		err = doResize(page, a.Width, a.Height)
 	case "fill_form":
-		err = doFillForm(ctx, page, a.Fields)
+		if stealthMode {
+			err = doFillFormStealth(ctx, page, a.Fields)
+		} else {
+			err = doFillForm(ctx, page, a.Fields)
+		}
 	default:
 		err = fmt.Errorf("unknown action type: %q", a.Type)
 	}
