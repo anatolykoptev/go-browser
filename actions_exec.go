@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anatolykoptev/go-browser/cdputil"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
@@ -139,18 +140,14 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slow
 }
 
 // doTypeTextCDP types text using pure CDP events — reliable on PX-protected pages.
-// Focus via JS eval, clear via Ctrl+A+Delete, type via dispatchKeyEvent.
+// Focus via CDP DOM.focus (no Runtime.callFunctionOn), clear via Ctrl+A+Delete, type via dispatchKeyEvent.
 func doTypeTextCDP(ctx context.Context, page *rod.Page, selector, text string, submit bool) error {
-	focusJS := fmt.Sprintf(
-		`(function(){const el=document.querySelector(%q); if(!el) return 'not_found'; el.focus(); el.select(); return 'ok'})()`,
-		selector,
-	)
-	res, err := page.Eval(focusJS)
+	nodeID, err := cdputil.QuerySelector(page, selector)
 	if err != nil {
-		return fmt.Errorf("type_text: focus %q: %w", selector, err)
+		return fmt.Errorf("type_text: %w", err)
 	}
-	if res.Value.Str() == "not_found" {
-		return fmt.Errorf("type_text: element %q not found", selector)
+	if err := cdputil.FocusNode(page, nodeID); err != nil {
+		return fmt.Errorf("type_text: focus: %w", err)
 	}
 
 	// Clear via Ctrl+A then Delete.
@@ -524,4 +521,79 @@ func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float
 		return fmt.Errorf("scroll: %w", err)
 	}
 	return nil
+}
+
+// --- Stealth action variants (use cdputil, no Runtime.callFunctionOn) ---
+
+func doClickStealth(ctx context.Context, page *rod.Page, a Action) error {
+	nodeID, err := cdputil.QuerySelector(page, a.Selector)
+	if err != nil {
+		return fmt.Errorf("click: %w", err)
+	}
+	_ = cdputil.ScrollIntoView(page, nodeID) // best-effort
+
+	btn := proto.InputMouseButtonLeft
+	switch a.Button {
+	case "right":
+		btn = proto.InputMouseButtonRight
+	case "middle":
+		btn = proto.InputMouseButtonMiddle
+	}
+
+	clicks := 1
+	if a.DoubleClick {
+		clicks = 2
+	}
+
+	return cdputil.ClickNode(page, nodeID, btn, clicks)
+}
+
+func doFillFormStealth(ctx context.Context, page *rod.Page, fields []FormField) error {
+	for _, f := range fields {
+		switch f.Type {
+		case "checkbox":
+			nodeID, err := cdputil.QuerySelector(page, f.Selector)
+			if err != nil {
+				return fmt.Errorf("fill_form: find %q: %w", f.Selector, err)
+			}
+			if err := cdputil.ClickNode(page, nodeID, proto.InputMouseButtonLeft, 1); err != nil {
+				return fmt.Errorf("fill_form: checkbox %q: %w", f.Selector, err)
+			}
+		default:
+			if err := doTypeTextCDP(ctx, page, f.Selector, f.Value, false); err != nil {
+				return fmt.Errorf("fill_form: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func doHoverStealth(ctx context.Context, page *rod.Page, selector string) error {
+	nodeID, err := cdputil.QuerySelector(page, selector)
+	if err != nil {
+		return fmt.Errorf("hover: %w", err)
+	}
+	x, y, err := cdputil.NodeCenter(page, nodeID)
+	if err != nil {
+		return fmt.Errorf("hover: %w", err)
+	}
+	return (proto.InputDispatchMouseEvent{
+		Type: proto.InputDispatchMouseEventTypeMouseMoved,
+		X:    x,
+		Y:    y,
+	}).Call(page)
+}
+
+func doWaitForStealth(ctx context.Context, page *rod.Page, selector string) error {
+	for {
+		_, err := cdputil.QuerySelector(page, selector)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait_for %q: %w", selector, ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
