@@ -113,18 +113,59 @@ func doClick(ctx context.Context, page *rod.Page, a Action) error {
 }
 
 func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slowly, submit bool) error {
+	// Focus the element via CDP DOM.focus — avoids rod's Runtime.callFunctionOn
+	// which can hang on pages with PerimeterX or similar JS interception.
 	el, err := resolveElement(ctx, page, selector)
 	if err != nil {
 		return fmt.Errorf("type_text: find %q: %w", selector, err)
 	}
-	if err := el.SelectAllText(); err != nil {
-		return fmt.Errorf("type_text: select all: %w", err)
+
+	// Clear existing text: select all via keyboard shortcut then delete.
+	if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return fmt.Errorf("type_text: click to focus: %w", err)
 	}
+	_ = proto.InputDispatchKeyEvent{
+		Type:                  proto.InputDispatchKeyEventTypeRawKeyDown,
+		Key:                   "a",
+		Code:                  "KeyA",
+		WindowsVirtualKeyCode: 65,
+		Modifiers:             2, // Ctrl
+	}.Call(page)
+	_ = proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeKeyUp,
+		Key:  "a",
+		Code: "KeyA",
+	}.Call(page)
+
 	if slowly {
-		for _, ch := range text {
-			if err := el.Input(string(ch)); err != nil {
-				return fmt.Errorf("type_text: char %q: %w", string(ch), err)
-			}
+		// Type character by character using CDP Input.dispatchKeyEvent.
+		for i, ch := range text {
+			char := string(ch)
+			code := charToCode(ch)
+			vk := charToVK(ch)
+
+			_ = proto.InputDispatchKeyEvent{
+				Type:                  proto.InputDispatchKeyEventTypeRawKeyDown,
+				Key:                   char,
+				Code:                  code,
+				WindowsVirtualKeyCode: vk,
+			}.Call(page)
+
+			_ = proto.InputDispatchKeyEvent{
+				Type:                  proto.InputDispatchKeyEventTypeChar,
+				Text:                  char,
+				UnmodifiedText:        char,
+				WindowsVirtualKeyCode: vk,
+			}.Call(page)
+
+			_ = proto.InputDispatchKeyEvent{
+				Type:                  proto.InputDispatchKeyEventTypeKeyUp,
+				Key:                   char,
+				Code:                  code,
+				WindowsVirtualKeyCode: vk,
+			}.Call(page)
+
+			_ = i
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -132,8 +173,9 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slow
 			}
 		}
 	} else {
-		if err := el.Input(text); err != nil {
-			return fmt.Errorf("type_text: input: %w", err)
+		// Fast path: use CDP Input.insertText — bypasses JS event interception.
+		if err := (proto.InputInsertText{Text: text}).Call(page); err != nil {
+			return fmt.Errorf("type_text: insertText: %w", err)
 		}
 	}
 	if submit {
@@ -163,9 +205,19 @@ func doFillForm(ctx context.Context, page *rod.Page, fields []FormField) error {
 			if err := el.Select([]string{f.Value}, true, rod.SelectorTypeText); err != nil {
 				return fmt.Errorf("fill_form: select %q: %w", f.Selector, err)
 			}
-		default: // textbox
-			_ = el.SelectAllText()
-			if err := el.Input(f.Value); err != nil {
+		default: // textbox — use CDP insertText to avoid PX/bot-detection hangs
+			if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+				return fmt.Errorf("fill_form: focus %q: %w", f.Selector, err)
+			}
+			// Select all via Ctrl+A
+			_ = (proto.InputDispatchKeyEvent{
+				Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "a", Code: "KeyA",
+				WindowsVirtualKeyCode: 65, Modifiers: 2,
+			}).Call(page)
+			_ = (proto.InputDispatchKeyEvent{
+				Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "a", Code: "KeyA",
+			}).Call(page)
+			if err := (proto.InputInsertText{Text: f.Value}).Call(page); err != nil {
 				return fmt.Errorf("fill_form: input %q: %w", f.Selector, err)
 			}
 		}
