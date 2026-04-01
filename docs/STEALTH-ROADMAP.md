@@ -112,6 +112,135 @@ After each stealth change:
 - CloakBrowser releases — new C++ patches
 - Chrome stable channel — version updates for profiles
 
+## Phase 6: Adaptive Anti-Detection Engine — PLANNED (2026-04)
+
+Triggered by LinkedIn login failure: PerimeterX blocks CDP automation despite
+headed Chrome + stealth injections. Root causes identified via security_scan:
+
+### 6.1 Runtime.enable Isolation (CRITICAL)
+
+**Problem:** Rod uses `Runtime.enable` globally which PX detects via
+`Error.stack` getter side-effect. Phase 3.3 claimed done but rod re-enables
+it on page navigation.
+
+**Fix:** Replace rod's default `Runtime.enable` with isolated execution:
+- Use `Page.createIsolatedWorld` for JS evaluation
+- Avoid `Runtime.enable` / `Runtime.callFunctionOn` on main world
+- Reference: `rebrowser/rebrowser-patches` (Node.js implementation)
+
+**Impact:** Fixes `page.Eval()`, `el.Click()`, `el.Input()` hanging on PX pages.
+
+### 6.2 Adaptive Input Strategy (HIGH)
+
+**Problem:** Some sites block CDP `Input.dispatchKeyEvent`, others block
+JS `execCommand('insertText')`. No single input method works everywhere.
+
+**Fix:** Auto-detect required strategy from security_scan results:
+```go
+type InputStrategy int
+const (
+    InputRod     InputStrategy = iota // Default: rod el.Input() — fast
+    InputCDP                          // CDP dispatchKeyEvent — PX-safe
+    InputInsert                       // CDP Input.insertText — React-safe
+)
+
+// DetectInputStrategy runs before interaction to choose strategy.
+func DetectInputStrategy(scanResult *SecurityScanResult) InputStrategy {
+    if scanResult.HasDetection("PerimeterX") || scanResult.HasDetection("HUMAN") {
+        return InputCDP
+    }
+    if scanResult.SpoofingDetected {
+        return InputCDP
+    }
+    return InputRod
+}
+```
+
+Integrate with `chrome_interact`: on first action per session, run quick
+security check (HTTP-only, <1s) and cache strategy for the domain.
+
+### 6.3 Screen/DPR Consistency (MEDIUM)
+
+**Problem:** `screen.width/height` vs CSS `@media` mismatch detected by PX.
+`devicePixelRatio` doesn't match CSS resolution query.
+
+**Fix:** Align `Emulation.setDeviceMetricsOverride` with actual screen:
+- Set `width/height` matching `window.innerWidth/Height`
+- Set `deviceScaleFactor` matching real monitor (1.0 for headed, 2.0 for retina)
+- On Chrome 142+: use `--screen-info` launch flag
+- Verify: `window.screen.width * devicePixelRatio` should equal physical resolution
+
+### 6.4 Canvas/WebGL Lie Detection Fix (MEDIUM)
+
+**Problem:** PX detects `canvas.toDataURL.toString()` as tampered.
+CloakBrowser overrides return non-native `toString()`.
+
+**Fix options:**
+1. **Don't randomize canvas on non-fingerprint sites** — LinkedIn doesn't
+   need unique canvas, just consistent one. Disable canvas override for
+   domains without FingerprintJS Pro detection.
+2. **Proxy approach:** Use `Proxy()` wrapper that preserves native toString:
+   ```js
+   const proxy = new Proxy(original, { apply(target, thisArg, args) { ... } });
+   Object.defineProperty(proto, 'toDataURL', { value: proxy });
+   ```
+3. **Chromium-level patch** (CloakBrowser) — most reliable, no JS detection.
+
+### 6.5 PX Challenge Cookie Flow (MEDIUM)
+
+**Problem:** LinkedIn login requires `_px3` clearance cookie before form
+submit is accepted. Without it, server redirects back to `/login`.
+
+**Fix:** After page load, poll for `_px3` cookie via CDP `Network.getCookies`:
+```go
+func WaitForPXClearance(ctx context.Context, page *rod.Page, timeout time.Duration) bool {
+    deadline := time.Now().Add(timeout)
+    for time.Now().Before(deadline) {
+        cookies, _ := proto.NetworkGetCookies{}.Call(page)
+        for _, c := range cookies.Cookies {
+            if c.Name == "_px3" { return true }
+        }
+        time.Sleep(500 * time.Millisecond)
+    }
+    return false
+}
+```
+
+### 6.6 Adaptive Security Pre-Flight (LOW)
+
+**Problem:** Currently `type_text` uses `slowly=true` flag manually.
+User must know which sites need CDP input.
+
+**Fix:** New `adapt` action type that auto-configures session:
+```json
+{"type": "adapt", "url": "https://www.linkedin.com/login"}
+```
+This runs a quick HTTP security scan (<1s), caches results per domain,
+and configures session's input strategy, stealth profile, and wait behavior
+automatically. Subsequent actions in the session use the detected strategy.
+
+### Implementation Order
+
+1. **6.1** Runtime.enable isolation — unlocks everything else
+2. **6.5** PX cookie polling — quick win for LinkedIn
+3. **6.2** Adaptive input — auto-select strategy
+4. **6.3** Screen consistency — stealth profile fix
+5. **6.4** Canvas lie — CloakBrowser patch preferred
+6. **6.6** Adapt action — full auto-detection integration
+
+### Validated Findings (2026-04-01 LinkedIn session)
+
+- Chrome 145 on server — Input.coordinatesLeak bug already fixed
+- `type_text slowly=true` with CDP dispatchKeyEvent: **works** (no hang)
+- `type_text slowly=false` with rod el.Input(): **hangs** on PX pages
+- `page.Eval()` / `evaluate` action: **intermittently hangs** (PX timing)
+- `el.Click()` with humanize: **hangs** (rod Runtime.callFunctionOn)
+- JS `button.click()` via evaluate: works but PX rejects submit (no `_px3`)
+- `execCommand('insertText')`: fills DOM but not React state
+- Security scan detected: PerimeterX (PXdOjV695v), Canvas/Screen/DPR lies
+
+---
+
 ## Completed This Session (2026-03-28)
 
 ### go-browser
