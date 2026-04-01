@@ -75,6 +75,23 @@
 | go-browser | 0 | 256MB | 256MB |
 | **Total** | **2816MB** | **3072MB** | **1280MB** |
 
+### Phase 5: Adaptive Anti-Detection (v0.6.0)
+
+**Spec:** `docs/STEALTH-ROADMAP.md` Phase 6
+
+**Goal:** Bypass PerimeterX/HUMAN on LinkedIn and similar high-security sites.
+Auto-detect protection and adapt input/stealth strategy per domain.
+
+- [ ] Runtime.enable isolation — `Page.createIsolatedWorld` instead of global Runtime
+- [ ] PX challenge cookie polling — wait for `_px3` before form submit
+- [ ] Adaptive input strategy — auto-select rod/CDP/insertText based on security scan
+- [ ] Screen/DPR consistency fix — align `Emulation.setDeviceMetricsOverride`
+- [ ] Canvas lie detection fix — Proxy approach or CloakBrowser patch
+- [ ] `adapt` action type — auto-configure session from domain security profile
+
+**Triggered by:** LinkedIn login failure (2026-04-01). PerimeterX detects CDP
+automation despite headed Chrome + stealth. Details in STEALTH-ROADMAP Phase 6.
+
 ## Future
 
 - **Lightpanda backend** — when stable, 9x less memory for simple renders
