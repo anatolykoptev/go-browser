@@ -165,6 +165,20 @@ func TestParseAction_WaitForTextGone(t *testing.T) {
 	}
 }
 
+func TestParseAction_WaitForCookie(t *testing.T) {
+	raw := `{"type":"wait_for","cookie":"_px3","timeout_ms":10000}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Cookie != "_px3" {
+		t.Errorf("Cookie = %q, want %q", a.Cookie, "_px3")
+	}
+	if a.TimeoutMs != 10000 {
+		t.Errorf("TimeoutMs = %d, want 10000", a.TimeoutMs)
+	}
+}
+
 func TestParseAction_SelectOption(t *testing.T) {
 	raw := `{"type":"select_option","selector":"#country","values":["Russia","Germany"]}`
 	var a Action
