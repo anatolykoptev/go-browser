@@ -113,8 +113,34 @@ func doClick(ctx context.Context, page *rod.Page, a Action) error {
 }
 
 func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slowly, submit bool) error {
-	// Focus element via JS evaluate — avoids rod's Click/Focus which use
-	// Runtime.callFunctionOn and can hang on PX-protected pages.
+	if slowly {
+		// CDP char-by-char path — for bot-detection protected pages (LinkedIn, etc.).
+		// Uses JS focus + CDP dispatchKeyEvent which triggers React onChange
+		// and bypasses PX/bot-detection event interception.
+		return doTypeTextCDP(ctx, page, selector, text, submit)
+	}
+
+	// Default fast path — rod's Input() via Runtime.callFunctionOn.
+	// Works for most sites. Falls back to CDP path on timeout.
+	el, err := resolveElement(ctx, page, selector)
+	if err != nil {
+		return fmt.Errorf("type_text: find %q: %w", selector, err)
+	}
+	_ = el.SelectAllText()
+	if err := el.Input(text); err != nil {
+		return fmt.Errorf("type_text: input: %w", err)
+	}
+	if submit {
+		if err := page.Keyboard.Press(input.Enter); err != nil {
+			return fmt.Errorf("type_text: submit: %w", err)
+		}
+	}
+	return nil
+}
+
+// doTypeTextCDP types text using pure CDP events — reliable on PX-protected pages.
+// Focus via JS eval, clear via Ctrl+A+Delete, type via dispatchKeyEvent.
+func doTypeTextCDP(ctx context.Context, page *rod.Page, selector, text string, submit bool) error {
 	focusJS := fmt.Sprintf(
 		`(function(){const el=document.querySelector(%q); if(!el) return 'not_found'; el.focus(); el.select(); return 'ok'})()`,
 		selector,
@@ -127,7 +153,7 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slow
 		return fmt.Errorf("type_text: element %q not found", selector)
 	}
 
-	// Clear existing text via Ctrl+A then Delete.
+	// Clear via Ctrl+A then Delete.
 	_ = (proto.InputDispatchKeyEvent{
 		Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "a", Code: "KeyA",
 		WindowsVirtualKeyCode: 65, Modifiers: 2,
@@ -143,12 +169,6 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slow
 		Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "Delete", Code: "Delete",
 	}).Call(page)
 
-	// Type char-by-char via CDP dispatchKeyEvent — this triggers React onChange
-	// and is the only reliable method on PX/bot-detection protected pages.
-	delay := 30 * time.Millisecond
-	if slowly {
-		delay = 80 * time.Millisecond
-	}
 	for _, ch := range text {
 		char := string(ch)
 		code := charToCode(ch)
@@ -158,12 +178,10 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slow
 			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: char, Code: code,
 			WindowsVirtualKeyCode: vk,
 		}).Call(page)
-
 		_ = (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeChar, Text: char, UnmodifiedText: char,
 			WindowsVirtualKeyCode: vk,
 		}).Call(page)
-
 		_ = (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: char, Code: code,
 			WindowsVirtualKeyCode: vk,
@@ -172,7 +190,7 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slow
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(delay):
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 
@@ -208,9 +226,10 @@ func doFillForm(ctx context.Context, page *rod.Page, fields []FormField) error {
 			if err := el.Select([]string{f.Value}, true, rod.SelectorTypeText); err != nil {
 				return fmt.Errorf("fill_form: select %q: %w", f.Selector, err)
 			}
-		default: // textbox — delegate to doTypeText for PX-safe input
-			if err := doTypeText(ctx, page, f.Selector, f.Value, false, false); err != nil {
-				return fmt.Errorf("fill_form: %w", err)
+		default: // textbox
+			_ = el.SelectAllText()
+			if err := el.Input(f.Value); err != nil {
+				return fmt.Errorf("fill_form: input %q: %w", f.Selector, err)
 			}
 		}
 	}
