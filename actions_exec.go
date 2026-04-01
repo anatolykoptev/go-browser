@@ -113,75 +113,78 @@ func doClick(ctx context.Context, page *rod.Page, a Action) error {
 }
 
 func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slowly, submit bool) error {
-	// Focus the element via CDP DOM.focus — avoids rod's Runtime.callFunctionOn
-	// which can hang on pages with PerimeterX or similar JS interception.
-	el, err := resolveElement(ctx, page, selector)
+	// Focus element via JS evaluate — avoids rod's Click/Focus which use
+	// Runtime.callFunctionOn and can hang on PX-protected pages.
+	focusJS := fmt.Sprintf(
+		`(function(){const el=document.querySelector(%q); if(!el) return 'not_found'; el.focus(); el.select(); return 'ok'})()`,
+		selector,
+	)
+	res, err := page.Eval(focusJS)
 	if err != nil {
-		return fmt.Errorf("type_text: find %q: %w", selector, err)
+		return fmt.Errorf("type_text: focus %q: %w", selector, err)
+	}
+	if res.Value.Str() == "not_found" {
+		return fmt.Errorf("type_text: element %q not found", selector)
 	}
 
-	// Clear existing text: select all via keyboard shortcut then delete.
-	if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
-		return fmt.Errorf("type_text: click to focus: %w", err)
-	}
-	_ = proto.InputDispatchKeyEvent{
-		Type:                  proto.InputDispatchKeyEventTypeRawKeyDown,
-		Key:                   "a",
-		Code:                  "KeyA",
-		WindowsVirtualKeyCode: 65,
-		Modifiers:             2, // Ctrl
-	}.Call(page)
-	_ = proto.InputDispatchKeyEvent{
-		Type: proto.InputDispatchKeyEventTypeKeyUp,
-		Key:  "a",
-		Code: "KeyA",
-	}.Call(page)
+	// Clear existing text via Ctrl+A then Delete.
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "a", Code: "KeyA",
+		WindowsVirtualKeyCode: 65, Modifiers: 2,
+	}).Call(page)
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "a", Code: "KeyA",
+	}).Call(page)
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "Delete", Code: "Delete",
+		WindowsVirtualKeyCode: 46,
+	}).Call(page)
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "Delete", Code: "Delete",
+	}).Call(page)
 
+	// Type char-by-char via CDP dispatchKeyEvent — this triggers React onChange
+	// and is the only reliable method on PX/bot-detection protected pages.
+	delay := 30 * time.Millisecond
 	if slowly {
-		// Type character by character using CDP Input.dispatchKeyEvent.
-		for i, ch := range text {
-			char := string(ch)
-			code := charToCode(ch)
-			vk := charToVK(ch)
+		delay = 80 * time.Millisecond
+	}
+	for _, ch := range text {
+		char := string(ch)
+		code := charToCode(ch)
+		vk := charToVK(ch)
 
-			_ = proto.InputDispatchKeyEvent{
-				Type:                  proto.InputDispatchKeyEventTypeRawKeyDown,
-				Key:                   char,
-				Code:                  code,
-				WindowsVirtualKeyCode: vk,
-			}.Call(page)
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: char, Code: code,
+			WindowsVirtualKeyCode: vk,
+		}).Call(page)
 
-			_ = proto.InputDispatchKeyEvent{
-				Type:                  proto.InputDispatchKeyEventTypeChar,
-				Text:                  char,
-				UnmodifiedText:        char,
-				WindowsVirtualKeyCode: vk,
-			}.Call(page)
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeChar, Text: char, UnmodifiedText: char,
+			WindowsVirtualKeyCode: vk,
+		}).Call(page)
 
-			_ = proto.InputDispatchKeyEvent{
-				Type:                  proto.InputDispatchKeyEventTypeKeyUp,
-				Key:                   char,
-				Code:                  code,
-				WindowsVirtualKeyCode: vk,
-			}.Call(page)
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: char, Code: code,
+			WindowsVirtualKeyCode: vk,
+		}).Call(page)
 
-			_ = i
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(50 * time.Millisecond):
-			}
-		}
-	} else {
-		// Fast path: use CDP Input.insertText — bypasses JS event interception.
-		if err := (proto.InputInsertText{Text: text}).Call(page); err != nil {
-			return fmt.Errorf("type_text: insertText: %w", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
 		}
 	}
+
 	if submit {
-		if err := page.Keyboard.Press(input.Enter); err != nil {
-			return fmt.Errorf("type_text: submit: %w", err)
-		}
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "Enter", Code: "Enter",
+			WindowsVirtualKeyCode: 13,
+		}).Call(page)
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "Enter", Code: "Enter",
+			WindowsVirtualKeyCode: 13,
+		}).Call(page)
 	}
 	return nil
 }
@@ -205,20 +208,9 @@ func doFillForm(ctx context.Context, page *rod.Page, fields []FormField) error {
 			if err := el.Select([]string{f.Value}, true, rod.SelectorTypeText); err != nil {
 				return fmt.Errorf("fill_form: select %q: %w", f.Selector, err)
 			}
-		default: // textbox — use CDP insertText to avoid PX/bot-detection hangs
-			if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
-				return fmt.Errorf("fill_form: focus %q: %w", f.Selector, err)
-			}
-			// Select all via Ctrl+A
-			_ = (proto.InputDispatchKeyEvent{
-				Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "a", Code: "KeyA",
-				WindowsVirtualKeyCode: 65, Modifiers: 2,
-			}).Call(page)
-			_ = (proto.InputDispatchKeyEvent{
-				Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "a", Code: "KeyA",
-			}).Call(page)
-			if err := (proto.InputInsertText{Text: f.Value}).Call(page); err != nil {
-				return fmt.Errorf("fill_form: input %q: %w", f.Selector, err)
+		default: // textbox — delegate to doTypeText for PX-safe input
+			if err := doTypeText(ctx, page, f.Selector, f.Value, false, false); err != nil {
+				return fmt.Errorf("fill_form: %w", err)
 			}
 		}
 	}
