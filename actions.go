@@ -142,7 +142,7 @@ func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
 	case "set_cookies":
 		err = doSetCookies(page, a.Cookies)
 	case "snapshot":
-		data, err = doSnapshot(page, a.Depth)
+		data, err = doSnapshot(page, a.Depth, a.Format)
 	case "handle_dialog":
 		accept := true
 		if a.Accept != nil {
