@@ -14,8 +14,10 @@ type nodeInfo struct {
 	role, name, value, description, text, url string
 	children                                  []string
 	focused, disabled, checked, expanded      bool
-	selected, required, readonly              bool
+	selected, required, readonly, hidden      bool
+	modal                                     bool
 	level                                     int
+	live                                      string
 	hasPopup                                  string
 	invalid                                   string
 	autoComplete                              string
@@ -78,6 +80,19 @@ func extractNodeInfo(node *proto.AccessibilityAXNode) *nodeInfo {
 			if v != nil {
 				info.autoComplete = fmt.Sprintf("%v", v.Value.Val())
 			}
+		case "hidden":
+			info.hidden = toBool(v)
+		case "hiddenRoot":
+			info.hidden = toBool(v)
+		case "live":
+			if v != nil {
+				s := fmt.Sprintf("%v", v.Value.Val())
+				if s != "" && s != "off" {
+					info.live = s
+				}
+			}
+		case "modal":
+			info.modal = toBool(v)
 		}
 	}
 

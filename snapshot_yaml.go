@@ -165,6 +165,15 @@ func formatYAMLNode(n *nodeInfo, refCounter *int) string {
 	if n.readonly {
 		sb.WriteString(" [readonly]")
 	}
+	if n.hidden {
+		sb.WriteString(" [hidden]")
+	}
+	if n.modal {
+		sb.WriteString(" [modal]")
+	}
+	if n.live != "" {
+		fmt.Fprintf(&sb, " [live=%s]", n.live)
+	}
 
 	// Valued attributes.
 	if n.level > 0 {
