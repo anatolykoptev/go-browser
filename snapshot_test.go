@@ -230,3 +230,177 @@ func TestRenderYAMLMaxDepth(t *testing.T) {
 		t.Errorf("depth 2 node should be cut by maxDepth=2, got:\n%s", got)
 	}
 }
+
+func TestRenderYAML_ComplexPage(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Complex Page", nil, []string{"nav", "form", "table"}),
+		// Navigation with link
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("nav", "navigation", "", nil, []string{"link1"})
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("link1", "link", "Products", nil, nil)
+			return n
+		}(),
+		// Form with various controls
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("form", "form", "Feedback", nil, []string{"input1", "input2", "btn1"})
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("input1", "textbox", "Email", []*proto.AccessibilityAXProperty{
+				{Name: "focused", Value: makeAXValue(true)},
+				{Name: "required", Value: makeAXValue(true)},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("input2", "textbox", "Message", []*proto.AccessibilityAXProperty{
+				{Name: "readonly", Value: makeAXValue(true)},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("btn1", "button", "Send", []*proto.AccessibilityAXProperty{
+				{Name: "disabled", Value: makeAXValue(true)},
+			}, nil)
+			return n
+		}(),
+		// Table with rows and cells
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("table", "table", "Data", nil, []string{"row1", "row2"})
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("row1", "row", "", nil, []string{"cell1a", "cell1b"})
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("cell1a", "cell", "Header 1", nil, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("cell1b", "cell", "Header 2", nil, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("row2", "row", "", nil, []string{"cell2a", "cell2b"})
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("cell2a", "cell", "Data 1", nil, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("cell2b", "cell", "Data 2", nil, nil)
+			return n
+		}(),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	checks := []struct {
+		desc, pattern string
+	}{
+		{"root element", `- RootWebArea "Complex Page":`},
+		{"navigation role", `- navigation:`},
+		{"link with ref", `- link "Products" [ref=e1]`},
+		{"form role", `- form "Feedback":`},
+		{"focused textbox", `- textbox "Email" [ref=e2] [focused] [required]`},
+		{"readonly textbox", `- textbox "Message" [ref=e3] [readonly]`},
+		{"disabled button", `- button "Send" [ref=e4] [disabled]`},
+		{"table", `- table "Data":`},
+		{"row", `- row:`},
+		{"cell", `- cell`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(got, c.pattern) {
+			t.Errorf("%s: expected %q in output:\n%s", c.desc, c.pattern, got)
+		}
+	}
+}
+
+func TestRenderYAML_FormControls(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Form Controls", nil, []string{"checkbox1", "radio1", "combo1"}),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("checkbox1", "checkbox", "Subscribe", []*proto.AccessibilityAXProperty{
+				{Name: "checked", Value: makeAXValue(true)},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("radio1", "radio", "Option A", []*proto.AccessibilityAXProperty{
+				{Name: "selected", Value: makeAXValue(false)},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("combo1", "combobox", "Language", []*proto.AccessibilityAXProperty{
+				{Name: "expanded", Value: makeAXValue(false)},
+			}, nil)
+			n.Value = makeAXValue("English")
+			return n
+		}(),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	checks := []struct {
+		desc, pattern string
+	}{
+		{"checkbox checked", `- checkbox "Subscribe" [ref=e1] [checked]`},
+		{"radio not selected", `- radio "Option A" [ref=e2]`},
+		{"combobox with value", `- combobox "Language" [ref=e3] [value="English"]`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(got, c.pattern) {
+			t.Errorf("%s: expected %q in output:\n%s", c.desc, c.pattern, got)
+		}
+	}
+
+	// Verify expanded attribute is NOT present when false
+	if strings.Contains(got, "[expanded]") {
+		t.Errorf("expanded=false should not produce [expanded], got:\n%s", got)
+	}
+}
+
+func TestRenderYAML_HeadingHierarchy(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Document", nil, []string{"h1", "h2", "h3"}),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("h1", "heading", "Main Title", []*proto.AccessibilityAXProperty{
+				{Name: "level", Value: makeAXValue(float64(1))},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("h2", "heading", "Subsection", []*proto.AccessibilityAXProperty{
+				{Name: "level", Value: makeAXValue(float64(2))},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("h3", "heading", "Detail", []*proto.AccessibilityAXProperty{
+				{Name: "level", Value: makeAXValue(float64(3))},
+			}, nil)
+			return n
+		}(),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	checks := []struct {
+		desc, pattern string
+	}{
+		{"h1 with level=1", `- heading "Main Title" [level=1]`},
+		{"h2 with level=2", `- heading "Subsection" [level=2]`},
+		{"h3 with level=3", `- heading "Detail" [level=3]`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(got, c.pattern) {
+			t.Errorf("%s: expected %q in output:\n%s", c.desc, c.pattern, got)
+		}
+	}
+}
