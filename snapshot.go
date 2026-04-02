@@ -11,14 +11,14 @@ import (
 
 // nodeInfo holds the extracted accessibility properties of a single AX node.
 type nodeInfo struct {
-	role, name, value, description, text string
-	children                             []string
-	focused, disabled, checked, expanded bool
-	selected, required, readonly         bool
-	level                                int
-	hasPopup                             string
-	invalid                              string
-	autoComplete                         string
+	role, name, value, description, text, url string
+	children                                  []string
+	focused, disabled, checked, expanded      bool
+	selected, required, readonly              bool
+	level                                     int
+	hasPopup                                  string
+	invalid                                   string
+	autoComplete                              string
 }
 
 // extractNodeInfo builds a nodeInfo from a CDP AccessibilityAXNode.
@@ -131,7 +131,7 @@ func doSnapshot(page *rod.Page, maxDepth int, format string) (string, error) {
 	case "text":
 		return renderAXTree(allNodes, maxDepth), nil
 	default:
-		return renderAXTreeYAML(allNodes, maxDepth), nil
+		return renderAXTreeYAMLWithURLs(allNodes, maxDepth, page), nil
 	}
 }
 

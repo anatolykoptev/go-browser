@@ -4,8 +4,21 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
+
+// renderAXTreeYAMLWithURLs builds a YAML snapshot with link URL extraction.
+func renderAXTreeYAMLWithURLs(
+	nodes []*proto.AccessibilityAXNode, maxDepth int, page *rod.Page,
+) string {
+	index, roots := buildAXIndex(nodes)
+	urls := collectLinkURLs(page)
+	if urls != nil {
+		applyLinkURLs(index, nodes, urls)
+	}
+	return renderYAML(index, roots, maxDepth)
+}
 
 // renderAXTree builds a plain text representation of the accessibility tree.
 func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
@@ -48,7 +61,11 @@ var interactiveRoles = map[string]bool{
 // accessibility tree with ref numbering for interactive elements.
 func renderAXTreeYAML(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 	index, roots := buildAXIndex(nodes)
+	return renderYAML(index, roots, maxDepth)
+}
 
+// renderYAML builds the YAML output from a pre-built index and root list.
+func renderYAML(index map[string]*nodeInfo, roots []string, maxDepth int) string {
 	var sb strings.Builder
 	refCounter := 0
 
@@ -78,11 +95,12 @@ func renderAXTreeYAML(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 		line := formatYAMLNode(n, &refCounter)
 		hasChildren := hasVisibleChildren(n, index)
 		hasDesc := n.description != ""
+		hasURL := n.url != ""
 
 		// Inline text: if node has text and no children, append after colon.
-		if n.text != "" && !hasChildren && !hasDesc {
+		if n.text != "" && !hasChildren && !hasDesc && !hasURL {
 			fmt.Fprintf(&sb, "%s- %s: %s\n", prefix, line, n.text)
-		} else if hasChildren || hasDesc || n.text != "" {
+		} else if hasChildren || hasDesc || hasURL || n.text != "" {
 			fmt.Fprintf(&sb, "%s- %s:\n", prefix, line)
 			if n.text != "" {
 				fmt.Fprintf(&sb, "%s  - text: %s\n", prefix, n.text)
@@ -93,6 +111,9 @@ func renderAXTreeYAML(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 
 		if hasDesc {
 			fmt.Fprintf(&sb, "%s  - /description: %s\n", prefix, n.description)
+		}
+		if hasURL {
+			fmt.Fprintf(&sb, "%s  - /url: %s\n", prefix, n.url)
 		}
 
 		for _, cid := range n.children {

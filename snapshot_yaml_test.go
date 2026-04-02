@@ -143,3 +143,63 @@ func TestRenderYAML_EmptyGenericLeaf(t *testing.T) {
 		t.Errorf("button should appear, got:\n%s", got)
 	}
 }
+
+func TestRenderYAML_LinkURL(t *testing.T) {
+	// Build index directly to test /url: rendering.
+	index := map[string]*nodeInfo{
+		"root":  {role: "RootWebArea", name: "Page", children: []string{"link1", "link2"}},
+		"link1": {role: "link", name: "Home", url: "/home"},
+		"link2": {role: "link", name: "Settings", url: "/settings"},
+	}
+	roots := []string{"root"}
+
+	got := renderYAML(index, roots, 0)
+
+	if !strings.Contains(got, "- /url: /home") {
+		t.Errorf("expected /url: /home, got:\n%s", got)
+	}
+	if !strings.Contains(got, "- /url: /settings") {
+		t.Errorf("expected /url: /settings, got:\n%s", got)
+	}
+	// Links with URL should have colon (children block).
+	if !strings.Contains(got, `link "Home" [ref=e1]:`) {
+		t.Errorf("link with url should have colon, got:\n%s", got)
+	}
+}
+
+func TestRenderYAML_LinkWithoutURL(t *testing.T) {
+	// Link without url should not produce /url: line.
+	index := map[string]*nodeInfo{
+		"root":  {role: "RootWebArea", name: "Page", children: []string{"link1"}},
+		"link1": {role: "link", name: "Home"},
+	}
+	roots := []string{"root"}
+
+	got := renderYAML(index, roots, 0)
+
+	if strings.Contains(got, "/url:") {
+		t.Errorf("link without url should not have /url:, got:\n%s", got)
+	}
+}
+
+func TestRenderYAML_LinkURLWithText(t *testing.T) {
+	// Link with both text and URL should render both as children.
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Page", nil, []string{"link1"}),
+		makeAXNode("link1", "link", "Home", nil, []string{"st1"}),
+		makeAXNode("st1", "StaticText", "Go home", nil, nil),
+	}
+
+	index, roots := buildAXIndex(nodes)
+	// Simulate URL being applied.
+	index["link1"].url = "/home"
+
+	got := renderYAML(index, roots, 0)
+
+	if !strings.Contains(got, "- text: Go home") {
+		t.Errorf("expected text child, got:\n%s", got)
+	}
+	if !strings.Contains(got, "- /url: /home") {
+		t.Errorf("expected /url child, got:\n%s", got)
+	}
+}
