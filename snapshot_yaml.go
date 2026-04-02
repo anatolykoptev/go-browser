@@ -35,37 +35,6 @@ func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 	return sb.String()
 }
 
-// buildAXIndex creates a node index and finds root nodes.
-func buildAXIndex(nodes []*proto.AccessibilityAXNode) (map[string]*nodeInfo, []string) {
-	index := make(map[string]*nodeInfo, len(nodes))
-	isChild := make(map[string]bool, len(nodes))
-	var allIDs []string
-
-	for _, node := range nodes {
-		if node.Ignored {
-			continue
-		}
-		info := extractNodeInfo(node)
-		if isNoiseRole(info.role) {
-			continue
-		}
-		id := string(node.NodeID)
-		for _, cid := range info.children {
-			isChild[cid] = true
-		}
-		index[id] = info
-		allIDs = append(allIDs, id)
-	}
-
-	var roots []string
-	for _, id := range allIDs {
-		if !isChild[id] {
-			roots = append(roots, id)
-		}
-	}
-	return index, roots
-}
-
 // interactiveRoles defines roles that receive [ref=eN] numbering.
 var interactiveRoles = map[string]bool{
 	"link": true, "button": true, "textbox": true, "combobox": true,
@@ -93,8 +62,12 @@ func renderAXTreeYAML(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 			return
 		}
 
-		// Collapse empty generic nodes — skip them, render children at same indent.
-		if n.role == "generic" && n.name == "" && n.value == "" {
+		// Skip empty leaf generic nodes (no name, no text, no visible children).
+		if n.role == "generic" && n.name == "" && n.value == "" && n.text == "" {
+			if !hasVisibleChildren(n, index) {
+				return
+			}
+			// Generic wrapper with children but no content: skip line, render children.
 			for _, cid := range n.children {
 				walk(cid, depth+1, indent)
 			}
@@ -103,11 +76,17 @@ func renderAXTreeYAML(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 
 		prefix := strings.Repeat("  ", indent)
 		line := formatYAMLNode(n, &refCounter)
-		hasChildren := len(n.children) > 0
+		hasChildren := hasVisibleChildren(n, index)
 		hasDesc := n.description != ""
 
-		if hasChildren || hasDesc {
+		// Inline text: if node has text and no children, append after colon.
+		if n.text != "" && !hasChildren && !hasDesc {
+			fmt.Fprintf(&sb, "%s- %s: %s\n", prefix, line, n.text)
+		} else if hasChildren || hasDesc || n.text != "" {
 			fmt.Fprintf(&sb, "%s- %s:\n", prefix, line)
+			if n.text != "" {
+				fmt.Fprintf(&sb, "%s  - text: %s\n", prefix, n.text)
+			}
 		} else {
 			fmt.Fprintf(&sb, "%s- %s\n", prefix, line)
 		}
