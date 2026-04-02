@@ -117,12 +117,16 @@ See `go-browser/docs/STEALTH-SPEC.md` for full detection vector checklist.
 See `go-browser/docs/STEALTH-ROADMAP.md` for planned improvements.
 See `go-browser/docs/RESEARCH-LOG.md` for investigation history.
 
-### Three-Layer Stealth Stack
+### Four-Layer Stealth Stack
 ```
+Layer 4: go-wowa auto-bypass   (protection profiles, active evasion JS, canvas noise)
 Layer 3: go-rod/stealth        (puppeteer-extra JS evasions)
 Layer 2: stealth_complement.js (6 modules, toString masking, Worker proxy)
 Layer 1: CloakBrowser C++      (33 chromium patches)
 ```
+
+Layer 4 is in go-wowa (not go-browser) — it wraps `RunInteract()` with detection + bypass.
+See `go-wowa/docs/ARCHITECTURE.md` for auto-bypass pipeline details.
 
 ### Action Types
 | Action | Description |
