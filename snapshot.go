@@ -7,6 +7,8 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
+// Blank import to keep strings available for snapshot_yaml.go in same package.
+
 // nodeInfo holds the extracted accessibility properties of a single AX node.
 type nodeInfo struct {
 	role, name, value, description       string
