@@ -412,20 +412,50 @@ func doGetCookies(page *rod.Page) ([]map[string]any, error) {
 }
 
 func doSnapshot(page *rod.Page, maxDepth int) (string, error) {
-	res, err := proto.AccessibilityGetFullAXTree{}.Call(page)
-	if err != nil {
-		return "", fmt.Errorf("snapshot: %w", err)
+	// Collect AX trees from main frame + all child frames.
+	allNodes := collectAXNodes(page, proto.PageFrameID(""))
+
+	// Also collect from child iframes.
+	frames, err := proto.PageGetFrameTree{}.Call(page)
+	if err == nil {
+		walkFrameTree(page, frames.FrameTree, &allNodes)
 	}
 
-	// Build parent→children map.
+	return renderAXTree(allNodes, maxDepth), nil
+}
+
+// walkFrameTree recursively visits all child frames and appends their AX nodes.
+func walkFrameTree(page *rod.Page, tree *proto.PageFrameTree, allNodes *[]*proto.AccessibilityAXNode) {
+	for _, child := range tree.ChildFrames {
+		childNodes := collectAXNodes(page, proto.PageFrameID(child.Frame.ID))
+		*allNodes = append(*allNodes, childNodes...)
+		walkFrameTree(page, child, allNodes)
+	}
+}
+
+// collectAXNodes fetches the accessibility tree for a single frame.
+func collectAXNodes(page *rod.Page, frameID proto.PageFrameID) []*proto.AccessibilityAXNode {
+	req := proto.AccessibilityGetFullAXTree{}
+	if frameID != "" {
+		req.FrameID = frameID
+	}
+	res, err := req.Call(page)
+	if err != nil {
+		return nil
+	}
+	return res.Nodes
+}
+
+// renderAXTree builds a text representation of the accessibility tree.
+func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 	type nodeInfo struct {
 		role, name string
 		children   []string
 	}
-	nodes := make(map[string]*nodeInfo, len(res.Nodes))
+	index := make(map[string]*nodeInfo, len(nodes))
 	var rootID string
 
-	for _, node := range res.Nodes {
+	for _, node := range nodes {
 		if node.Ignored {
 			continue
 		}
@@ -442,7 +472,7 @@ func doSnapshot(page *rod.Page, maxDepth int) (string, error) {
 		for _, cid := range node.ChildIDs {
 			childIDs = append(childIDs, string(cid))
 		}
-		nodes[id] = &nodeInfo{role: role, name: name, children: childIDs}
+		index[id] = &nodeInfo{role: role, name: name, children: childIDs}
 		if node.ParentID == "" && rootID == "" {
 			rootID = id
 		}
@@ -454,7 +484,7 @@ func doSnapshot(page *rod.Page, maxDepth int) (string, error) {
 		if maxDepth > 0 && level >= maxDepth {
 			return
 		}
-		n, ok := nodes[id]
+		n, ok := index[id]
 		if !ok {
 			return
 		}
@@ -470,7 +500,7 @@ func doSnapshot(page *rod.Page, maxDepth int) (string, error) {
 		walk(rootID, 0)
 	}
 
-	return sb.String(), nil
+	return sb.String()
 }
 
 func doHandleDialog(page *rod.Page, accept bool, promptText string) (string, error) {

@@ -68,28 +68,32 @@ Note: ox-browser already has GREASE randomization in `profile_hints.rs` (done th
 | 3.5 | OffscreenCanvas Worker | ❌ Not tested | CloakBrowser C++ may not cover |
 | 3.6 | Persistent Chrome profile | ✅ Done | Docker volume `cloakbrowser_profile` |
 
-## Phase 4: Anti-Bot Detector Tool — PLANNED
+## Phase 4: Anti-Bot Detector Tool — ✅ DONE (via go-wowa)
 
-New MCP tool: given a URL, identify what anti-bot protection is deployed.
+Implemented in go-wowa as `security_scan` MCP tool + `auto_bypass` in `chrome_interact`.
 
-### Architecture
-```
-Phase 1 (HTTP only):     ox-browser /fetch → headers + cookies + HTML → signature matching
-Phase 2 (Browser):       go-browser /chrome/interact → CDP network + JS vars → deep detection
-```
+### What was built (2026-03-31 → 2026-04-01)
 
-### Data sources
-1. `scrapfly/Antibot-Detector` — 16 anti-bot JSON signatures (MIT)
-2. `projectdiscovery/wappalyzergo` — 6000+ technology signatures (Go library)
-3. Custom Castle.io / Kasada signatures
+**Detection (security_scan):**
+- 103 WAF/bot signatures (HTTP headers, cookies, JS globals, DOM signals, network patterns)
+- 21 API hooks (canvas, webgl, audio, webrtc, battery, permissions, font, screen, timezone, etc.)
+- CSP weakness scoring (0-100)
+- Lie detection (6 probe categories: canvas, screen, navigator, webgl, timezone, prototype)
+- Deep extraction (9 vendors: reCAPTCHA/hCaptcha/Turnstile sitekeys, DataDome js_key, PX app_id, etc.)
 
-### Target services (13)
-Cloudflare, DataDome, Akamai, PerimeterX/HUMAN, Castle.io, Kasada, Shape/F5, FingerprintJS Pro, Imperva/Incapsula, AWS WAF, reCAPTCHA, hCaptcha, Turnstile
+**Active evasion (auto_bypass):**
+- `stealth_evasions.js` — 7 patches (webdriver, chrome.runtime, plugins, permissions, iframes, codecs, WebGL)
+- `stealth_canvas_noise.js` — deterministic LCG PRNG canvas noise
+- 22 bypass profiles (CF, DataDome, PX, Akamai, Shape, Imperva, FingerprintJS, 8 CAPTCHAs, IP block)
+- Profile-driven bypass: stealth profile, proxy strategy, pre-sleep, canvas noise per vendor
+- `wait_for cookie` action for PX `_px3` / DataDome `datadome` challenge cookies
 
-### Implementation
-- **Location**: `go-code/internal/antibot/` (static) + `go-browser` action (dynamic)
-- **Effort**: ~600 lines Go (static) + ~300 lines Go (dynamic)
-- **Dependency**: `projectdiscovery/wappalyzergo` for base coverage
+**Location:** `go-wowa/internal/chrome/` (not go-code as originally planned)
+
+### Verified results (2026-04-01)
+- LinkedIn login: ✅ (auto_bypass + stealth evasions + residential proxy)
+- nowsecure.nl: ✅ detected Turnstile + Performance Timing
+- example.com: ✅ no false positives
 
 ## Phase 5: Continuous Validation — PLANNED
 
@@ -186,25 +190,17 @@ CloakBrowser overrides return non-native `toString()`.
    ```
 3. **Chromium-level patch** (CloakBrowser) — most reliable, no JS detection.
 
-### 6.5 PX Challenge Cookie Flow (MEDIUM)
+### 6.5 PX Challenge Cookie Flow — ✅ DONE (via go-wowa)
 
-**Problem:** LinkedIn login requires `_px3` clearance cookie before form
-submit is accepted. Without it, server redirects back to `/login`.
-
-**Fix:** After page load, poll for `_px3` cookie via CDP `Network.getCookies`:
-```go
-func WaitForPXClearance(ctx context.Context, page *rod.Page, timeout time.Duration) bool {
-    deadline := time.Now().Add(timeout)
-    for time.Now().Before(deadline) {
-        cookies, _ := proto.NetworkGetCookies{}.Call(page)
-        for _, c := range cookies.Cookies {
-            if c.Name == "_px3" { return true }
-        }
-        time.Sleep(500 * time.Millisecond)
-    }
-    return false
-}
+Implemented as `wait_for cookie` action in go-browser v0.5.1:
+```json
+{"type": "wait_for", "cookie": "_px3", "timeout_ms": 15000}
 ```
+
+Polls `page.Cookies()` every 500ms until named cookie appears.
+Wired into go-wowa bypass profiles:
+- PerimeterX profile: PostActions `[{wait_for, cookie: "_px3", timeout: 15s}]`
+- DataDome profile: PostActions `[{wait_for, cookie: "datadome", timeout: 10s}]`
 
 ### 6.6 Adaptive Security Pre-Flight (LOW)
 
@@ -228,14 +224,50 @@ automatically. Subsequent actions in the session use the detected strategy.
 5. **6.4** Canvas lie — CloakBrowser patch preferred
 6. **6.6** Adapt action — full auto-detection integration
 
-### Validated Findings (2026-04-01 LinkedIn session)
+### 6.7 TLS Fingerprint Cookie Binding — NEW (2026-04-01)
 
+**Problem:** LinkedIn binds `li_at` session cookie to JA3/JA4 TLS fingerprint.
+Cookies obtained via Chrome (CloakBrowser) are **rejected** by go-stealth (utls)
+and curl — they have different JA3 hashes. LinkedIn responds with
+`set-cookie: li_at=delete me` when TLS fingerprint doesn't match.
+
+**Evidence:**
+```
+Chrome login → li_at obtained ✅
+curl + same proxy + same cookie → "li_at=delete me" ❌
+go-stealth + same proxy + same cookie → 302 redirect ❌
+```
+
+**Fix:** Login must use the **same TLS stack** as subsequent API calls.
+Two options:
+1. **Login via go-stealth HTTP API** (recommended) — same TLS for login + API
+2. **Proxy API calls through Chrome** — works but slow
+
+**Plan:** `docs/superpowers/plans/2026-04-01-linkedin-tls-refactor.md`
+- go-linkedin `Login(email, password)` via go-stealth HTTP
+- go-social auto-relogin workflow on 302/403
+
+### Validated Findings (2026-04-01 LinkedIn sessions)
+
+**Chrome-based login (go-wowa auto_bypass):**
 - Chrome 145 on server — Input.coordinatesLeak bug already fixed
+- `fill_form` with `auto_bypass=true`: ✅ **LinkedIn login successful**
+- `click submit` with `humanize=true`: ✅ **Bezier mouse path accepted**
+- `stealth_evasions.js` (7 patches): ✅ **no headless detection**
+- App Challenge (2FA): ✅ handled via 60s sleep + mobile approve
+- `li_at` cookie obtained and feed loaded: ✅
+- 12 fingerprinting hooks detected but did not block access
+- Proxy sticky IP (Webshare :10030 = 154.192.119.80): ✅ stable
+
+**TLS fingerprint binding (critical discovery):**
+- `li_at` bound to Chrome JA3 — rejected by curl/go-stealth/ox-browser
+- **Cannot reuse Chrome cookies in HTTP clients** — need same TLS stack
+- Solution: login via go-stealth (same JA3 for login + API calls)
+
+**Earlier findings (still valid):**
 - `type_text slowly=true` with CDP dispatchKeyEvent: **works** (no hang)
 - `type_text slowly=false` with rod el.Input(): **hangs** on PX pages
 - `page.Eval()` / `evaluate` action: **intermittently hangs** (PX timing)
-- `el.Click()` with humanize: **hangs** (rod Runtime.callFunctionOn)
-- JS `button.click()` via evaluate: works but PX rejects submit (no `_px3`)
 - `execCommand('insertText')`: fills DOM but not React state
 - Security scan detected: PerimeterX (PXdOjV695v), Canvas/Screen/DPR lies
 
