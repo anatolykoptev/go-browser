@@ -321,6 +321,56 @@ func TestRenderYAML_ComplexPage(t *testing.T) {
 	}
 }
 
+func TestExtractProps_HiddenLiveModal(t *testing.T) {
+	props := []*proto.AccessibilityAXProperty{
+		{Name: "hidden", Value: makeAXValue(true)},
+		{Name: "live", Value: makeAXValue("polite")},
+		{Name: "modal", Value: makeAXValue(true)},
+	}
+	node := makeAXNode("1", "dialog", "Alert", props, nil)
+	info := extractNodeInfo(node)
+
+	if !info.hidden {
+		t.Error("hidden should be true")
+	}
+	if info.live != "polite" {
+		t.Errorf("live = %q, want polite", info.live)
+	}
+	if !info.modal {
+		t.Error("modal should be true")
+	}
+}
+
+func TestRenderYAML_HiddenLiveModal(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Page", nil, []string{"dlg", "status"}),
+		func() *proto.AccessibilityAXNode {
+			return makeAXNode("dlg", "dialog", "Confirm", []*proto.AccessibilityAXProperty{
+				{Name: "modal", Value: makeAXValue(true)},
+			}, []string{"btn"})
+		}(),
+		makeAXNode("btn", "button", "OK", nil, nil),
+		func() *proto.AccessibilityAXNode {
+			return makeAXNode("status", "status", "3 new messages", []*proto.AccessibilityAXProperty{
+				{Name: "live", Value: makeAXValue("assertive")},
+			}, nil)
+		}(),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	checks := []struct{ desc, pattern string }{
+		{"modal dialog", `[modal]`},
+		{"live region", `[live=assertive]`},
+		{"status text", `"3 new messages"`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(got, c.pattern) {
+			t.Errorf("%s: expected %q in:\n%s", c.desc, c.pattern, got)
+		}
+	}
+}
+
 func TestRenderYAML_FormControls(t *testing.T) {
 	nodes := []*proto.AccessibilityAXNode{
 		makeAXNode("root", "RootWebArea", "Form Controls", nil, []string{"checkbox1", "radio1", "combo1"}),
