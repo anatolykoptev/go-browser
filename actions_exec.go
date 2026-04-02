@@ -481,7 +481,9 @@ func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 		children   []string
 	}
 	index := make(map[string]*nodeInfo, len(nodes))
-	var rootID string
+	// Track all IDs that appear as children — non-child IDs are roots.
+	isChild := make(map[string]bool, len(nodes))
+	var allIDs []string
 
 	for _, node := range nodes {
 		if node.Ignored {
@@ -498,11 +500,19 @@ func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 		}
 		childIDs := make([]string, 0, len(node.ChildIDs))
 		for _, cid := range node.ChildIDs {
-			childIDs = append(childIDs, string(cid))
+			s := string(cid)
+			childIDs = append(childIDs, s)
+			isChild[s] = true
 		}
 		index[id] = &nodeInfo{role: role, name: name, children: childIDs}
-		if node.ParentID == "" && rootID == "" {
-			rootID = id
+		allIDs = append(allIDs, id)
+	}
+
+	// Find all root nodes (nodes that are not children of any other node).
+	var roots []string
+	for _, id := range allIDs {
+		if !isChild[id] {
+			roots = append(roots, id)
 		}
 	}
 
@@ -524,7 +534,7 @@ func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
 			walk(cid, level+1)
 		}
 	}
-	if rootID != "" {
+	for _, rootID := range roots {
 		walk(rootID, 0)
 	}
 
