@@ -52,7 +52,7 @@ func TestRenderYAML_TextWithChildren(t *testing.T) {
 
 	got := renderAXTreeYAML(nodes, 0)
 
-	if !strings.Contains(got, `- button "Submit" [ref=e1]:`) {
+	if !strings.Contains(got, `- button "Submit" [ref=e1] [cursor=pointer]:`) {
 		t.Errorf("expected button with colon, got:\n%s", got)
 	}
 	if !strings.Contains(got, "- text: Click here") {
@@ -162,7 +162,7 @@ func TestRenderYAML_LinkURL(t *testing.T) {
 		t.Errorf("expected /url: /settings, got:\n%s", got)
 	}
 	// Links with URL should have colon (children block).
-	if !strings.Contains(got, `link "Home" [ref=e1]:`) {
+	if !strings.Contains(got, `link "Home" [ref=e1] [cursor=pointer]:`) {
 		t.Errorf("link with url should have colon, got:\n%s", got)
 	}
 }

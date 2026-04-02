@@ -151,10 +151,10 @@ func TestRenderYAML(t *testing.T) {
 	}{
 		{"root with children", `- RootWebArea "Test Page":`},
 		{"navigation", `- navigation:`},
-		{"link with ref", `- link "Home" [ref=e1]`},
+		{"link with ref", `- link "Home" [ref=e1] [cursor=pointer]`},
 		{"form", `- form "Login":`},
-		{"textbox with ref and attrs", `- textbox "Username" [ref=e2] [focused] [required]`},
-		{"button disabled", `- button "Sign In" [ref=e3] [disabled]`},
+		{"textbox with ref and attrs", `- textbox "Username" [ref=e2] [cursor=pointer] [focused] [required]`},
+		{"button disabled", `- button "Sign In" [ref=e3] [cursor=pointer] [disabled]`},
 		{"heading level", `- heading "Welcome" [level=1]`},
 	}
 	for _, c := range checks {
@@ -177,7 +177,7 @@ func TestRenderYAMLGenericCollapse(t *testing.T) {
 	if strings.Contains(got, "generic") {
 		t.Errorf("generic node should be collapsed, got:\n%s", got)
 	}
-	if !strings.Contains(got, `  - button "OK" [ref=e1]`) {
+	if !strings.Contains(got, `  - button "OK" [ref=e1] [cursor=pointer]`) {
 		t.Errorf("button should be at indent 1, got:\n%s", got)
 	}
 }
@@ -305,11 +305,11 @@ func TestRenderYAML_ComplexPage(t *testing.T) {
 	}{
 		{"root element", `- RootWebArea "Complex Page":`},
 		{"navigation role", `- navigation:`},
-		{"link with ref", `- link "Products" [ref=e1]`},
+		{"link with ref", `- link "Products" [ref=e1] [cursor=pointer]`},
 		{"form role", `- form "Feedback":`},
-		{"focused textbox", `- textbox "Email" [ref=e2] [focused] [required]`},
-		{"readonly textbox", `- textbox "Message" [ref=e3] [readonly]`},
-		{"disabled button", `- button "Send" [ref=e4] [disabled]`},
+		{"focused textbox", `- textbox "Email" [ref=e2] [cursor=pointer] [focused] [required]`},
+		{"readonly textbox", `- textbox "Message" [ref=e3] [cursor=pointer] [readonly]`},
+		{"disabled button", `- button "Send" [ref=e4] [cursor=pointer] [disabled]`},
 		{"table", `- table "Data":`},
 		{"row", `- row:`},
 		{"cell", `- cell`},
@@ -350,9 +350,9 @@ func TestRenderYAML_FormControls(t *testing.T) {
 	checks := []struct {
 		desc, pattern string
 	}{
-		{"checkbox checked", `- checkbox "Subscribe" [ref=e1] [checked]`},
-		{"radio not selected", `- radio "Option A" [ref=e2]`},
-		{"combobox with value", `- combobox "Language" [ref=e3] [value="English"]`},
+		{"checkbox checked", `- checkbox "Subscribe" [ref=e1] [cursor=pointer] [checked]`},
+		{"radio not selected", `- radio "Option A" [ref=e2] [cursor=pointer]`},
+		{"combobox with value", `- combobox "Language" [ref=e3] [cursor=pointer] [value="English"]`},
 	}
 	for _, c := range checks {
 		if !strings.Contains(got, c.pattern) {
