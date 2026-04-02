@@ -415,13 +415,41 @@ func doSnapshot(page *rod.Page, maxDepth int) (string, error) {
 	// Collect AX trees from main frame + all child frames.
 	allNodes := collectAXNodes(page, proto.PageFrameID(""))
 
-	// Also collect from child iframes.
+	// Also collect from child iframes via FrameTree.
 	frames, err := proto.PageGetFrameTree{}.Call(page)
-	if err == nil {
+	if err == nil && frames.FrameTree != nil {
 		walkFrameTree(page, frames.FrameTree, &allNodes)
 	}
 
-	return renderAXTree(allNodes, maxDepth), nil
+	// Fallback: if FrameTree found no child frames, try via TargetGetTargets
+	// to discover OOP (out-of-process) iframes.
+	if err != nil || (frames.FrameTree != nil && len(frames.FrameTree.ChildFrames) == 0) {
+		targets, terr := proto.TargetGetTargets{}.Call(page)
+		if terr == nil {
+			for _, t := range targets.TargetInfos {
+				if t.Type == "iframe" {
+					childNodes := collectAXNodes(page, proto.PageFrameID(t.TargetID))
+					allNodes = append(allNodes, childNodes...)
+				}
+			}
+		}
+	}
+
+	tree := renderAXTree(allNodes, maxDepth)
+
+	// Debug: if tree is suspiciously short, append node stats.
+	if len(allNodes) > 0 && len(tree) < 200 {
+		ignored := 0
+		for _, n := range allNodes {
+			if n.Ignored {
+				ignored++
+			}
+		}
+		tree += fmt.Sprintf("\n<!-- ax_debug: total=%d ignored=%d rendered=%d frames_err=%v -->",
+			len(allNodes), ignored, len(allNodes)-ignored, err)
+	}
+
+	return tree, nil
 }
 
 // walkFrameTree recursively visits all child frames and appends their AX nodes.
