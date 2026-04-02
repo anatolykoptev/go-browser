@@ -11,7 +11,7 @@ import (
 
 // nodeInfo holds the extracted accessibility properties of a single AX node.
 type nodeInfo struct {
-	role, name, value, description       string
+	role, name, value, description, text string
 	children                             []string
 	focused, disabled, checked, expanded bool
 	selected, required, readonly         bool
