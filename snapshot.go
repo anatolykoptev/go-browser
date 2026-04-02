@@ -2,7 +2,6 @@ package browser
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
@@ -126,22 +125,12 @@ func doSnapshot(page *rod.Page, maxDepth int, format string) (string, error) {
 		}
 	}
 
-	tree := renderAXTree(allNodes, maxDepth)
-
-	// Debug: if tree is suspiciously short, append node stats.
-	if len(allNodes) > 0 && len(tree) < 200 {
-		ignored := 0
-		for _, n := range allNodes {
-			if n.Ignored {
-				ignored++
-			}
-		}
-		tree += fmt.Sprintf("\n<!-- ax_debug: total=%d ignored=%d rendered=%d frames_err=%v -->",
-			len(allNodes), ignored, len(allNodes)-ignored, err)
+	switch format {
+	case "text":
+		return renderAXTree(allNodes, maxDepth), nil
+	default:
+		return renderAXTreeYAML(allNodes, maxDepth), nil
 	}
-
-	_ = format // reserved for future YAML/JSON output modes
-	return tree, nil
 }
 
 // walkFrameTree recursively visits all child frames and appends their AX nodes.
@@ -164,60 +153,4 @@ func collectAXNodes(page *rod.Page, frameID proto.PageFrameID) []*proto.Accessib
 		return nil
 	}
 	return res.Nodes
-}
-
-// renderAXTree builds a text representation of the accessibility tree.
-func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
-	index := make(map[string]*nodeInfo, len(nodes))
-	// Track all IDs that appear as children — non-child IDs are roots.
-	isChild := make(map[string]bool, len(nodes))
-	var allIDs []string
-
-	for _, node := range nodes {
-		if node.Ignored {
-			continue
-		}
-		info := extractNodeInfo(node)
-		if isNoiseRole(info.role) {
-			continue
-		}
-		id := string(node.NodeID)
-		for _, cid := range info.children {
-			isChild[cid] = true
-		}
-		index[id] = info
-		allIDs = append(allIDs, id)
-	}
-
-	// Find all root nodes (nodes that are not children of any other node).
-	var roots []string
-	for _, id := range allIDs {
-		if !isChild[id] {
-			roots = append(roots, id)
-		}
-	}
-
-	var sb strings.Builder
-	var walk func(id string, level int)
-	walk = func(id string, level int) {
-		if maxDepth > 0 && level >= maxDepth {
-			return
-		}
-		n, ok := index[id]
-		if !ok {
-			return
-		}
-		if n.role != "" || n.name != "" {
-			indent := strings.Repeat("  ", level)
-			fmt.Fprintf(&sb, "%s[%s] %s\n", indent, n.role, n.name)
-		}
-		for _, cid := range n.children {
-			walk(cid, level+1)
-		}
-	}
-	for _, rootID := range roots {
-		walk(rootID, 0)
-	}
-
-	return sb.String()
 }

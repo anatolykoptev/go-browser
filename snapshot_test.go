@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/go-rod/rod/lib/proto"
@@ -110,5 +111,122 @@ func TestIsNoiseNode(t *testing.T) {
 		if isNoiseRole(role) {
 			t.Errorf("isNoiseRole(%q) = true, want false", role)
 		}
+	}
+}
+
+func TestRenderYAML(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Test Page", nil, []string{"nav", "form", "h1"}),
+		makeAXNode("nav", "navigation", "", nil, []string{"link1"}),
+		makeAXNode("link1", "link", "Home", nil, nil),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("form", "form", "Login", nil, []string{"input1", "btn1"})
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("input1", "textbox", "Username", []*proto.AccessibilityAXProperty{
+				{Name: "focused", Value: makeAXValue(true)},
+				{Name: "required", Value: makeAXValue(true)},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("btn1", "button", "Sign In", []*proto.AccessibilityAXProperty{
+				{Name: "disabled", Value: makeAXValue(true)},
+			}, nil)
+			return n
+		}(),
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("h1", "heading", "Welcome", []*proto.AccessibilityAXProperty{
+				{Name: "level", Value: makeAXValue(float64(1))},
+			}, nil)
+			return n
+		}(),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	checks := []struct {
+		desc, pattern string
+	}{
+		{"root with children", `- RootWebArea "Test Page":`},
+		{"navigation", `- navigation:`},
+		{"link with ref", `- link "Home" [ref=e1]`},
+		{"form", `- form "Login":`},
+		{"textbox with ref and attrs", `- textbox "Username" [ref=e2] [focused] [required]`},
+		{"button disabled", `- button "Sign In" [ref=e3] [disabled]`},
+		{"heading level", `- heading "Welcome" [level=1]`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(got, c.pattern) {
+			t.Errorf("%s: expected %q in output:\n%s", c.desc, c.pattern, got)
+		}
+	}
+}
+
+func TestRenderYAMLGenericCollapse(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Page", nil, []string{"gen"}),
+		makeAXNode("gen", "generic", "", nil, []string{"btn"}),
+		makeAXNode("btn", "button", "OK", nil, nil),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	// Generic node should be collapsed — button at indent level 1, not 2.
+	if strings.Contains(got, "generic") {
+		t.Errorf("generic node should be collapsed, got:\n%s", got)
+	}
+	if !strings.Contains(got, `  - button "OK" [ref=e1]`) {
+		t.Errorf("button should be at indent 1, got:\n%s", got)
+	}
+}
+
+func TestRenderYAMLDescription(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("root", "button", "Submit", nil, nil)
+			n.Description = makeAXValue("Submit the form")
+			return n
+		}(),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	if !strings.Contains(got, "- /description: Submit the form") {
+		t.Errorf("expected description line, got:\n%s", got)
+	}
+}
+
+func TestRenderYAMLValue(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		func() *proto.AccessibilityAXNode {
+			n := makeAXNode("root", "combobox", "Country", nil, nil)
+			n.Value = makeAXValue("Russia")
+			return n
+		}(),
+	}
+
+	got := renderAXTreeYAML(nodes, 0)
+
+	if !strings.Contains(got, `[value="Russia"]`) {
+		t.Errorf("expected value attribute, got:\n%s", got)
+	}
+}
+
+func TestRenderYAMLMaxDepth(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Page", nil, []string{"nav"}),
+		makeAXNode("nav", "navigation", "", nil, []string{"link1"}),
+		makeAXNode("link1", "link", "Deep", nil, nil),
+	}
+
+	got := renderAXTreeYAML(nodes, 2)
+
+	if !strings.Contains(got, "navigation") {
+		t.Errorf("depth 1 node should appear, got:\n%s", got)
+	}
+	if strings.Contains(got, "Deep") {
+		t.Errorf("depth 2 node should be cut by maxDepth=2, got:\n%s", got)
 	}
 }
