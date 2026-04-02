@@ -137,10 +137,10 @@ func formatYAMLNode(n *nodeInfo, refCounter *int) string {
 		fmt.Fprintf(&sb, " %q", n.name)
 	}
 
-	// Ref for interactive roles.
+	// Ref and cursor for interactive roles.
 	if interactiveRoles[n.role] {
 		*refCounter++
-		fmt.Fprintf(&sb, " [ref=e%d]", *refCounter)
+		fmt.Fprintf(&sb, " [ref=e%d] [cursor=pointer]", *refCounter)
 	}
 
 	// Boolean attributes.
