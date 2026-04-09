@@ -79,6 +79,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /solve", s.handleSolve)
 	mux.HandleFunc("POST /render", s.handleRender)
 	mux.HandleFunc("DELETE /session/{id}", s.handleDestroySession)
+	mux.HandleFunc("GET /selftest", s.handleSelftest)
 }
 
 // handleHealth returns 200 OK with service status.
