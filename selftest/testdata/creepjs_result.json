@@ -1,0 +1,27 @@
+{
+  "trustScore": 94.5,
+  "lies": [],
+  "fonts": {
+    "hash": "a1b2c3d4",
+    "platformClassifier": "Apple"
+  },
+  "webrtc": {
+    "publicIp": "185.100.200.50",
+    "localIps": []
+  },
+  "audio": {
+    "hash": "196.239479"
+  },
+  "voices": {
+    "count": 34,
+    "hash": "e5f6g7h8"
+  },
+  "ua": {
+    "brands": [
+      {"brand": "Not/A)Brand", "version": "8"},
+      {"brand": "Chromium", "version": "145"},
+      {"brand": "Google Chrome", "version": "145"}
+    ],
+    "platform": "macOS"
+  }
+}

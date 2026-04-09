@@ -1,0 +1,12 @@
+{
+  "checks": [
+    {"name": "User Agent", "value": "Chrome", "ok": true},
+    {"name": "Webdriver", "value": "missing", "ok": false},
+    {"name": "Chrome Object", "value": "present", "ok": true},
+    {"name": "Permissions", "value": "granted", "ok": true},
+    {"name": "Plugin Array", "value": "present", "ok": true},
+    {"name": "Languages", "value": "en-US", "ok": true}
+  ],
+  "passed": 5,
+  "failed": 1
+}
