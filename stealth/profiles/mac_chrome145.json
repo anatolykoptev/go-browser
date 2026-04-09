@@ -7,21 +7,23 @@
   "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
   "userAgentData": {
     "brands": [
-      {"brand": "Chromium", "version": "145"},
       {"brand": "Google Chrome", "version": "145"},
-      {"brand": "Not-A.Brand", "version": "24"}
+      {"brand": "Not:A-Brand",   "version": "99"},
+      {"brand": "Chromium",      "version": "145"}
     ],
-    "mobile": false,
-    "platform": "macOS",
-    "fullVersion": "145.0.7632.159",
-    "platformVersion": "10.15.7",
-    "architecture": "x86",
-    "bitness": "64",
     "fullVersionList": [
-      {"brand": "Chromium", "version": "145.0.7632.159"},
-      {"brand": "Google Chrome", "version": "145.0.7632.159"},
-      {"brand": "Not-A.Brand", "version": "24.0.0.0"}
-    ]
+      {"brand": "Google Chrome", "version": "145.0.7342.89"},
+      {"brand": "Not:A-Brand",   "version": "99.0.0.0"},
+      {"brand": "Chromium",      "version": "145.0.7342.89"}
+    ],
+    "fullVersion":     "145.0.7342.89",
+    "platform":        "macOS",
+    "platformVersion": "14.5.0",
+    "architecture":    "arm",
+    "model":           "",
+    "mobile":          false,
+    "bitness":         "64",
+    "wow64":           false
   },
   "screen": {
     "width": 1440,
@@ -48,5 +50,55 @@
     "downlink": 10,
     "rtt": 50,
     "effectiveType": "4g"
-  }
+  },
+  "fonts": [
+    "Apple SD Gothic Neo ExtraBold",
+    "STIX Two Math",
+    "Noto Sans Canadian Aboriginal",
+    "SF Pro Text",
+    "New York"
+  ],
+  "plugins": [
+    {"name": "PDF Viewer",                "filename": "internal-pdf-viewer", "description": "Portable Document Format"},
+    {"name": "Chrome PDF Viewer",         "filename": "internal-pdf-viewer", "description": "Portable Document Format"},
+    {"name": "Chromium PDF Viewer",       "filename": "internal-pdf-viewer", "description": "Portable Document Format"},
+    {"name": "Microsoft Edge PDF Viewer", "filename": "internal-pdf-viewer", "description": "Portable Document Format"},
+    {"name": "WebKit built-in PDF",       "filename": "internal-pdf-viewer", "description": "Portable Document Format"}
+  ],
+  "voices": [
+    {"name": "Albert",    "lang": "en-US", "voiceURI": "com.apple.speech.synthesis.voice.Albert"},
+    {"name": "Alice",     "lang": "it-IT", "voiceURI": "com.apple.voice.compact.it-IT.Alice"},
+    {"name": "Alva",      "lang": "sv-SE", "voiceURI": "com.apple.voice.compact.sv-SE.Alva"},
+    {"name": "Amélie",    "lang": "fr-CA", "voiceURI": "com.apple.voice.compact.fr-CA.Amelie"},
+    {"name": "Anna",      "lang": "de-DE", "voiceURI": "com.apple.voice.compact.de-DE.Anna"},
+    {"name": "Carmit",    "lang": "he-IL", "voiceURI": "com.apple.voice.compact.he-IL.Carmit"},
+    {"name": "Daniel",    "lang": "en-GB", "voiceURI": "com.apple.voice.compact.en-GB.Daniel"},
+    {"name": "Fiona",     "lang": "en-GB", "voiceURI": "com.apple.voice.compact.en-scotland.Fiona"},
+    {"name": "Fred",      "lang": "en-US", "voiceURI": "com.apple.speech.synthesis.voice.Fred"},
+    {"name": "Karen",     "lang": "en-AU", "voiceURI": "com.apple.voice.compact.en-AU.Karen"},
+    {"name": "Kyoko",     "lang": "ja-JP", "voiceURI": "com.apple.voice.compact.ja-JP.Kyoko"},
+    {"name": "Luciana",   "lang": "pt-BR", "voiceURI": "com.apple.voice.compact.pt-BR.Luciana"},
+    {"name": "Maged",     "lang": "ar-SA", "voiceURI": "com.apple.voice.compact.ar-SA.Maged"},
+    {"name": "Mei-Jia",   "lang": "zh-TW", "voiceURI": "com.apple.voice.compact.zh-TW.Mei-Jia"},
+    {"name": "Melina",    "lang": "el-GR", "voiceURI": "com.apple.voice.compact.el-GR.Melina"},
+    {"name": "Milena",    "lang": "ru-RU", "voiceURI": "com.apple.voice.compact.ru-RU.Milena"},
+    {"name": "Moira",     "lang": "en-IE", "voiceURI": "com.apple.voice.compact.en-IE.Moira"},
+    {"name": "Monica",    "lang": "es-ES", "voiceURI": "com.apple.voice.compact.es-ES.Monica"},
+    {"name": "Nora",      "lang": "nb-NO", "voiceURI": "com.apple.voice.compact.nb-NO.Nora"},
+    {"name": "Paulina",   "lang": "es-MX", "voiceURI": "com.apple.voice.compact.es-MX.Paulina"},
+    {"name": "Samantha",  "lang": "en-US", "voiceURI": "com.apple.voice.compact.en-US.Samantha", "default": true},
+    {"name": "Sara",      "lang": "da-DK", "voiceURI": "com.apple.voice.compact.da-DK.Sara"},
+    {"name": "Satu",      "lang": "fi-FI", "voiceURI": "com.apple.voice.compact.fi-FI.Satu"},
+    {"name": "Sin-ji",    "lang": "zh-HK", "voiceURI": "com.apple.voice.compact.zh-HK.Sin-ji"},
+    {"name": "Tessa",     "lang": "en-ZA", "voiceURI": "com.apple.voice.compact.en-ZA.Tessa"},
+    {"name": "Thomas",    "lang": "fr-FR", "voiceURI": "com.apple.voice.compact.fr-FR.Thomas"},
+    {"name": "Ting-Ting", "lang": "zh-CN", "voiceURI": "com.apple.voice.compact.zh-CN.Ting-Ting"},
+    {"name": "Veena",     "lang": "en-IN", "voiceURI": "com.apple.voice.compact.en-IN.Veena"},
+    {"name": "Victoria",  "lang": "en-US", "voiceURI": "com.apple.speech.synthesis.voice.Victoria"},
+    {"name": "Xander",    "lang": "nl-NL", "voiceURI": "com.apple.voice.compact.nl-NL.Xander"},
+    {"name": "Yelda",     "lang": "tr-TR", "voiceURI": "com.apple.voice.compact.tr-TR.Yelda"},
+    {"name": "Yuna",      "lang": "ko-KR", "voiceURI": "com.apple.voice.compact.ko-KR.Yuna"},
+    {"name": "Zosia",     "lang": "pl-PL", "voiceURI": "com.apple.voice.compact.pl-PL.Zosia"},
+    {"name": "Zuzana",    "lang": "cs-CZ", "voiceURI": "com.apple.voice.compact.cs-CZ.Zuzana"}
+  ]
 }
