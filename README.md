@@ -189,6 +189,85 @@ github.com/anatolykoptev/go-browser
     └── options.go   Remote-specific options (Endpoint)
 ```
 
+## Stealth Self-Test (`/selftest`)
+
+The HTTP server exposes a `/selftest` endpoint that runs the live CloakBrowser instance
+against public antibot probe pages and returns a structured JSON trust report.
+
+### Endpoint
+
+```
+GET /selftest?target=all&profile=mac_chrome145&screenshot=1
+```
+
+| Parameter    | Values                                       | Default         |
+|--------------|----------------------------------------------|-----------------|
+| `target`     | `creepjs`, `sannysoft`, `rebrowser`, `botd`, `webrtc_leak`, `canvas`, `all` | all targets     |
+| `profile`    | any profile name in `stealth/profiles/`      | `mac_chrome145` |
+| `screenshot` | `1` to save PNGs to `/tmp/selftest/`         | off             |
+
+Multiple targets: `?target=creepjs,sannysoft`
+
+### Response
+
+```json
+{
+  "profile": "mac_chrome145",
+  "started_at": "2026-04-09T23:00:00Z",
+  "results": [
+    {
+      "target": "creepjs",
+      "url": "https://abrahamjuliot.github.io/creepjs/",
+      "duration_ms": 12340,
+      "ok": true,
+      "trust_score": 95.5,
+      "lies": [],
+      "sections": {
+        "fonts":  {"hash": "a1b2c3", "platformClassifier": "Apple"},
+        "webrtc": {"publicIp": "185.x.x.x", "localIps": []},
+        "audio":  {"hash": "196.239479"},
+        "voices": {"count": 34, "hash": "e5f6g7"},
+        "ua":     {"brands": [...], "platform": "macOS"}
+      },
+      "screenshot_path": "/tmp/selftest/creepjs-20260409T230000.png"
+    }
+  ],
+  "summary": {
+    "total": 6,
+    "passed": 5,
+    "failed": 1,
+    "overall_trust": 92.3
+  }
+}
+```
+
+### Supported Targets
+
+| Key           | URL                                              | What it measures                      |
+|---------------|--------------------------------------------------|---------------------------------------|
+| `creepjs`     | abrahamjuliot.github.io/creepjs/                 | Trust score, lies, section hashes     |
+| `sannysoft`   | bot.sannysoft.com                                | Pass/fail checklist                   |
+| `rebrowser`   | bot-detector.rebrowser.net                       | `window.botDetectorResults` checks    |
+| `botd`        | fingerprintjs.github.io/BotD/main/               | FingerprintJS BotD verdict            |
+| `webrtc_leak` | browserleaks.com/webrtc                          | RFC1918 IP leak detection             |
+| `canvas`      | browserleaks.com/canvas                          | Canvas fingerprint hash               |
+
+### Quick curl
+
+```bash
+# Single target
+curl "http://localhost:8901/selftest?target=sannysoft" | jq .
+
+# All targets + screenshots
+curl "http://localhost:8901/selftest?target=all&screenshot=1" | jq '.summary'
+
+# Specific profile
+curl "http://localhost:8901/selftest?target=creepjs&profile=win_chrome145" | jq '.results[0].trust_score'
+```
+
+Per-target errors are embedded in `results[i].ok=false, error:"..."` — the endpoint
+itself only returns 5xx if the browser is unavailable.
+
 ## Testing
 
 ```bash
