@@ -3,9 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/anatolykoptev/go-browser/cdputil"
 	"github.com/anatolykoptev/go-browser/humanize"
 	"github.com/go-rod/rod"
 )
@@ -66,142 +64,49 @@ type ActionResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// ExecuteAction dispatches to the correct do* function based on a.Type.
+// dispatchContext bundles the per-call dependencies passed to every action executor.
+type dispatchContext struct {
+	ctx         context.Context
+	page        *rod.Page
+	cursor      *humanize.Cursor
+	logs        *LogCollector
+	stealthMode bool
+}
+
+// actionExecutor is a function that runs a single action and returns optional data.
+type actionExecutor func(dc dispatchContext, a Action) (any, error)
+
+//nolint:gochecknoglobals // static dispatch table, populated by init() calls in action files
+var actionRegistry = map[string]actionExecutor{}
+
+// registerAction adds an executor to the dispatch table.
+// Called from init() functions in focused action files.
+func registerAction(actionType string, exec actionExecutor) {
+	actionRegistry[actionType] = exec
+}
+
+// ExecuteAction dispatches to the registered executor for a.Type.
 // When cursor is non-nil and a.Humanize is true, humanized variants are used
 // for click, type_text, and hover actions.
 // When stealthMode is true, actions that would trigger Runtime.callFunctionOn
 // are routed through cdputil using pure CDP DOM/Input methods instead.
-func ExecuteAction( //nolint:cyclop // dispatch switch — complexity inherent
+func ExecuteAction(
 	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool,
 ) ActionResult {
-	var (
-		data any
-		err  error
-	)
-
-	switch a.Type {
-	case "click":
-		if stealthMode {
-			err = doClickStealth(ctx, page, a)
-		} else if a.Humanize && cursor != nil {
-			err = doClickHumanized(ctx, page, a.Selector, cursor)
-		} else {
-			err = doClick(ctx, page, a)
-		}
-	case "type_text":
-		if stealthMode || a.Slowly {
-			err = doTypeTextCDP(ctx, page, a.Selector, a.Text, a.Submit)
-		} else if a.Humanize && cursor != nil {
-			err = doTypeTextHumanized(ctx, page, a.Selector, a.Text, cursor)
-		} else {
-			err = doTypeText(ctx, page, a.Selector, a.Text, a.Slowly, a.Submit)
-		}
-	case "wait_for":
-		waitCtx := ctx
-		if a.TimeoutMs > 0 {
-			var cancel context.CancelFunc
-			waitCtx, cancel = context.WithTimeout(ctx, time.Duration(a.TimeoutMs)*time.Millisecond)
-			defer cancel()
-		}
-		switch {
-		case a.Cookie != "":
-			err = doWaitForCookie(waitCtx, page, a.Cookie)
-		case a.Text != "":
-			err = doWaitForText(waitCtx, page, a.Text)
-		case a.TextGone != "":
-			err = doWaitForTextGone(waitCtx, page, a.TextGone)
-		case a.WaitMs > 0 && a.Selector == "":
-			err = doSleep(waitCtx, a.WaitMs)
-		default:
-			if stealthMode {
-				err = doWaitForStealth(waitCtx, page, a.Selector)
-			} else {
-				err = doWaitFor(waitCtx, page, a.Selector)
-			}
-		}
-	case "screenshot":
-		data, err = doScreenshot(page)
-	case "evaluate":
-		script := a.Script
-		if script == "" {
-			script = a.JS
-		}
-		data, err = doEvaluate(page, script)
-	case "eval_on_new_document":
-		script := a.Script
-		if script == "" {
-			script = a.JS
-		}
-		_, err = page.EvalOnNewDocument(script)
-	case "press":
-		err = doPress(page, a.Key)
-	case "sleep", "wait":
-		err = doSleep(ctx, a.WaitMs)
-	case "navigate":
-		err = doNavigate(ctx, page, a.URL)
-	case "set_cookies":
-		err = doSetCookies(page, a.Cookies)
-	case "snapshot":
-		data, err = doSnapshot(page, a.Depth, a.Format)
-	case "handle_dialog":
-		accept := true
-		if a.Accept != nil {
-			accept = *a.Accept
-		}
-		data, err = doHandleDialog(page, accept, a.Text)
-	case "get_cookies":
-		data, err = doGetCookies(page)
-	case "destroy_session":
-		// No-op in action execution — session lifecycle managed by handler
-	case "hover":
-		if stealthMode {
-			err = doHoverStealth(ctx, page, a.Selector)
-		} else if a.Humanize && cursor != nil {
-			err = doHoverHumanized(ctx, page, a.Selector, cursor)
-		} else {
-			err = doHover(ctx, page, a.Selector)
-		}
-	case "go_back":
-		err = doGoBack(page)
-	case "get_logs":
-		if logs != nil {
-			net, con := logs.Collect()
-			data = map[string]any{"network": net, "console": con}
-		} else {
-			data = map[string]any{"network": []NetworkEntry{}, "console": []ConsoleEntry{}}
-		}
-	case "warmup":
-		waitMs := a.WaitMs
-		if waitMs <= 0 {
-			waitMs = 3000
-		}
-		var count int
-		count, err = doWarmup(ctx, page, waitMs, cursor)
-		data = count
-	case "scroll":
-		if stealthMode && a.Selector != "" {
-			var nodeID cdputil.NodeID
-			nodeID, err = cdputil.QuerySelector(page, a.Selector)
-			if err == nil {
-				err = cdputil.ScrollIntoView(page, nodeID)
-			}
-		} else {
-			err = doScroll(ctx, page, a.Selector, a.DeltaX, a.DeltaY)
-		}
-	case "select_option":
-		err = doSelectOption(ctx, page, a.Selector, a.Values)
-	case "resize":
-		err = doResize(page, a.Width, a.Height)
-	case "fill_form":
-		if stealthMode {
-			err = doFillFormStealth(ctx, page, a.Fields)
-		} else {
-			err = doFillForm(ctx, page, a.Fields)
-		}
-	default:
-		err = fmt.Errorf("unknown action type: %q", a.Type)
+	exec, ok := actionRegistry[a.Type]
+	if !ok {
+		return ActionResult{Action: a.Type, Ok: false, Error: fmt.Sprintf("unknown action type: %q", a.Type)}
 	}
 
+	dc := dispatchContext{
+		ctx:         ctx,
+		page:        page,
+		cursor:      cursor,
+		logs:        logs,
+		stealthMode: stealthMode,
+	}
+
+	data, err := exec(dc, a)
 	if err != nil {
 		return ActionResult{Action: a.Type, Ok: false, Error: err.Error()}
 	}
