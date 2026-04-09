@@ -25,39 +25,46 @@ const webrtcExtractJS = `
   var out = { publicIps: [], localIps: [], allIps: [] };
 
   // browserleaks.com/webrtc renders IPs in a table
-  document.querySelectorAll('table tr').forEach(function(row) {
+  var tableRows = document.querySelectorAll('table tr');
+  for (var i = 0; i < tableRows.length; i++) {
+    var row = tableRows[i];
     var cells = row.querySelectorAll('td');
-    if (cells.length < 2) return;
-    var label = cells[0].textContent.trim().toLowerCase();
+    if (cells.length < 2) continue;
     var value = cells[1].textContent.trim();
-    if (!value || value === '-' || value === 'N/A') return;
+    if (!value || value === '-' || value === 'N/A') continue;
 
     // Extract IP-like values
     var ips = value.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g) || [];
-    ips.forEach(function(ip) {
+    for (var j = 0; j < ips.length; j++) {
+      var ip = ips[j];
       out.allIps.push(ip);
       // RFC1918 ranges: 10.x, 172.16-31.x, 192.168.x
-      if (ip.startsWith('10.') ||
-          ip.startsWith('192.168.') ||
+      if (ip.indexOf('10.') === 0 ||
+          ip.indexOf('192.168.') === 0 ||
           /^172\.(1[6-9]|2\d|3[01])\./.test(ip)) {
         out.localIps.push(ip);
       } else {
         out.publicIps.push(ip);
       }
-    });
-  });
+    }
+  }
 
   // Also check dedicated IP display elements
-  document.querySelectorAll('.ip, [class*="ip-address"], [data-ip]').forEach(function(el) {
-    var ip = el.textContent.trim();
-    var m = ip.match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
+  var ipEls = document.querySelectorAll('.ip, [class*="ip-address"], [data-ip]');
+  for (var k = 0; k < ipEls.length; k++) {
+    var m = ipEls[k].textContent.trim().match(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
     if (m) out.allIps.push(m[0]);
-  });
+  }
 
-  // Deduplicate
-  out.allIps = [...new Set(out.allIps)];
-  out.localIps = [...new Set(out.localIps)];
-  out.publicIps = [...new Set(out.publicIps)];
+  // Deduplicate using object keys (no spread operator needed)
+  function dedup(arr) {
+    var seen = {}; var out2 = [];
+    for (var x = 0; x < arr.length; x++) { if (!seen[arr[x]]) { seen[arr[x]] = true; out2.push(arr[x]); } }
+    return out2;
+  }
+  out.allIps = dedup(out.allIps);
+  out.localIps = dedup(out.localIps);
+  out.publicIps = dedup(out.publicIps);
 
   return JSON.stringify(out);
 })()

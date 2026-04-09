@@ -18,18 +18,20 @@ const sannysoftExtractJS = `
   var rows = document.querySelectorAll('table tr');
   if (!rows || rows.length === 0) return null;
   var results = { checks: [], passed: 0, failed: 0 };
-  rows.forEach(function(row) {
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
     var cells = row.querySelectorAll('td');
-    if (cells.length < 2) return;
+    if (cells.length < 2) continue;
     var name = cells[0].textContent.trim();
     var valueCell = cells[1];
     var value = valueCell.textContent.trim();
-    var ok = valueCell.classList.contains('passed') ||
-              valueCell.classList.contains('green') ||
+    var className = valueCell.getAttribute('class') || '';
+    var ok = className.indexOf('passed') >= 0 ||
+              className.indexOf('green') >= 0 ||
               value.toLowerCase() === 'present' ||
               value.toLowerCase() === 'true';
-    var fail = valueCell.classList.contains('failed') ||
-               valueCell.classList.contains('red') ||
+    var fail = className.indexOf('failed') >= 0 ||
+               className.indexOf('red') >= 0 ||
                value.toLowerCase() === 'missing' ||
                value.toLowerCase() === 'false';
     if (name) {
@@ -37,7 +39,7 @@ const sannysoftExtractJS = `
       if (ok) results.passed++;
       else if (fail) results.failed++;
     }
-  });
+  }
   return JSON.stringify(results);
 })()
 `
