@@ -1,0 +1,8 @@
+{
+  "userAgentLie": false,
+  "webdriverPresent": false,
+  "headlessChrome": false,
+  "phantomJsDefined": false,
+  "nightmareJsDefined": false,
+  "seleniumDefined": false
+}

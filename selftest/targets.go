@@ -36,8 +36,3 @@ var Extractors = map[string]Extractor{
 	"webrtc_leak": extractWebRTCLeak,
 	"canvas":      extractCanvas,
 }
-
-// stubExtractor returns a not-implemented result. Used until real extractors are wired.
-func stubExtractor(_ context.Context, _ *rod.Page) (TargetResult, error) {
-	return TargetResult{OK: false, Error: "not implemented"}, nil
-}
