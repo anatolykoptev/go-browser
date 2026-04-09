@@ -75,7 +75,8 @@ func (m *ChromeManager) NewStealthPage(ctx *rod.Browser, profile *StealthProfile
 	return page, nil
 }
 
-// applyEmulationOverrides sets CDP Emulation timezone and locale from the profile.
+// applyEmulationOverrides sets CDP Emulation timezone, locale, and user-agent
+// (with full userAgentMetadata for Sec-CH-UA-* headers) from the profile.
 func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 	if profile.Timezone != "" {
 		tzOverride := proto.EmulationSetTimezoneOverride{TimezoneID: profile.Timezone}
@@ -92,6 +93,70 @@ func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 		}
 	}
 
+	// Gap 5b — setUserAgentOverride with full userAgentMetadata so that
+	// Sec-CH-UA-* HTTP headers match the profile platform (e.g. "macOS" not "Linux").
+	if profile.UA != "" {
+		if err := applyUserAgentOverride(page, profile); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// applyUserAgentOverride calls Emulation.setUserAgentOverride with the full
+// userAgentMetadata struct so Sec-CH-UA-Platform and friends are set correctly.
+func applyUserAgentOverride(page *rod.Page, profile *StealthProfile) error {
+	uad := profile.UAData
+
+	// Build brand lists using the rod proto types.
+	toBrandList := func(brands []Brand) []*proto.EmulationUserAgentBrandVersion {
+		out := make([]*proto.EmulationUserAgentBrandVersion, len(brands))
+		for i, b := range brands {
+			out[i] = &proto.EmulationUserAgentBrandVersion{Brand: b.Brand, Version: b.Version}
+		}
+		return out
+	}
+
+	fvl := uad.FullVersionList
+	if len(fvl) == 0 {
+		fvl = uad.Brands
+	}
+
+	acceptLang := ""
+	if len(profile.Langs) > 0 {
+		var b strings.Builder
+		b.WriteString(profile.Langs[0])
+		for i, l := range profile.Langs[1:] {
+			q := 0.9 - float64(i)*0.1
+			if q < 0.1 {
+				q = 0.1
+			}
+			fmt.Fprintf(&b, ",%s;q=%.1f", l, q)
+		}
+		acceptLang = b.String()
+	}
+
+	override := proto.EmulationSetUserAgentOverride{
+		UserAgent:      profile.UA,
+		AcceptLanguage: acceptLang,
+		Platform:       profile.Platform,
+		UserAgentMetadata: &proto.EmulationUserAgentMetadata{
+			Brands:          toBrandList(uad.Brands),
+			FullVersionList: toBrandList(fvl),
+			FullVersion:     uad.FullVersion,
+			Platform:        uad.Platform,
+			PlatformVersion: uad.PlatformVersion,
+			Architecture:    uad.Architecture,
+			Model:           uad.Model,
+			Mobile:          uad.Mobile,
+			Bitness:         uad.Bitness,
+			Wow64:           uad.Wow64,
+		},
+	}
+	if err := override.Call(page); err != nil {
+		return fmt.Errorf("chrome: set user-agent override: %w", err)
+	}
 	return nil
 }
 
