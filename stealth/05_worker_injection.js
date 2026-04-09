@@ -119,7 +119,5 @@ Object.defineProperty(window.Worker, 'prototype', {
   configurable: false,
 });
 
-// Clean up stealth markers.
-delete window.__stealthProfile;
-delete window.__sp;
-delete window.__defineNativeGetter;
+// Note: stealth marker cleanup (delete window.__sp etc.) is done by 09_fonts_shim.js
+// which runs last, so that all modules can still read window.__sp when they run.

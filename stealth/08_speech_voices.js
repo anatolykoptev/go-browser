@@ -16,7 +16,7 @@
     voiceURI:     v.voiceURI,
   }));
 
-  if (typeof SpeechSynthesis !== 'undefined') {
+  if (typeof SpeechSynthesis !== 'undefined' && SpeechSynthesis.prototype) {
     SpeechSynthesis.prototype.getVoices = function() { return voices.slice(); };
   }
 

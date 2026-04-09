@@ -4,6 +4,8 @@
 // otherwise falls back to the canonical 5-entry PDF set.
 
 (() => {
+  if (typeof Plugin === 'undefined' || typeof PluginArray === 'undefined') return;
+
   const DEFAULT_PLUGINS = [
     {name: 'PDF Viewer',                filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
     {name: 'Chrome PDF Viewer',         filename: 'internal-pdf-viewer', description: 'Portable Document Format'},

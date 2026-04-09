@@ -444,10 +444,8 @@
     configurable: false,
   });
   
-  // Clean up stealth markers.
-  delete window.__stealthProfile;
-  delete window.__sp;
-  delete window.__defineNativeGetter;
+  // Note: stealth marker cleanup (delete window.__sp etc.) is done by 09_fonts_shim.js
+  // which runs last, so that all modules can still read window.__sp when they run.
 
   // === 06_webrtc_leak.js ===
   // WebRTC local IP leak prevention.
@@ -527,6 +525,8 @@
   // otherwise falls back to the canonical 5-entry PDF set.
   
   (() => {
+    if (typeof Plugin === 'undefined' || typeof PluginArray === 'undefined') return;
+  
     const DEFAULT_PLUGINS = [
       {name: 'PDF Viewer',                filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
       {name: 'Chrome PDF Viewer',         filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
@@ -620,7 +620,7 @@
       voiceURI:     v.voiceURI,
     }));
   
-    if (typeof SpeechSynthesis !== 'undefined') {
+    if (typeof SpeechSynthesis !== 'undefined' && SpeechSynthesis.prototype) {
       SpeechSynthesis.prototype.getVoices = function() { return voices.slice(); };
     }
   
@@ -635,11 +635,10 @@
 
   // === 09_fonts_shim.js ===
   // Font fingerprint shim — hides residual Linux-only fonts from detection.
-  // CreepJS probes fonts via FontFaceSet.check() and FontFaceSet.forEach().
-  // We intercept both to return false/skip for known Linux-exclusive fonts.
-  // macOS-specific fonts (from profile.fonts) are not present on Linux Docker,
-  // so the Dockerfile.cloakbrowser layer installs them; this shim only hides
-  // Linux fonts that would betray the host OS when spoofing macOS.
+  // CreepJS probes fonts via document.fonts.check() and forEach().
+  // We patch document.fonts directly (FontFaceSet is not a global in Chrome 146+).
+  // This shim also handles final cleanup of window.__sp and stealth markers
+  // because it runs last (alphabetically 09 > all others).
   
   (() => {
     const HIDDEN_LINUX_FONTS = new Set([
@@ -650,35 +649,39 @@
       'Noto Color Emoji', 'MONO',
     ]);
   
-    // FontFaceSet.check() — returns false for hidden fonts
-    const origCheck = FontFaceSet.prototype.check;
-    FontFaceSet.prototype.check = function(font, text) {
+    const matchesHidden = (fontStr) => {
       for (const name of HIDDEN_LINUX_FONTS) {
-        if (font.includes('"' + name + '"') || font.includes("'" + name + "'")) {
-          return false;
+        if (fontStr.includes('"' + name + '"') || fontStr.includes("'" + name + "'")) {
+          return true;
         }
       }
-      return origCheck.call(this, font, text);
+      return false;
     };
   
-    // FontFaceSet.forEach() — skip hidden font entries
-    const origForEach = FontFaceSet.prototype.forEach;
-    FontFaceSet.prototype.forEach = function(cb, thisArg) {
-      return origForEach.call(this, function(ff, k, set) {
-        if (HIDDEN_LINUX_FONTS.has(ff.family)) return;
-        return cb.call(thisArg, ff, k, set);
-      });
-    };
+    // Patch document.fonts.check() directly — FontFaceSet is not a global in Chrome 146+.
+    if (document.fonts && typeof document.fonts.check === 'function') {
+      const origCheck = document.fonts.check.bind(document.fonts);
+      document.fonts.check = function(font, text) {
+        if (matchesHidden(String(font))) return false;
+        return origCheck(font, text);
+      };
+    }
   
-    // FontFaceSet[Symbol.iterator] — skip hidden font entries
-    const origValues = FontFaceSet.prototype[Symbol.iterator];
-    if (origValues) {
-      FontFaceSet.prototype[Symbol.iterator] = function* () {
-        for (const ff of origValues.call(this)) {
-          if (!HIDDEN_LINUX_FONTS.has(ff.family)) yield ff;
-        }
+    // Patch document.fonts.forEach() to skip hidden fonts.
+    if (document.fonts && typeof document.fonts.forEach === 'function') {
+      const origForEach = document.fonts.forEach.bind(document.fonts);
+      document.fonts.forEach = function(cb, thisArg) {
+        return origForEach(function(ff, k, set) {
+          if (HIDDEN_LINUX_FONTS.has(ff.family)) return;
+          return cb.call(thisArg, ff, k, set);
+        });
       };
     }
   })();
+  
+  // Cleanup — runs last so all prior modules (06-08) can still read __sp.
+  delete window.__stealthProfile;
+  delete window.__sp;
+  delete window.__defineNativeGetter;
 
 })();
