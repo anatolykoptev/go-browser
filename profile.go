@@ -25,17 +25,23 @@ type StealthProfile struct {
 	Langs    []string          `json:"languages"`
 	Timezone string            `json:"timezone"`
 	Conn     ConnectionProfile `json:"connection"`
+	Fonts    []string          `json:"fonts,omitempty"`
+	Plugins  []PluginDef       `json:"plugins,omitempty"`
+	Voices   []VoiceDef        `json:"voices,omitempty"`
 }
 
 // UAData holds User-Agent Client Hints data.
 type UAData struct {
 	Brands          []Brand `json:"brands"`
+	FullVersionList []Brand `json:"fullVersionList"`
 	Mobile          bool    `json:"mobile"`
 	Platform        string  `json:"platform"`
 	FullVersion     string  `json:"fullVersion"`
 	PlatformVersion string  `json:"platformVersion"`
 	Architecture    string  `json:"architecture"`
+	Model           string  `json:"model"`
 	Bitness         string  `json:"bitness"`
+	Wow64           bool    `json:"wow64"`
 }
 
 // Brand represents a single entry in the UA brands list.
@@ -74,6 +80,21 @@ type ConnectionProfile struct {
 	Downlink      float64 `json:"downlink"`
 	RTT           int     `json:"rtt"`
 	EffectiveType string  `json:"effectiveType"`
+}
+
+// PluginDef defines a single navigator.plugins entry.
+type PluginDef struct {
+	Name        string `json:"name"`
+	Filename    string `json:"filename"`
+	Description string `json:"description"`
+}
+
+// VoiceDef defines a single SpeechSynthesis voice entry.
+type VoiceDef struct {
+	Name     string `json:"name"`
+	Lang     string `json:"lang"`
+	VoiceURI string `json:"voiceURI"`
+	Default  bool   `json:"default,omitempty"`
 }
 
 const defaultProfileName = "mac_chrome145"
