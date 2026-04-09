@@ -17,10 +17,13 @@ import (
 const (
 	// maxConcurrent caps parallel page opens against CloakBrowser.
 	maxConcurrent = 3
-	// perTargetTimeout is the per-extractor page budget.
-	perTargetTimeout = 30 * time.Second
+	// perTargetTimeout is the total per-target budget (navigation + extraction).
+	// Heavy antibot pages (creepjs, browserleaks) can take 20-25 s to load alone.
+	perTargetTimeout = 60 * time.Second
+	// pageNavTimeout is the rod page-level timeout for Navigate + WaitLoad.
+	pageNavTimeout = 25 * time.Second
 	// overallTimeout caps the entire /selftest run.
-	overallTimeout = 90 * time.Second
+	overallTimeout = 120 * time.Second
 	// screenshotDir is where per-run screenshots are saved.
 	screenshotDir = "/tmp/selftest"
 )
@@ -83,14 +86,15 @@ func runTarget(ctx context.Context, factory PageFactory, t Target, profile strin
 	}
 	defer cleanup()
 
-	page = page.Timeout(perTargetTimeout)
+	// pageNavTimeout caps navigate+WaitLoad; the extractor gets the remaining budget.
+	navPage := page.Timeout(pageNavTimeout)
 
-	if err := page.Navigate(t.URL); err != nil {
+	if err := navPage.Navigate(t.URL); err != nil {
 		result.Error = fmt.Sprintf("navigate: %s", err)
 		result.DurationMs = time.Since(start).Milliseconds()
 		return result
 	}
-	if err := page.WaitLoad(); err != nil {
+	if err := navPage.WaitLoad(); err != nil {
 		result.Error = fmt.Sprintf("wait load: %s", err)
 		result.DurationMs = time.Since(start).Milliseconds()
 		return result
