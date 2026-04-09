@@ -1,0 +1,152 @@
+package browser
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/anatolykoptev/go-browser/cdputil"
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/input"
+	"github.com/go-rod/rod/lib/proto"
+)
+
+func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slowly, submit bool) error {
+	if slowly {
+		// CDP char-by-char path — for bot-detection protected pages (LinkedIn, etc.).
+		// Uses JS focus + CDP dispatchKeyEvent which triggers React onChange
+		// and bypasses PX/bot-detection event interception.
+		return doTypeTextCDP(ctx, page, selector, text, submit)
+	}
+
+	// Default fast path — rod's Input() via Runtime.callFunctionOn.
+	// Works for most sites. Falls back to CDP path on timeout.
+	el, err := resolveElement(ctx, page, selector)
+	if err != nil {
+		return fmt.Errorf("type_text: find %q: %w", selector, err)
+	}
+	_ = el.SelectAllText()
+	if err := el.Input(text); err != nil {
+		return fmt.Errorf("type_text: input: %w", err)
+	}
+	if submit {
+		if err := page.Keyboard.Press(input.Enter); err != nil {
+			return fmt.Errorf("type_text: submit: %w", err)
+		}
+	}
+	return nil
+}
+
+// doTypeTextCDP types text using pure CDP events — reliable on PX-protected pages.
+// Focus via CDP DOM.focus (no Runtime.callFunctionOn), clear via Ctrl+A+Delete, type via dispatchKeyEvent.
+func doTypeTextCDP(ctx context.Context, page *rod.Page, selector, text string, submit bool) error {
+	nodeID, err := cdputil.QuerySelector(page, selector)
+	if err != nil {
+		return fmt.Errorf("type_text: %w", err)
+	}
+	if err := cdputil.FocusNode(page, nodeID); err != nil {
+		return fmt.Errorf("type_text: focus: %w", err)
+	}
+
+	// Clear via Ctrl+A then Delete.
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "a", Code: "KeyA",
+		WindowsVirtualKeyCode: 65, Modifiers: 2,
+	}).Call(page)
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "a", Code: "KeyA",
+	}).Call(page)
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "Delete", Code: "Delete",
+		WindowsVirtualKeyCode: 46,
+	}).Call(page)
+	_ = (proto.InputDispatchKeyEvent{
+		Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "Delete", Code: "Delete",
+	}).Call(page)
+
+	for _, ch := range text {
+		char := string(ch)
+		code := charToCode(ch)
+		vk := charToVK(ch)
+
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: char, Code: code,
+			WindowsVirtualKeyCode: vk,
+		}).Call(page)
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeChar, Text: char, UnmodifiedText: char,
+			WindowsVirtualKeyCode: vk,
+		}).Call(page)
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: char, Code: code,
+			WindowsVirtualKeyCode: vk,
+		}).Call(page)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	if submit {
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "Enter", Code: "Enter",
+			WindowsVirtualKeyCode: 13,
+		}).Call(page)
+		_ = (proto.InputDispatchKeyEvent{
+			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "Enter", Code: "Enter",
+			WindowsVirtualKeyCode: 13,
+		}).Call(page)
+	}
+	return nil
+}
+
+func doFillForm(ctx context.Context, page *rod.Page, fields []FormField) error {
+	for _, f := range fields {
+		el, err := resolveElement(ctx, page, f.Selector)
+		if err != nil {
+			return fmt.Errorf("fill_form: find %q: %w", f.Selector, err)
+		}
+		switch f.Type {
+		case "checkbox":
+			checked, _ := el.Property("checked")
+			want := f.Value == "true"
+			if checked.Bool() != want {
+				if err := el.Click(proto.InputMouseButtonLeft, 1); err != nil {
+					return fmt.Errorf("fill_form: checkbox %q: %w", f.Selector, err)
+				}
+			}
+		case "combobox":
+			if err := el.Select([]string{f.Value}, true, rod.SelectorTypeText); err != nil {
+				return fmt.Errorf("fill_form: select %q: %w", f.Selector, err)
+			}
+		default: // textbox
+			_ = el.SelectAllText()
+			if err := el.Input(f.Value); err != nil {
+				return fmt.Errorf("fill_form: input %q: %w", f.Selector, err)
+			}
+		}
+	}
+	return nil
+}
+
+func doFillFormStealth(ctx context.Context, page *rod.Page, fields []FormField) error {
+	for _, f := range fields {
+		switch f.Type {
+		case "checkbox":
+			nodeID, err := cdputil.QuerySelector(page, f.Selector)
+			if err != nil {
+				return fmt.Errorf("fill_form: find %q: %w", f.Selector, err)
+			}
+			if err := cdputil.ClickNode(page, nodeID, proto.InputMouseButtonLeft, 1); err != nil {
+				return fmt.Errorf("fill_form: checkbox %q: %w", f.Selector, err)
+			}
+		default:
+			if err := doTypeTextCDP(ctx, page, f.Selector, f.Value, false); err != nil {
+				return fmt.Errorf("fill_form: %w", err)
+			}
+		}
+	}
+	return nil
+}
