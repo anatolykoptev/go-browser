@@ -26,14 +26,17 @@ const rebrowserReadyJS = `
 const rebrowserExtractJS = `
 (function() {
   if (window.botDetectorResults) return JSON.stringify(window.botDetectorResults);
-  // Parse visible result cards
+  // Parse visible result cards using for loop (safer with stealth-patched prototypes)
   var out = {};
-  document.querySelectorAll('[class*="test"], [data-test-id]').forEach(function(el) {
+  var els = document.querySelectorAll('[class*="test"], [data-test-id]');
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
     var name = el.getAttribute('data-test-id') || el.className;
-    var passed = el.classList.contains('pass') || el.classList.contains('success');
-    var failed = el.classList.contains('fail') || el.classList.contains('error');
+    var cls = el.getAttribute('class') || '';
+    var passed = cls.indexOf('pass') >= 0 || cls.indexOf('success') >= 0;
+    var failed = cls.indexOf('fail') >= 0 || cls.indexOf('error') >= 0;
     if (name && (passed || failed)) out[name] = passed;
-  });
+  }
   return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
 })()
 `
