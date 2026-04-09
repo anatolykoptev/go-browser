@@ -10,20 +10,33 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-// handleSelftest runs antibot probe targets against the live CloakBrowser instance
-// and returns a structured JSON trust report.
+// HandleSelftest returns an http.HandlerFunc that runs antibot probe targets
+// against the provided CloakBrowser instance and returns a structured JSON trust report.
 //
 // Query parameters:
 //
 //	target     — comma-separated list of probe keys, or "all" / omitted for all targets
 //	profile    — stealth profile name (default: mac_chrome145)
 //	screenshot — set to "1" to save full-page PNGs under /tmp/selftest/
-func (s *Server) handleSelftest(w http.ResponseWriter, r *http.Request) {
-	if s.chrome == nil || !s.chrome.Connected() {
-		writeError(w, http.StatusServiceUnavailable, "chrome not connected")
-		return
+//
+// Exported so that embedders (e.g. go-wowa) can register this handler on their own mux.
+func HandleSelftest(chrome *ChromeManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if chrome == nil || !chrome.Connected() {
+			writeError(w, http.StatusServiceUnavailable, "chrome not connected")
+			return
+		}
+		selftestHandlerCore(chrome, w, r)
 	}
+}
 
+// handleSelftest is the Server-method binding for the built-in HTTP server.
+func (s *Server) handleSelftest(w http.ResponseWriter, r *http.Request) {
+	HandleSelftest(s.chrome)(w, r)
+}
+
+// selftestHandlerCore performs the actual selftest dispatch.
+func selftestHandlerCore(chrome *ChromeManager, w http.ResponseWriter, r *http.Request) {
 	targetParam := r.URL.Query().Get("target")
 	profileParam := r.URL.Query().Get("profile")
 	screenshotParam := r.URL.Query().Get("screenshot")
@@ -40,7 +53,7 @@ func (s *Server) handleSelftest(w http.ResponseWriter, r *http.Request) {
 
 	screenshot := screenshotParam == "1"
 
-	factory := makePageFactory(s.chrome, profileParam)
+	factory := makePageFactory(chrome, profileParam)
 
 	report, err := selftest.Run(r.Context(), factory, targets, profileParam, screenshot)
 	if err != nil {
