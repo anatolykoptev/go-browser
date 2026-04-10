@@ -183,5 +183,23 @@ func buildFilteredIndex(
 			filteredRoots = append(filteredRoots, r)
 		}
 	}
+
+	// Fallback: if no original roots survived (e.g. "forms"/"main" subtree filters
+	// that never mark the RootWebArea), derive roots from kept nodes that have no
+	// kept parent — so the rendered tree is always reachable.
+	if len(filteredRoots) == 0 && len(filtered) > 0 {
+		isKeptChild := make(map[string]bool, len(keep))
+		for id := range filtered {
+			for _, cid := range filtered[id].children {
+				isKeptChild[cid] = true
+			}
+		}
+		for id := range filtered {
+			if !isKeptChild[id] {
+				filteredRoots = append(filteredRoots, id)
+			}
+		}
+	}
+
 	return filtered, filteredRoots
 }
