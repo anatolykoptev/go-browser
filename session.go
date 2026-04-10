@@ -39,6 +39,7 @@ type SessionPool struct {
 	maxConcurrent int
 	stop          chan struct{}
 	done          chan struct{}
+	closed        bool
 }
 
 // NewSessionPool creates a SessionPool with the given TTL and max concurrent sessions.
@@ -56,11 +57,14 @@ func NewSessionPool(ttl time.Duration, maxConcurrent int) *SessionPool {
 }
 
 // Create allocates a new session with the given proxy and returns its ID.
-// Returns an error if the pool is at capacity.
+// Returns an error if the pool is at capacity or has been closed.
 func (p *SessionPool) Create(proxy string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed {
+		return "", fmt.Errorf("session pool is closed")
+	}
 	if p.maxConcurrent > 0 && len(p.sessions) >= p.maxConcurrent {
 		return "", fmt.Errorf("session pool at capacity (%d)", p.maxConcurrent)
 	}
@@ -82,12 +86,15 @@ func (p *SessionPool) Create(proxy string) (string, error) {
 }
 
 // Get returns the session with the given ID, updating LastUsed.
-// Returns an error if the session does not exist or has expired.
+// Returns an error if the pool is closed, the session does not exist, or has expired.
 // Expired sessions are eagerly removed from the pool without waiting for the reaper.
 func (p *SessionPool) Get(id string) (*Session, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed {
+		return nil, fmt.Errorf("session pool is closed")
+	}
 	s, ok := p.sessions[id]
 	if !ok {
 		return nil, fmt.Errorf("session %q not found (may have expired)", id)
@@ -131,6 +138,7 @@ func (p *SessionPool) Count() int {
 }
 
 // Close stops the reaper and destroys all sessions.
+// After Close, Create and Get return errors.
 func (p *SessionPool) Close() {
 	close(p.stop)
 	<-p.done
@@ -138,6 +146,7 @@ func (p *SessionPool) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.sessions = make(map[string]*Session)
+	p.closed = true
 }
 
 // reaper runs in the background, evicting sessions idle longer than ttl.
@@ -162,7 +171,7 @@ func (p *SessionPool) evictExpired() {
 	defer p.mu.Unlock()
 
 	for id, s := range p.sessions {
-		if time.Since(s.LastUsed) > p.ttl {
+		if s.isExpired() {
 			delete(p.sessions, id)
 		}
 	}
