@@ -6,6 +6,16 @@
 // in the same scope. Use window.__sp directly or wrap in a nested IIFE.
 
 (() => {
+  // pdfViewerEnabled — headless Chrome defaults to false; real Chrome sets true.
+  // CreepJS likeHeadless checks this directly.
+  if (!navigator.pdfViewerEnabled) {
+    Object.defineProperty(Navigator.prototype, 'pdfViewerEnabled', {
+      get: () => true,
+      configurable: true,
+      enumerable: true,
+    });
+  }
+
   // Web Share API — present on macOS Chrome but not in headless.
   if (!navigator.share) {
     Object.defineProperty(Navigator.prototype, 'share', {
