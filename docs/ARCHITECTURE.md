@@ -120,7 +120,7 @@ See `go-browser/docs/RESEARCH-LOG.md` for investigation history.
 ### Four-Layer Stealth Stack
 ```
 Layer 4: go-wowa auto-bypass   (protection profiles, active evasion JS, canvas noise)
-Layer 3: go-rod/stealth        (puppeteer-extra JS evasions)
+Layer 3: (removed — stealth_complement.js is the sole JS layer)
 Layer 2: stealth_complement.js (6 modules, toString masking, Worker proxy)
 Layer 1: CloakBrowser C++      (33 chromium patches)
 ```
