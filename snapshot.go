@@ -21,6 +21,7 @@ type nodeInfo struct {
 	hasPopup                                  string
 	invalid                                   string
 	autoComplete                              string
+	backendNodeID                             proto.DOMBackendNodeID
 }
 
 // extractNodeInfo builds a nodeInfo from a CDP AccessibilityAXNode.
@@ -118,7 +119,7 @@ func isNoiseRole(role string) bool {
 	}
 }
 
-func doSnapshot(page *rod.Page, maxDepth int, format, filter, selector string) (string, error) {
+func doSnapshot(page *rod.Page, maxDepth int, format, filter, selector string, rm *RefMap) (string, error) {
 	// Collect AX trees from main frame + all child frames.
 	allNodes := collectAXNodes(page, proto.PageFrameID(""))
 
@@ -146,7 +147,7 @@ func doSnapshot(page *rod.Page, maxDepth int, format, filter, selector string) (
 	case "text":
 		return renderAXTree(allNodes, maxDepth, filter, selector), nil
 	default:
-		return renderAXTreeYAMLWithURLs(allNodes, maxDepth, page, filter, selector), nil
+		return renderAXTreeYAMLWithURLsAndRefs(allNodes, maxDepth, page, filter, selector, rm), nil
 	}
 }
 

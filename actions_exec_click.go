@@ -51,7 +51,7 @@ var modifierKeyMap = map[string]input.Key{
 	"Meta":    input.MetaLeft,
 }
 
-// resolveElement finds an element using CSS, text=, or xpath= selector.
+// resolveElement finds an element using CSS, text=, xpath=, or role= selector.
 //
 //nolint:cyclop // simple prefix dispatch
 func resolveElement(ctx context.Context, page *rod.Page, selector string) (*rod.Element, error) {
@@ -63,6 +63,9 @@ func resolveElement(ctx context.Context, page *rod.Page, selector string) (*rod.
 	case strings.HasPrefix(selector, "xpath="):
 		xpath := strings.TrimPrefix(selector, "xpath=")
 		return p.ElementX(xpath)
+	case strings.HasPrefix(selector, "role="):
+		role := strings.TrimPrefix(selector, "role=")
+		return findByRole(ctx, page, role)
 	default:
 		return p.Element(selector)
 	}

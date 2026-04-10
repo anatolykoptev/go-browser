@@ -10,12 +10,18 @@ func init() {
 
 func execClick(dc dispatchContext, a Action) (any, error) {
 	if dc.stealthMode {
-		return nil, doClickStealth(dc.ctx, dc.page, a)
+		return nil, withRetry(dc.ctx, func() error {
+			return doClickStealth(dc.ctx, dc.page, a)
+		})
 	}
 	if a.Humanize && dc.cursor != nil {
-		return nil, doClickHumanized(dc.ctx, dc.page, a.Selector, dc.cursor)
+		return nil, withRetry(dc.ctx, func() error {
+			return doClickHumanized(dc.ctx, dc.page, a.Selector, dc.cursor)
+		})
 	}
-	return nil, doClick(dc.ctx, dc.page, a)
+	return nil, withRetry(dc.ctx, func() error {
+		return doClick(dc.ctx, dc.page, a)
+	})
 }
 
 func execHover(dc dispatchContext, a Action) (any, error) {

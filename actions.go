@@ -75,6 +75,7 @@ type dispatchContext struct {
 	cursor      *humanize.Cursor
 	logs        *LogCollector
 	stealthMode bool
+	refMap      *RefMap
 }
 
 // actionExecutor is a function that runs a single action and returns optional data.
