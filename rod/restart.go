@@ -34,7 +34,8 @@ func (b *Browser) restart() error {
 		b.launcher.Kill() // clean up zombie Chromium
 	}
 
-	l := launcher.New().Headless(b.opts.Headless)
+	l := launcher.New().Headless(b.opts.Headless).
+		Set("disable-blink-features", "AutomationControlled")
 	if b.opts.Bin != "" {
 		l = l.Bin(b.opts.Bin)
 	}
