@@ -110,6 +110,11 @@ func ExecuteAction(
 		// Disable cursor humanization inside frames — coordinates are relative
 		// to the parent viewport, not the frame viewport.
 		cursor = nil
+
+		// Force CDP typing inside frames — Runtime.callFunctionOn fails cross-origin.
+		if a.Type == "type_text" || a.Type == "fill_form" {
+			a.Slowly = true
+		}
 	}
 
 	exec, ok := actionRegistry[a.Type]
