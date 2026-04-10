@@ -67,10 +67,13 @@ func NodeCenter(page *rod.Page, nodeID NodeID) (float64, float64, error) {
 
 // FocusNode focuses a DOM node using CDP DOM.focus.
 func FocusNode(page *rod.Page, nodeID NodeID) error {
-	if err := (proto.DOMFocus{NodeID: nodeID}).Call(page); err != nil {
-		return fmt.Errorf("DOM.focus: %w", err)
+	err := (proto.DOMFocus{NodeID: nodeID}).Call(page)
+	if err == nil {
+		return nil
 	}
-	return nil
+	// Fallback for contenteditable divs and other non-focusable elements:
+	// click the center of the element to focus it.
+	return ClickNode(page, nodeID, proto.InputMouseButtonLeft, 1)
 }
 
 // ScrollIntoView scrolls a node into the viewport using CDP DOM.scrollIntoViewIfNeeded.
