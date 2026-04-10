@@ -64,13 +64,14 @@ func resolveElement(ctx context.Context, page *rod.Page, selector string, refMap
 		if !found {
 			return nil, fmt.Errorf("ref %q not found — take a new snapshot", ref)
 		}
-		res, err := proto.DOMDescribeNode{BackendNodeID: backendID}.Call(page)
+		// Resolve BackendNodeID → RemoteObjectID via CDP DOM.resolveNode.
+		resolved, err := proto.DOMResolveNode{BackendNodeID: backendID}.Call(page)
 		if err != nil {
-			return nil, fmt.Errorf("ref %q: describe node: %w", ref, err)
+			return nil, fmt.Errorf("ref %q: resolve node: %w", ref, err)
 		}
-		el, elErr := page.Context(ctx).ElementFromNode(&proto.DOMNode{NodeID: res.Node.NodeID, BackendNodeID: backendID})
+		el, elErr := page.Context(ctx).ElementFromObject(resolved.Object)
 		if elErr != nil {
-			return nil, fmt.Errorf("ref %q: element from node: %w", ref, elErr)
+			return nil, fmt.Errorf("ref %q: element from object: %w", ref, elErr)
 		}
 		return el, nil
 	}
