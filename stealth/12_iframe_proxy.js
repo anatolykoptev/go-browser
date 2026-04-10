@@ -1,46 +1,45 @@
 // iframe.contentWindow proxy fix — Target.setAutoAttach (Gap C) enables
 // the DevTools protocol to eagerly create browsing contexts for iframes
 // with srcdoc set, even when they are not yet appended to the DOM.
-// Chrome eagerly sets contentWindow as an OWN property on the iframe
-// instance. Real Chrome returns null contentWindow for detached iframes.
+// Chrome sets contentWindow via C++ internals as an OWN data property on
+// the iframe instance, bypassing JS set traps (Object.defineProperty).
+// Real Chrome returns null contentWindow for detached iframes.
 // CreepJS hasIframeProxy detects this discrepancy.
 //
-// Fix: intercept iframe creation via document.createElement override.
-// For each new iframe, install a defineProperty trap on the element
-// that, when Chrome sets contentWindow as an own property, wraps it
-// in a getter that returns null when the iframe is not connected.
+// Fix: wrap each new iframe in a Proxy. A Proxy get trap intercepts ALL
+// reads regardless of how the underlying property was stored (C++ or JS).
+// When contentWindow is read on a detached iframe, return null.
 
 (() => {
   const origCreateElement = Document.prototype.createElement;
 
   Document.prototype.createElement = function(tag, options) {
     const el = origCreateElement.call(this, tag, options);
-    if (typeof tag === 'string' && tag.toLowerCase() === 'iframe') {
-      // Install a defineProperty trap on this specific iframe element.
-      // Chrome (via Target.setAutoAttach) will try to set contentWindow
-      // as an own data property. We intercept that set and replace it
-      // with a conditional getter.
-      const origDefineProperty = Object.defineProperty;
-      const patchContentWindow = (element) => {
-        let realWindow = null;
-
-        // Wait for Chrome to set the own contentWindow property.
-        const observer = new MutationObserver(() => {});
-        // Use a one-shot defineProperty trap on the element:
-        const origProto = Object.getPrototypeOf(element);
-        origDefineProperty.call(Object, element, 'contentWindow', {
-          get() {
-            return element.isConnected ? realWindow : null;
-          },
-          set(v) {
-            realWindow = v;
-          },
-          configurable: true,
-          enumerable: true,
-        });
-      };
-      patchContentWindow(el);
+    if (typeof tag !== 'string' || tag.toLowerCase() !== 'iframe') {
+      return el;
     }
-    return el;
+
+    const proxy = new Proxy(el, {
+      get(target, prop, receiver) {
+        if (prop === 'contentWindow') {
+          // Read the actual value Chrome stored (may be own C++ property).
+          const val = target.contentWindow;
+          // Return null when the iframe is not in the document — matches
+          // real Chrome behaviour for detached iframes without setAutoAttach.
+          return target.isConnected ? val : null;
+        }
+        const val = Reflect.get(target, prop, receiver);
+        // Bind functions so `this` inside them refers to the real element.
+        if (typeof val === 'function') {
+          return val.bind(target);
+        }
+        return val;
+      },
+      set(target, prop, value, receiver) {
+        return Reflect.set(target, prop, value, target);
+      },
+    });
+
+    return proxy;
   };
 })();
