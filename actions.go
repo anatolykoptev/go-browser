@@ -104,6 +104,14 @@ func ExecuteAction(
 	if a.FrameSelector != "" {
 		framePage, err := resolveFrame(ctx, page, a.FrameSelector)
 		if err != nil {
+			// OOP cross-origin iframe fallback: click iframe area to focus,
+			// then type via Input.dispatchKeyEvent on the main page.
+			if a.Type == "type_text" {
+				if clickErr := clickIframeArea(ctx, page, a.FrameSelector); clickErr != nil {
+					return ActionResult{Action: a.Type, Ok: false, Error: fmt.Sprintf("frame fallback: %v (original: %v)", clickErr, err)}
+				}
+				return execTypeViaKeyboard(ctx, page, a)
+			}
 			return ActionResult{Action: a.Type, Ok: false, Error: err.Error()}
 		}
 		targetPage = framePage
