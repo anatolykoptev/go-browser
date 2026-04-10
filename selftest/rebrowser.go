@@ -10,7 +10,7 @@ import (
 
 const rebrowserWaitTimeout = 30 * time.Second
 
-// rebrowserReadyJS polls for window.botDetectorResults to be populated.
+// rebrowserReadyJS polls for window.botDetectorResults or DOM results.
 // Returns a sentinel "ready" string when results are available.
 const rebrowserReadyJS = `
 () => {
@@ -18,6 +18,12 @@ const rebrowserReadyJS = `
     var r = window.botDetectorResults;
     if (r && typeof r === 'object' && Object.keys(r).length > 0) return 'ready';
   } catch(e) {}
+  // DOM fallback: rebrowser renders a results table when JS finishes
+  var rows = document.querySelectorAll('table tr, .result-row, [class*="result"]');
+  if (rows.length > 2) return 'ready-dom';
+  // Check for any text indicating test completed
+  var body = document.body ? document.body.innerText : '';
+  if (body.length > 500 && (body.indexOf('headless') >= 0 || body.indexOf('automation') >= 0 || body.indexOf('bot') >= 0)) return 'ready-text';
   return null;
 }
 `
@@ -25,11 +31,37 @@ const rebrowserReadyJS = `
 // rebrowserExtractJS extracts the full botDetectorResults object as JSON.
 const rebrowserExtractJS = `
 () => {
+  var out = { checks: {}, _debug: '', _source: 'none' };
+
+  // Try window.botDetectorResults first
   try {
     var r = window.botDetectorResults;
-    if (r && typeof r === 'object') return JSON.stringify(r);
-  } catch(e) {}
-  return null;
+    if (r && typeof r === 'object' && Object.keys(r).length > 0) {
+      out.checks = r;
+      out._source = 'window';
+      out._debug = 'found window.botDetectorResults with ' + Object.keys(r).length + ' keys';
+      return JSON.stringify(out);
+    }
+  } catch(e) { out._debug = 'window error: ' + e.message; }
+
+  // DOM fallback: parse result table rows
+  var rows = document.querySelectorAll('table tr');
+  for (var i = 0; i < rows.length; i++) {
+    var cells = rows[i].querySelectorAll('td, th');
+    if (cells.length >= 2) {
+      var k = cells[0].textContent.trim();
+      var v = cells[1].textContent.trim();
+      if (k) out.checks[k] = (v === 'true' || v === 'detected' || v === 'yes');
+    }
+  }
+
+  // Capture page text for debugging
+  out._debug = (out._debug || '') + ' | DOM rows: ' + rows.length;
+  out._source = rows.length > 0 ? 'dom' : 'none';
+  if (document.body) out._debug += ' | body[0:300]: ' + document.body.innerText.substring(0, 300);
+
+  if (Object.keys(out.checks).length === 0) return null;
+  return JSON.stringify(out);
 }
 `
 
@@ -67,10 +99,23 @@ func extractRebrowser(ctx context.Context, page *rod.Page) (TargetResult, error)
 	}
 	rawJSON := val.Value.String()
 
-	// botDetectorResults is a map[string]bool: key=check name, value=true means bot detected.
+	// Response is either {checks:{}, _debug:'', _source:''} (new) or map[string]bool (old).
+	var envelope struct {
+		Checks map[string]any `json:"checks"`
+		Debug  string         `json:"_debug"`
+		Source string         `json:"_source"`
+	}
 	var checks map[string]any
-	if err := parseJSON(rawJSON, &checks); err != nil {
+	if err := parseJSON(rawJSON, &envelope); err != nil {
 		return result, fmt.Errorf("rebrowser: parse result: %w", err)
+	}
+	if envelope.Checks != nil {
+		checks = envelope.Checks
+	} else {
+		// Legacy format: top-level map[string]bool
+		if err := parseJSON(rawJSON, &checks); err != nil {
+			return result, fmt.Errorf("rebrowser: parse legacy result: %w", err)
+		}
 	}
 
 	botDetected := false
@@ -89,9 +134,16 @@ func extractRebrowser(ctx context.Context, page *rod.Page) (TargetResult, error)
 
 	result.OK = !botDetected
 	result.TrustScore = trustScore
-	result.Sections = map[string]any{
+	sections := map[string]any{
 		"checks":      checks,
 		"botDetected": botDetected,
 	}
+	if envelope.Debug != "" {
+		sections["_debug"] = envelope.Debug
+	}
+	if envelope.Source != "" {
+		sections["_source"] = envelope.Source
+	}
+	result.Sections = sections
 	return result, nil
 }
