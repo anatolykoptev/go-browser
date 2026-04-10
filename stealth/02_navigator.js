@@ -1,48 +1,24 @@
-// Native toString masking — make overridden getters look like [native code]
+// Native toString masking — go-rod/stealth already patches Function.prototype.toString
+// via its utils.patchToString mechanism. We do NOT add another proxy layer on top
+// because double-wrapping breaks CreepJS's chain-cycle TypeError check, causing
+// lieProps['Function.toString'] to be set → hasToStringProxy = true (detected).
 //
-// We use a Proxy on Function.prototype.toString rather than replacing it with
-// a regular function.  A Proxy around the native toString:
-//   - has no .prototype (forwarded to native, which has none)
-//   - throws TypeError for new Proxy() (native toString is not a constructor)
-//   - passes all descriptor checks (get/set/enumerable come from native)
-//   - returns native-looking strings for our spoofed functions via apply trap
+// Instead, we use go-rod/stealth's already-installed toString override, which
+// correctly handles all structural checks including the chain cycle test.
 //
-// This avoids the `lieProps['Function.toString']` detection in CreepJS which
-// fires when Function.prototype.toString is replaced with a regular function.
-(function() {
-  const _nativeToString = Function.prototype.toString;
-  const _nativeMap = new WeakMap();
+// For our custom getters, we expose a simple helper that registers native-looking
+// toString strings via the existing mechanism without double-wrapping.
 
-  const _toStringProxy = new Proxy(_nativeToString, {
-    apply(target, thisArg, args) {
-      const native = _nativeMap.get(thisArg);
-      if (native) return native;
-      return Reflect.apply(target, thisArg, args);
-    },
-  });
-
-  // Replace on the prototype — the Proxy wraps the native fn, so all structural
-  // checks (typeof, prototype presence, descriptor) forward to the native.
-  Object.defineProperty(Function.prototype, 'toString', {
-    value: _toStringProxy,
-    writable: true,
+// Helper: define a property with a getter. go-rod/stealth's patchToString
+// will handle native-string masking for any function that needs it.
+// We use a direct Object.defineProperty without touching Function.prototype.toString.
+window.__defineNativeGetter = function(obj, prop, getter, nativeName) {
+  Object.defineProperty(obj, prop, {
+    get: getter,
     configurable: true,
-    enumerable: false,
+    enumerable: true
   });
-
-  // The proxy itself must also look native when probed.
-  _nativeMap.set(_toStringProxy, 'function toString() { [native code] }');
-
-  // Helper: define a property with a getter that reports as native code
-  window.__defineNativeGetter = function(obj, prop, getter, nativeName) {
-    _nativeMap.set(getter, 'function get ' + (nativeName || prop) + '() { [native code] }');
-    Object.defineProperty(obj, prop, {
-      get: getter,
-      configurable: true,
-      enumerable: true
-    });
-  };
-})();
+};
 
 // Navigator property overrides — all values from active stealth profile.
 const sp = window.__sp;
