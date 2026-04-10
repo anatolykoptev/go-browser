@@ -44,7 +44,10 @@ func execTypeViaKeyboard(ctx context.Context, page *rod.Page, a Action) ActionRe
 	return ActionResult{Action: a.Type, Ok: true}
 }
 
-const frameRetryInterval = 500 * time.Millisecond
+const (
+	frameRetryInterval = 500 * time.Millisecond
+	frameMaxRetries    = 10 // 10 × 500ms = 5 seconds max wait for iframe
+)
 
 // parseFrameSelector returns ("css", selector) or ("url", pattern).
 func parseFrameSelector(sel string) (string, string) {
@@ -66,7 +69,7 @@ func resolveFrame(ctx context.Context, page *rod.Page, selector string) (*rod.Pa
 	kind, pattern := parseFrameSelector(selector)
 
 	var lastErr error
-	for {
+	for attempt := range frameMaxRetries {
 		var frame *rod.Page
 		var err error
 		switch kind {
@@ -80,13 +83,17 @@ func resolveFrame(ctx context.Context, page *rod.Page, selector string) (*rod.Pa
 		}
 		lastErr = err
 
+		// Don't sleep after last attempt.
+		if attempt == frameMaxRetries-1 {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("frame %q: %w (last: %v)", selector, ctx.Err(), lastErr)
 		case <-time.After(frameRetryInterval):
-			// retry
 		}
 	}
+	return nil, fmt.Errorf("frame %q: not found after %d retries (last: %v)", selector, frameMaxRetries, lastErr)
 }
 
 // resolveFrameByCSS finds an iframe element by CSS selector and enters its frame context.
