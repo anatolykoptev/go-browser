@@ -6,13 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anatolykoptev/go-browser/cdputil"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
 
-func doWaitFor(ctx context.Context, page *rod.Page, selector string) error {
-	if _, err := resolveElement(ctx, page, selector); err != nil {
+func doWaitFor(ctx context.Context, page *rod.Page, selector string, refMap *RefMap) error {
+	if _, err := resolveElement(ctx, page, selector, refMap); err != nil {
 		return fmt.Errorf("wait_for %q: %w", selector, err)
 	}
 	return nil
@@ -94,7 +93,7 @@ func doSleep(ctx context.Context, waitMs int) error {
 // If urlContains is non-empty, the new URL must also contain that substring.
 // If selector is non-empty, waits for the element after URL change.
 // Returns map with "url" and "title" (and "timeout"="true" on timeout).
-func doWaitForNavigation(ctx context.Context, page *rod.Page, urlContains, selector string) (map[string]string, error) {
+func doWaitForNavigation(ctx context.Context, page *rod.Page, urlContains, selector string, refMap *RefMap) (map[string]string, error) {
 	startURL := page.MustInfo().URL
 	for {
 		select {
@@ -121,7 +120,7 @@ func doWaitForNavigation(ctx context.Context, page *rod.Page, urlContains, selec
 				continue
 			}
 			if selector != "" {
-				if _, err := resolveElement(ctx, page, selector); err != nil {
+				if _, err := resolveElement(ctx, page, selector, refMap); err != nil {
 					return map[string]string{"url": currentURL, "title": info.Title, "timeout": "true"},
 						fmt.Errorf("wait_for_navigation selector %q: %w", selector, err)
 				}
@@ -131,9 +130,9 @@ func doWaitForNavigation(ctx context.Context, page *rod.Page, urlContains, selec
 	}
 }
 
-func doWaitForStealth(ctx context.Context, page *rod.Page, selector string) error {
+func doWaitForStealth(ctx context.Context, page *rod.Page, selector string, refMap *RefMap) error {
 	for {
-		_, err := cdputil.QuerySelector(page, selector)
+		_, err := resolveRefNodeID(page, selector, refMap)
 		if err == nil {
 			return nil
 		}

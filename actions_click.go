@@ -11,7 +11,7 @@ func init() {
 func execClick(dc dispatchContext, a Action) (any, error) {
 	if dc.stealthMode {
 		return nil, withRetry(dc.ctx, func() error {
-			return doClickStealth(dc.ctx, dc.page, a)
+			return doClickStealth(dc.ctx, dc.page, a, dc.refMap)
 		})
 	}
 	if a.Humanize && dc.cursor != nil {
@@ -20,18 +20,18 @@ func execClick(dc dispatchContext, a Action) (any, error) {
 		})
 	}
 	return nil, withRetry(dc.ctx, func() error {
-		return doClick(dc.ctx, dc.page, a)
+		return doClick(dc.ctx, dc.page, a, dc.refMap)
 	})
 }
 
 func execHover(dc dispatchContext, a Action) (any, error) {
 	if dc.stealthMode {
-		return nil, doHoverStealth(dc.ctx, dc.page, a.Selector)
+		return nil, doHoverStealth(dc.ctx, dc.page, a.Selector, dc.refMap)
 	}
 	if a.Humanize && dc.cursor != nil {
 		return nil, doHoverHumanized(dc.ctx, dc.page, a.Selector, dc.cursor)
 	}
-	return nil, doHover(dc.ctx, dc.page, a.Selector)
+	return nil, doHover(dc.ctx, dc.page, a.Selector, dc.refMap)
 }
 
 func execGoBack(dc dispatchContext, _ Action) (any, error) {

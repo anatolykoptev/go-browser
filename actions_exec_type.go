@@ -11,17 +11,17 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slowly, submit bool) error {
+func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slowly, submit bool, refMap *RefMap) error {
 	if slowly {
 		// CDP char-by-char path — for bot-detection protected pages (LinkedIn, etc.).
 		// Uses JS focus + CDP dispatchKeyEvent which triggers React onChange
 		// and bypasses PX/bot-detection event interception.
-		return doTypeTextCDP(ctx, page, selector, text, submit)
+		return doTypeTextCDP(ctx, page, selector, text, submit, refMap)
 	}
 
 	// Default fast path — rod's Input() via Runtime.callFunctionOn.
 	// Works for most sites. Falls back to CDP path on timeout.
-	el, err := resolveElement(ctx, page, selector)
+	el, err := resolveElement(ctx, page, selector, refMap)
 	if err != nil {
 		return fmt.Errorf("type_text: find %q: %w", selector, err)
 	}
@@ -39,8 +39,8 @@ func doTypeText(ctx context.Context, page *rod.Page, selector, text string, slow
 
 // doTypeTextCDP types text using pure CDP events — reliable on PX-protected pages.
 // Focus via CDP DOM.focus (no Runtime.callFunctionOn), clear via Ctrl+A+Delete, type via dispatchKeyEvent.
-func doTypeTextCDP(ctx context.Context, page *rod.Page, selector, text string, submit bool) error {
-	nodeID, err := cdputil.QuerySelector(page, selector)
+func doTypeTextCDP(ctx context.Context, page *rod.Page, selector, text string, submit bool, refMap *RefMap) error {
+	nodeID, err := resolveRefNodeID(page, selector, refMap)
 	if err != nil {
 		return fmt.Errorf("type_text: %w", err)
 	}
@@ -102,9 +102,9 @@ func doTypeTextCDP(ctx context.Context, page *rod.Page, selector, text string, s
 	return nil
 }
 
-func doFillForm(ctx context.Context, page *rod.Page, fields []FormField) error {
+func doFillForm(ctx context.Context, page *rod.Page, fields []FormField, refMap *RefMap) error {
 	for _, f := range fields {
-		el, err := resolveElement(ctx, page, f.Selector)
+		el, err := resolveElement(ctx, page, f.Selector, refMap)
 		if err != nil {
 			return fmt.Errorf("fill_form: find %q: %w", f.Selector, err)
 		}
@@ -131,11 +131,11 @@ func doFillForm(ctx context.Context, page *rod.Page, fields []FormField) error {
 	return nil
 }
 
-func doFillFormStealth(ctx context.Context, page *rod.Page, fields []FormField) error {
+func doFillFormStealth(ctx context.Context, page *rod.Page, fields []FormField, refMap *RefMap) error {
 	for _, f := range fields {
 		switch f.Type {
 		case "checkbox":
-			nodeID, err := cdputil.QuerySelector(page, f.Selector)
+			nodeID, err := resolveRefNodeID(page, f.Selector, refMap)
 			if err != nil {
 				return fmt.Errorf("fill_form: find %q: %w", f.Selector, err)
 			}
@@ -143,7 +143,7 @@ func doFillFormStealth(ctx context.Context, page *rod.Page, fields []FormField) 
 				return fmt.Errorf("fill_form: checkbox %q: %w", f.Selector, err)
 			}
 		default:
-			if err := doTypeTextCDP(ctx, page, f.Selector, f.Value, false); err != nil {
+			if err := doTypeTextCDP(ctx, page, f.Selector, f.Value, false, refMap); err != nil {
 				return fmt.Errorf("fill_form: %w", err)
 			}
 		}

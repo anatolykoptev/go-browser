@@ -51,10 +51,30 @@ var modifierKeyMap = map[string]input.Key{
 	"Meta":    input.MetaLeft,
 }
 
-// resolveElement finds an element using CSS, text=, xpath=, or role= selector.
+// resolveElement finds an element using ref=, CSS, text=, xpath=, or role= selector.
 //
 //nolint:cyclop // simple prefix dispatch
-func resolveElement(ctx context.Context, page *rod.Page, selector string) (*rod.Element, error) {
+func resolveElement(ctx context.Context, page *rod.Page, selector string, refMap *RefMap) (*rod.Element, error) {
+	// Ref-based resolution: ref=eN → BackendDOMNodeID → rod.Element.
+	if ref, ok := ParseRef(selector); ok {
+		if refMap == nil {
+			return nil, fmt.Errorf("ref %q used but no snapshot taken yet", ref)
+		}
+		backendID, found := refMap.Resolve(ref)
+		if !found {
+			return nil, fmt.Errorf("ref %q not found — take a new snapshot", ref)
+		}
+		res, err := proto.DOMDescribeNode{BackendNodeID: backendID}.Call(page)
+		if err != nil {
+			return nil, fmt.Errorf("ref %q: describe node: %w", ref, err)
+		}
+		el, elErr := page.Context(ctx).ElementFromNode(&proto.DOMNode{NodeID: res.Node.NodeID, BackendNodeID: backendID})
+		if elErr != nil {
+			return nil, fmt.Errorf("ref %q: element from node: %w", ref, elErr)
+		}
+		return el, nil
+	}
+
 	p := page.Context(ctx)
 	switch {
 	case strings.HasPrefix(selector, "text="):
@@ -86,8 +106,27 @@ func holdModifiers(page *rod.Page, modifiers []string) func() {
 	}
 }
 
-func doClick(ctx context.Context, page *rod.Page, a Action) error {
-	el, err := resolveElement(ctx, page, a.Selector)
+// resolveRefNodeID resolves a ref= selector to a CDP NodeID, or falls back to cdputil.QuerySelector.
+func resolveRefNodeID(page *rod.Page, selector string, refMap *RefMap) (cdputil.NodeID, error) {
+	if ref, ok := ParseRef(selector); ok {
+		if refMap == nil {
+			return 0, fmt.Errorf("ref %q used but no snapshot taken yet", ref)
+		}
+		backendID, found := refMap.Resolve(ref)
+		if !found {
+			return 0, fmt.Errorf("ref %q not found — take a new snapshot", ref)
+		}
+		res, err := proto.DOMDescribeNode{BackendNodeID: backendID}.Call(page)
+		if err != nil {
+			return 0, fmt.Errorf("ref %q: describe node: %w", ref, err)
+		}
+		return res.Node.NodeID, nil
+	}
+	return cdputil.QuerySelector(page, selector)
+}
+
+func doClick(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) error {
+	el, err := resolveElement(ctx, page, a.Selector, refMap)
 	if err != nil {
 		return fmt.Errorf("click: find %q: %w", a.Selector, err)
 	}
@@ -114,8 +153,8 @@ func doClick(ctx context.Context, page *rod.Page, a Action) error {
 	return nil
 }
 
-func doClickStealth(ctx context.Context, page *rod.Page, a Action) error {
-	nodeID, err := cdputil.QuerySelector(page, a.Selector)
+func doClickStealth(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) error {
+	nodeID, err := resolveRefNodeID(page, a.Selector, refMap)
 	if err != nil {
 		return fmt.Errorf("click: %w", err)
 	}

@@ -96,7 +96,7 @@ func registerAction(actionType string, exec actionExecutor) {
 // When stealthMode is true, actions that would trigger Runtime.callFunctionOn
 // are routed through cdputil using pure CDP DOM/Input methods instead.
 func ExecuteAction(
-	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool,
+	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool, refMap *RefMap,
 ) ActionResult {
 	exec, ok := actionRegistry[a.Type]
 	if !ok {
@@ -109,6 +109,7 @@ func ExecuteAction(
 		cursor:      cursor,
 		logs:        logs,
 		stealthMode: stealthMode,
+		refMap:      refMap,
 	}
 
 	data, err := exec(dc, a)

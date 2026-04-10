@@ -74,9 +74,9 @@ func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 	return nil
 }
 
-func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float64) error {
+func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float64, refMap *RefMap) error {
 	if selector != "" {
-		el, err := resolveElement(ctx, page, selector)
+		el, err := resolveElement(ctx, page, selector, refMap)
 		if err != nil {
 			return fmt.Errorf("scroll: find %q: %w", selector, err)
 		}
@@ -102,8 +102,8 @@ func doResize(page *rod.Page, width, height int) error {
 	})
 }
 
-func doSelectOption(ctx context.Context, page *rod.Page, selector string, values []string) error {
-	el, err := resolveElement(ctx, page, selector)
+func doSelectOption(ctx context.Context, page *rod.Page, selector string, values []string, refMap *RefMap) error {
+	el, err := resolveElement(ctx, page, selector, refMap)
 	if err != nil {
 		return fmt.Errorf("select_option: find %q: %w", selector, err)
 	}
@@ -120,8 +120,8 @@ func doGoBack(page *rod.Page) error {
 	return nil
 }
 
-func doHover(ctx context.Context, page *rod.Page, selector string) error {
-	el, err := resolveElement(ctx, page, selector)
+func doHover(ctx context.Context, page *rod.Page, selector string, refMap *RefMap) error {
+	el, err := resolveElement(ctx, page, selector, refMap)
 	if err != nil {
 		return fmt.Errorf("hover: find %q: %w", selector, err)
 	}
@@ -131,8 +131,8 @@ func doHover(ctx context.Context, page *rod.Page, selector string) error {
 	return nil
 }
 
-func doHoverStealth(ctx context.Context, page *rod.Page, selector string) error {
-	nodeID, err := cdputil.QuerySelector(page, selector)
+func doHoverStealth(ctx context.Context, page *rod.Page, selector string, refMap *RefMap) error {
+	nodeID, err := resolveRefNodeID(page, selector, refMap)
 	if err != nil {
 		return fmt.Errorf("hover: %w", err)
 	}
