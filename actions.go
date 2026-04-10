@@ -10,37 +10,38 @@ import (
 
 // Action describes a single Chrome interaction step.
 type Action struct {
-	Type        string        `json:"type" jsonschema:"Action type: click, type_text, wait_for (CSS selector, text, text_gone, or wait_ms for time-based wait), snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll, select_option (select dropdown values by text), get_storage, set_storage, clear_storage. Selectors support CSS, text=, xpath=, ref= prefixes. Use ref=eN after a snapshot action to click/type elements by their ref id. Prefer snapshot over screenshot."`
-	Selector    string        `json:"selector,omitempty" jsonschema:"Element selector for click/type_text/wait_for/hover/scroll. Supports: CSS (#id, .class), text=Text, xpath=//div, ref=eN (from snapshot). Best practice: snapshot first, then use ref=eN for precise targeting."`
-	Text        string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
-	Script      string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
-	JS          string        `json:"js,omitempty" jsonschema:"Alias for script"`
-	Key         string        `json:"key,omitempty" jsonschema:"Key name for press action (Enter/Tab/Escape/etc)"`
-	URL         string        `json:"url,omitempty" jsonschema:"URL for navigate action"`
-	Humanize    bool          `json:"humanize,omitempty" jsonschema:"Use human-like mouse movement for click/type_text/hover"`
-	WaitMs      int           `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait (sleep) or warmup duration"`
-	TimeoutMs   int           `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms for wait_for action"`
-	Format      string        `json:"format,omitempty"`
-	Cookies     []CookieInput `json:"cookies,omitempty" jsonschema:"Cookies for set_cookies action"`
-	DeltaX      float64       `json:"delta_x,omitempty" jsonschema:"Horizontal scroll delta for scroll action"`
-	DeltaY      float64       `json:"delta_y,omitempty" jsonschema:"Vertical scroll delta for scroll action"`
-	Accept      *bool         `json:"accept,omitempty" jsonschema:"Accept or dismiss dialog (handle_dialog)"`
-	TextGone    string        `json:"text_gone,omitempty" jsonschema:"Text to wait for to disappear (wait_for action)"`
-	Button      string        `json:"button,omitempty" jsonschema:"Mouse button: left (default), right, middle"`
-	DoubleClick bool          `json:"double_click,omitempty" jsonschema:"Double click instead of single"`
-	Modifiers   []string      `json:"modifiers,omitempty" jsonschema:"Modifier keys to hold: Alt, Control, Shift, Meta"`
-	Values      []string      `json:"values,omitempty" jsonschema:"Values for select_option action"`
-	Depth       int           `json:"depth,omitempty" jsonschema:"Limit snapshot tree depth (0 = unlimited)"`
-	Filter      string        `json:"filter,omitempty" jsonschema:"Snapshot filter mode: interactive (keep actionable elements + ancestors), forms (keep form subtrees), main (keep main content), text (exclude nav/banner/contentinfo)"`
-	URLContains string        `json:"url_contains,omitempty" jsonschema:"Keep only nodes whose URL contains this substring (links/iframes)"`
-	Width       int           `json:"width,omitempty" jsonschema:"Viewport width for resize action"`
-	Height      int           `json:"height,omitempty" jsonschema:"Viewport height for resize action"`
-	Slowly      bool          `json:"slowly,omitempty" jsonschema:"Type one character at a time (type_text)"`
-	Submit      bool          `json:"submit,omitempty" jsonschema:"Press Enter after typing (type_text)"`
-	Fields      []FormField   `json:"fields,omitempty" jsonschema:"Fields for fill_form batch action"`
-	Cookie      string        `json:"cookie,omitempty" jsonschema:"Cookie name to wait for (wait_for action — polls until cookie appears)"`
-	Limit       int           `json:"limit,omitempty" jsonschema:"Max entries to return for get_logs (default: 30 network / 20 console) and get_cookies"`
-	StorageType string        `json:"storage_type,omitempty" jsonschema:"Storage type: local (default) or session"`
+	Type          string        `json:"type" jsonschema:"Action type: click, type_text, wait_for (CSS selector, text, text_gone, or wait_ms for time-based wait), snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll, select_option (select dropdown values by text), get_storage, set_storage, clear_storage. Selectors support CSS, text=, xpath=, ref= prefixes. Use ref=eN after a snapshot action to click/type elements by their ref id. Prefer snapshot over screenshot."`
+	Selector      string        `json:"selector,omitempty" jsonschema:"Element selector for click/type_text/wait_for/hover/scroll. Supports: CSS (#id, .class), text=Text, xpath=//div, ref=eN (from snapshot). Best practice: snapshot first, then use ref=eN for precise targeting."`
+	Text          string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
+	Script        string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
+	JS            string        `json:"js,omitempty" jsonschema:"Alias for script"`
+	Key           string        `json:"key,omitempty" jsonschema:"Key name for press action (Enter/Tab/Escape/etc)"`
+	URL           string        `json:"url,omitempty" jsonschema:"URL for navigate action"`
+	Humanize      bool          `json:"humanize,omitempty" jsonschema:"Use human-like mouse movement for click/type_text/hover"`
+	WaitMs        int           `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait (sleep) or warmup duration"`
+	TimeoutMs     int           `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms for wait_for action"`
+	Format        string        `json:"format,omitempty"`
+	Cookies       []CookieInput `json:"cookies,omitempty" jsonschema:"Cookies for set_cookies action"`
+	DeltaX        float64       `json:"delta_x,omitempty" jsonschema:"Horizontal scroll delta for scroll action"`
+	DeltaY        float64       `json:"delta_y,omitempty" jsonschema:"Vertical scroll delta for scroll action"`
+	Accept        *bool         `json:"accept,omitempty" jsonschema:"Accept or dismiss dialog (handle_dialog)"`
+	TextGone      string        `json:"text_gone,omitempty" jsonschema:"Text to wait for to disappear (wait_for action)"`
+	Button        string        `json:"button,omitempty" jsonschema:"Mouse button: left (default), right, middle"`
+	DoubleClick   bool          `json:"double_click,omitempty" jsonschema:"Double click instead of single"`
+	Modifiers     []string      `json:"modifiers,omitempty" jsonschema:"Modifier keys to hold: Alt, Control, Shift, Meta"`
+	Values        []string      `json:"values,omitempty" jsonschema:"Values for select_option action"`
+	Depth         int           `json:"depth,omitempty" jsonschema:"Limit snapshot tree depth (0 = unlimited)"`
+	Filter        string        `json:"filter,omitempty" jsonschema:"Snapshot filter mode: interactive (keep actionable elements + ancestors), forms (keep form subtrees), main (keep main content), text (exclude nav/banner/contentinfo)"`
+	URLContains   string        `json:"url_contains,omitempty" jsonschema:"Keep only nodes whose URL contains this substring (links/iframes)"`
+	Width         int           `json:"width,omitempty" jsonschema:"Viewport width for resize action"`
+	Height        int           `json:"height,omitempty" jsonschema:"Viewport height for resize action"`
+	Slowly        bool          `json:"slowly,omitempty" jsonschema:"Type one character at a time (type_text)"`
+	Submit        bool          `json:"submit,omitempty" jsonschema:"Press Enter after typing (type_text)"`
+	Fields        []FormField   `json:"fields,omitempty" jsonschema:"Fields for fill_form batch action"`
+	Cookie        string        `json:"cookie,omitempty" jsonschema:"Cookie name to wait for (wait_for action — polls until cookie appears)"`
+	Limit         int           `json:"limit,omitempty" jsonschema:"Max entries to return for get_logs (default: 30 network / 20 console) and get_cookies"`
+	StorageType   string        `json:"storage_type,omitempty" jsonschema:"Storage type: local (default) or session"`
+	FrameSelector string        `json:"frame_selector,omitempty" jsonschema:"CSS selector of iframe element. When set, action executes inside the iframe context instead of the top-level page. Works with cross-origin iframes."`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -98,6 +99,19 @@ func registerAction(actionType string, exec actionExecutor) {
 func ExecuteAction(
 	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool, refMap *RefMap,
 ) ActionResult {
+	// Frame targeting: switch context to iframe if specified.
+	targetPage := page
+	if a.FrameSelector != "" {
+		framePage, err := resolveFrame(ctx, page, a.FrameSelector)
+		if err != nil {
+			return ActionResult{Action: a.Type, Ok: false, Error: err.Error()}
+		}
+		targetPage = framePage
+		// Disable cursor humanization inside frames — coordinates are relative
+		// to the parent viewport, not the frame viewport.
+		cursor = nil
+	}
+
 	exec, ok := actionRegistry[a.Type]
 	if !ok {
 		return ActionResult{Action: a.Type, Ok: false, Error: fmt.Sprintf("unknown action type: %q", a.Type)}
@@ -105,7 +119,7 @@ func ExecuteAction(
 
 	dc := dispatchContext{
 		ctx:         ctx,
-		page:        page,
+		page:        targetPage,
 		cursor:      cursor,
 		logs:        logs,
 		stealthMode: stealthMode,
