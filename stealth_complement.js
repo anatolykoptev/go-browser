@@ -65,15 +65,39 @@
 
   // === 02_navigator.js ===
   // Native toString masking — make overridden getters look like [native code]
+  //
+  // We use a Proxy on Function.prototype.toString rather than replacing it with
+  // a regular function.  A Proxy around the native toString:
+  //   - has no .prototype (forwarded to native, which has none)
+  //   - throws TypeError for new Proxy() (native toString is not a constructor)
+  //   - passes all descriptor checks (get/set/enumerable come from native)
+  //   - returns native-looking strings for our spoofed functions via apply trap
+  //
+  // This avoids the `lieProps['Function.toString']` detection in CreepJS which
+  // fires when Function.prototype.toString is replaced with a regular function.
   (function() {
-    const _toString = Function.prototype.toString;
+    const _nativeToString = Function.prototype.toString;
     const _nativeMap = new WeakMap();
   
-    Function.prototype.toString = function() {
-      const native = _nativeMap.get(this);
-      if (native) return native;
-      return _toString.call(this);
-    };
+    const _toStringProxy = new Proxy(_nativeToString, {
+      apply(target, thisArg, args) {
+        const native = _nativeMap.get(thisArg);
+        if (native) return native;
+        return Reflect.apply(target, thisArg, args);
+      },
+    });
+  
+    // Replace on the prototype — the Proxy wraps the native fn, so all structural
+    // checks (typeof, prototype presence, descriptor) forward to the native.
+    Object.defineProperty(Function.prototype, 'toString', {
+      value: _toStringProxy,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  
+    // The proxy itself must also look native when probed.
+    _nativeMap.set(_toStringProxy, 'function toString() { [native code] }');
   
     // Helper: define a property with a getter that reports as native code
     window.__defineNativeGetter = function(obj, prop, getter, nativeName) {
@@ -84,9 +108,6 @@
         enumerable: true
       });
     };
-  
-    // Also mask Function.prototype.toString itself
-    _nativeMap.set(Function.prototype.toString, 'function toString() { [native code] }');
   })();
   
   // Navigator property overrides — all values from active stealth profile.
@@ -235,17 +256,26 @@
   if (!window.chrome) window.chrome = {};
   
   if (!window.chrome.runtime) {
-    window.chrome.runtime = {
-      connect: () => ({
-        name: '', sender: undefined,
-        onDisconnect: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
-        onMessage: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
-        postMessage(){}, disconnect(){}
-      }),
-      sendMessage: () => {},
-      onMessage: {addListener: () => {}, removeListener: () => {}},
-      id: undefined,
-    };
+    window.chrome.runtime = {};
+  }
+  
+  // CreepJS hasBadChromeRuntime: checks 'prototype' in sendMessage/connect and
+  // that `new fn()` throws TypeError.  Arrow functions naturally satisfy both:
+  // they have no .prototype and throw TypeError when constructed.
+  // We always override these (even if runtime already exists in headless Chrome)
+  // because the native headless stubs are regular functions with .prototype.
+  window.chrome.runtime.sendMessage = () => {};
+  window.chrome.runtime.connect = () => ({
+    name: '', sender: undefined,
+    onDisconnect: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+    onMessage: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+    postMessage(){}, disconnect(){}
+  });
+  if (!window.chrome.runtime.onMessage) {
+    window.chrome.runtime.onMessage = {addListener: () => {}, removeListener: () => {}};
+  }
+  if (window.chrome.runtime.id === undefined) {
+    window.chrome.runtime.id = undefined;
   }
   
   if (!window.chrome.csi) {
@@ -342,6 +372,8 @@
       platform:            sp.platform  || 'MacIntel',
       languages:           sp.languages || ['en-US', 'en'],
       userAgent:           sp.userAgent || navigator.userAgent,
+      gpuVendor:           (sp.gpu || {}).vendor || '',
+      gpuRenderer:         (sp.gpu || {}).renderer || '',
     });
   })();
   
@@ -371,6 +403,23 @@
     'Object.defineProperty(Object.getPrototypeOf(navigator), "userAgent", {',
     '  get: () => PROFILE.userAgent, configurable: true',
     '});',
+    // WebGL GPU spoof in workers — CreepJS hasBadWebGL compares main vs worker GPU.
+    // Workers can create OffscreenCanvas and call getParameter(UNMASKED_RENDERER_WEBGL).
+    // We must return the same vendor/renderer as the main world.
+    '(function() {',
+    '  if (!PROFILE.gpuVendor && !PROFILE.gpuRenderer) return;',
+    '  function spoofWebGL(proto) {',
+    '    if (!proto) return;',
+    '    var origGet = proto.getParameter;',
+    '    proto.getParameter = function(param) {',
+    '      if (param === 37445) return PROFILE.gpuVendor;',   // UNMASKED_VENDOR_WEBGL
+    '      if (param === 37446) return PROFILE.gpuRenderer;', // UNMASKED_RENDERER_WEBGL
+    '      return origGet.apply(this, arguments);',
+    '    };',
+    '  }',
+    '  if (typeof WebGLRenderingContext !== "undefined") spoofWebGL(WebGLRenderingContext.prototype);',
+    '  if (typeof WebGL2RenderingContext !== "undefined") spoofWebGL(WebGL2RenderingContext.prototype);',
+    '})();',
   ].join('\n');
   
   function createPatchedWorker(originalUrl, options) {
@@ -634,14 +683,23 @@
   })();
 
   // === 09_fonts_shim.js ===
-  // Font fingerprint shim — hides residual Linux-only fonts from detection.
-  // CreepJS probes fonts via document.fonts.check() and forEach().
-  // We patch document.fonts directly (FontFaceSet is not a global in Chrome 146+).
+  // Font fingerprint shim — accurate font detection for headless Chrome.
+  //
+  // Problem: headless Chrome's document.fonts.check() returns true for ALL fonts
+  // (including random nonexistent names), and FontFace.load('local(...)') fails
+  // with "network error" for every font. Both lie to CreepJS font detection.
+  //
+  // Fix: replace document.fonts.check() with a set-based implementation that
+  // accurately returns true only for fonts that match the installed set
+  // (Apple system fonts + common cross-platform fonts) and false for everything
+  // else — including Linux-exclusive fonts that betray the host OS.
+  //
   // This shim also handles final cleanup of window.__sp and stealth markers
   // because it runs last (alphabetically 09 > all others).
   
   (() => {
-    const HIDDEN_LINUX_FONTS = new Set([
+    // Linux-only fonts — must return false when spoofing macOS.
+    const LINUX_FONTS = new Set([
       'Arimo', 'Chilanka', 'Cousine', 'Jomolhari',
       'Liberation Mono', 'Liberation Sans', 'Liberation Serif',
       'Ubuntu', 'Ubuntu Mono', 'Ubuntu Condensed',
@@ -649,30 +707,79 @@
       'Noto Color Emoji', 'MONO',
     ]);
   
-    const matchesHidden = (fontStr) => {
-      for (const name of HIDDEN_LINUX_FONTS) {
-        if (fontStr.includes('"' + name + '"') || fontStr.includes("'" + name + "'")) {
-          return true;
-        }
+    // Common macOS / cross-platform fonts that headless Chrome has via our
+    // Dockerfile Apple font layer + base Chrome font packages.
+    // These are the fonts CreepJS probes from its MacOSFonts + common sets.
+    const MAC_SYSTEM_FONTS = new Set([
+      // Core system fonts (pre-installed in Chrome base image)
+      'Arial', 'Arial Black', 'Arial Narrow', 'Arial Unicode MS',
+      'Comic Sans MS', 'Courier New', 'Georgia', 'Impact',
+      'Times New Roman', 'Trebuchet MS', 'Verdana', 'Webdings',
+      // Apple macOS system fonts (installed via Dockerfile Apple font layer)
+      'SF Pro', 'SF Pro Display', 'SF Pro Text', 'SF Pro Rounded',
+      'SF Compact', 'SF Compact Display', 'SF Compact Text',
+      'SF Mono', 'New York',
+      'Helvetica', 'Helvetica Neue',
+      'Apple SD Gothic Neo', 'Apple SD Gothic Neo ExtraBold',
+      'Geneva',
+      // macOS version-specific fonts (from CreepJS MacOSFonts)
+      'Kohinoor Devanagari Medium', 'Luminari',
+      'PingFang HK Light',
+      'American Typewriter Semibold', 'Futura Bold',
+      'SignPainter-HouseScript Semibold',
+      'InaiMathi Bold',
+      'Galvji', 'MuktaMahee Regular',
+      'Noto Sans Gunjala Gondi Regular', 'Noto Sans Masaram Gondi Regular',
+      'Noto Serif Yezidi Regular',
+      'STIX Two Math Regular', 'STIX Two Text Regular',
+      'Noto Sans Canadian Aboriginal Regular',
+    ]);
+  
+    // Merge profile-specific fonts if available.
+    const sp = window.__sp;
+    const profileFonts = (sp && sp.fonts) ? sp.fonts : [];
+  
+    // Build the full allow-set.
+    const ALLOWED = new Set([...MAC_SYSTEM_FONTS]);
+    for (const f of profileFonts) ALLOWED.add(f);
+  
+    // Extract the font family name from a CSS font shorthand string.
+    // e.g. '16px "SF Pro Display"' → 'SF Pro Display'
+    //      "0px 'Helvetica Neue'"  → 'Helvetica Neue'
+    //      '12px Arial'            → 'Arial'
+    const extractFamily = (fontStr) => {
+      const s = String(fontStr);
+      // Quoted name: extract between quotes
+      const quoted = s.match(/["']([^"']+)["']/);
+      if (quoted) return quoted[1];
+      // Unquoted: last token(s) after the size/style info
+      const parts = s.trim().split(/\s+/);
+      // Font shorthand: size is last numeric token; family follows.
+      // Simple heuristic: return everything after last size-like token.
+      const sizeIdx = parts.findIndex(p => /^\d/.test(p));
+      if (sizeIdx >= 0 && sizeIdx + 1 < parts.length) {
+        return parts.slice(sizeIdx + 1).join(' ');
       }
-      return false;
+      return parts[parts.length - 1];
     };
   
-    // Patch document.fonts.check() directly — FontFaceSet is not a global in Chrome 146+.
+    // Replace document.fonts.check with accurate implementation.
     if (document.fonts && typeof document.fonts.check === 'function') {
-      const origCheck = document.fonts.check.bind(document.fonts);
       document.fonts.check = function(font, text) {
-        if (matchesHidden(String(font))) return false;
-        return origCheck(font, text);
+        const family = extractFamily(font);
+        if (LINUX_FONTS.has(family)) return false;
+        if (ALLOWED.has(family)) return true;
+        // Unknown font: return false (no random-font-returns-true headless bug).
+        return false;
       };
     }
   
-    // Patch document.fonts.forEach() to skip hidden fonts.
+    // Replace document.fonts.forEach to skip hidden Linux fonts.
     if (document.fonts && typeof document.fonts.forEach === 'function') {
       const origForEach = document.fonts.forEach.bind(document.fonts);
       document.fonts.forEach = function(cb, thisArg) {
         return origForEach(function(ff, k, set) {
-          if (HIDDEN_LINUX_FONTS.has(ff.family)) return;
+          if (LINUX_FONTS.has(ff.family)) return;
           return cb.call(thisArg, ff, k, set);
         });
       };
@@ -683,5 +790,125 @@
   delete window.__stealthProfile;
   delete window.__sp;
   delete window.__defineNativeGetter;
+
+  // === 10_storage.js ===
+  // Storage estimate spoof — return macOS-realistic quota/usage values.
+  //
+  // Headless Chrome returns a tiny quota (container disk space) which
+  // fingerprint detectors use to identify non-desktop environments.
+  // Real macOS with 512GB SSD typically reports ~450-500GB quota with
+  // 30-40% usage depending on the machine state.
+  //
+  // Spec numbers for mac_chrome145 profile:
+  //   quota:  494384795648  (~460 GB — typical 512GB Mac after OS overhead)
+  //   usage:  189654345216  (~176 GB — ~38% used, realistic for a work machine)
+  
+  (() => {
+    if (!navigator.storage || typeof navigator.storage.estimate !== 'function') return;
+  
+    const MAC_QUOTA = 494384795648;
+    const MAC_USAGE = 189654345216;
+  
+    const _origEstimate = navigator.storage.estimate.bind(navigator.storage);
+  
+    // Use Object.defineProperty so the replacement isn't enumerable and
+    // doesn't add an own .prototype that lieProps['StorageManager.estimate'] would flag.
+    Object.defineProperty(navigator.storage, 'estimate', {
+      value: () => Promise.resolve({
+        quota: MAC_QUOTA,
+        usage: MAC_USAGE,
+        usageDetails: {},
+      }),
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  })();
+
+  // === 11_navigator_polyfills.js ===
+  // Navigator API polyfills — fill in APIs that headless Chrome lacks.
+  // Each missing API is a signal in CreepJS likeHeadless checks.
+  
+  const sp = window.__sp;
+  
+  // pdfViewerEnabled — headless Chrome lacks PDF viewer.
+  // Real macOS Chrome has PDF viewer built-in (returns true).
+  if (navigator.pdfViewerEnabled === false || navigator.pdfViewerEnabled === undefined) {
+    Object.defineProperty(Navigator.prototype, 'pdfViewerEnabled', {
+      get: () => true,
+      configurable: true,
+      enumerable: true,
+    });
+  }
+  
+  // Web Share API — present on macOS Chrome but not in headless.
+  if (!navigator.share) {
+    Object.defineProperty(Navigator.prototype, 'share', {
+      value: (data) => {
+        // Real Chrome rejects with NotAllowedError when called without user gesture.
+        return Promise.reject(new DOMException(
+          'Failed to execute \'share\' on \'Navigator\': Must be handling a user gesture',
+          'NotAllowedError'
+        ));
+      },
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  }
+  
+  if (!navigator.canShare) {
+    Object.defineProperty(Navigator.prototype, 'canShare', {
+      value: (data) => {
+        if (!data) return false;
+        return !!(data.url || data.text || data.title || data.files);
+      },
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  }
+  
+  // Content Indexing API — Chrome 84+ on Android; also present in desktop Chrome.
+  // Headless is missing this; likeHeadless.noContentIndex checks its presence.
+  if (!('index' in ServiceWorkerRegistration.prototype)) {
+    try {
+      Object.defineProperty(ServiceWorkerRegistration.prototype, 'index', {
+        get: () => null,
+        configurable: true,
+        enumerable: true,
+      });
+    } catch (_) {}
+  }
+  
+  // Contacts Manager API — Chrome on Android; desktop Chrome 91+ also has it.
+  if (!navigator.contacts) {
+    Object.defineProperty(Navigator.prototype, 'contacts', {
+      get: () => ({
+        getProperties: () => Promise.resolve(['name', 'email', 'tel']),
+        select: () => Promise.reject(new DOMException(
+          'Failed to execute \'select\' on \'ContactsManager\': API not available',
+          'InvalidStateError'
+        )),
+      }),
+      configurable: true,
+      enumerable: true,
+    });
+  }
+  
+  // downlinkMax — NetworkInformation API attribute.
+  // Headless Chrome's connection object may lack downlinkMax.
+  if (sp && sp.connection && 'connection' in navigator) {
+    const conn = navigator.connection;
+    if (conn && !('downlinkMax' in conn)) {
+      try {
+        Object.defineProperty(conn, 'downlinkMax', {
+          get: () => Infinity,
+          configurable: true,
+          enumerable: true,
+        });
+      } catch (_) {}
+    }
+  }
 
 })();
