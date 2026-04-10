@@ -33,6 +33,10 @@ func doTypeTextHumanized(
 			WindowsVirtualKeyCode: vk,
 		}.Call(page)
 
+		// Key dwell time (T4 TMX behavioral biometric): hold key for 40-120ms
+		// before firing char and keyUp. Real humans don't release instantly.
+		sleepCtx(ctx, time.Duration(humanize.KeyDwellTime())*time.Millisecond)
+
 		_ = proto.InputDispatchKeyEvent{
 			Type:                  proto.InputDispatchKeyEventTypeChar,
 			Text:                  char,
@@ -47,6 +51,15 @@ func doTypeTextHumanized(
 			WindowsVirtualKeyCode: vk,
 		}.Call(page)
 
+		// Word boundary pause: extra 300-500ms at spaces (15% chance)
+		// simulating inter-word cognitive processing gap.
+		if ch == ' ' {
+			if pause := humanize.WordBoundaryPause(); pause > 0 {
+				sleepCtx(ctx, time.Duration(pause)*time.Millisecond)
+			}
+		}
+
+		// Inter-key delay (gaussian μ=120ms, σ=40ms).
 		if i < len(delays) {
 			sleepCtx(ctx, time.Duration(delays[i])*time.Millisecond)
 		}
