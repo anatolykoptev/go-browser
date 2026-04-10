@@ -51,17 +51,17 @@ func (m *ChromeManager) NewStealthPage(ctx *rod.Browser, profile *StealthProfile
 		}
 	}
 
-	// Gap C — Target.setAutoAttach: child iframes and workers inherit the
-	// EvalOnNewDocument injections applied above.
-	autoAttach := proto.TargetSetAutoAttach{
-		AutoAttach:             true,
-		WaitForDebuggerOnStart: false,
-		Flatten:                true,
-	}
-	if err := autoAttach.Call(page); err != nil {
-		_ = page.Close()
-		return nil, fmt.Errorf("chrome: set auto attach: %w", err)
-	}
+	// Gap C note: Target.setAutoAttach was previously used to propagate
+	// EvalOnNewDocument to child iframes and workers. However, setAutoAttach
+	// with Flatten:true causes Chrome to eagerly create browsing contexts for
+	// detached iframes with srcdoc set, exposing a non-null contentWindow —
+	// a signal detected by CreepJS hasIframeProxy.
+	//
+	// We deliberately omit setAutoAttach. Worker injection is handled instead
+	// by the window.Worker override in stealth_complement.js (05_worker_injection.js)
+	// which bootstraps stealth patches via fetch+prepend for all worker URLs.
+	// Iframes inherit the page's EvalOnNewDocument scripts via the browser's
+	// normal same-origin inheritance (no CDP plumbing needed for same-origin frames).
 
 	// Set Accept-Language header to match profile languages so HTTP headers
 	// and navigator.languages are consistent (detection scripts compare both).
