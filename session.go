@@ -19,6 +19,7 @@ type Session struct {
 	CreatedAt time.Time
 	LastUsed  time.Time
 	Proxy     string
+	Refs      *RefMap
 	ttl       time.Duration // 0 means never expires; set from pool at creation time
 }
 
@@ -80,6 +81,7 @@ func (p *SessionPool) Create(proxy string) (string, error) {
 		CreatedAt: now,
 		LastUsed:  now,
 		Proxy:     proxy,
+		Refs:      NewRefMap(),
 		ttl:       p.ttl,
 	}
 	return id, nil
