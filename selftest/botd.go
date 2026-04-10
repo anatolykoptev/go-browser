@@ -71,7 +71,7 @@ func extractBotD(ctx context.Context, page *rod.Page) (TargetResult, error) {
 		val, err := page.Eval(botdReadyJS)
 		if err == nil && val != nil {
 			s := strings.TrimSpace(val.Value.String())
-			if s != "" && s != "null" {
+			if !isNullResult(s) {
 				break
 			}
 		}
@@ -86,7 +86,7 @@ func extractBotD(ctx context.Context, page *rod.Page) (TargetResult, error) {
 	if err != nil {
 		return result, fmt.Errorf("botd: eval extract: %w", err)
 	}
-	if val == nil || val.Value.String() == "" || val.Value.String() == "null" {
+	if val == nil || isNullResult(val.Value.String()) {
 		return result, fmt.Errorf("botd: selector not found — page structure may have changed")
 	}
 

@@ -188,3 +188,9 @@ func saveScreenshot(page *rod.Page, key string) string {
 func parseJSON(raw string, v any) error {
 	return json.Unmarshal([]byte(raw), v)
 }
+
+// isNullResult reports whether a JS eval result is null/undefined/empty.
+// rod represents JS null as the Go string "<nil>" (via gson.JSON.String() → fmt.Sprintf("%v", nil)).
+func isNullResult(s string) bool {
+	return s == "" || s == "null" || s == "<nil>" || s == "undefined"
+}
