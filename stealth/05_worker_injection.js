@@ -102,23 +102,31 @@ function createPatchedWorker(originalUrl, options) {
       if (handlers.message) real.onmessage = handlers.message;
     });
 
-    return {
-      postMessage: function(msg) { if (real) real.postMessage(msg); else pending.push(msg); },
-      terminate:   function()    { if (real) real.terminate(); },
-      set onmessage(fn) { if (real) real.onmessage = fn; else handlers.message = fn; },
-      get onmessage()   { return real ? real.onmessage : handlers.message; },
-      set onerror(fn)   { if (real) real.onerror = fn; else handlers.error = fn; },
-      get onerror()     { return real ? real.onerror : handlers.error; },
-      addEventListener: function() {
-        var args = arguments;
-        if (real) real.addEventListener.apply(real, args);
-        else setTimeout(function() { if (real) real.addEventListener.apply(real, args); }, 100);
-      },
-      removeEventListener: function() {
-        if (real) real.removeEventListener.apply(real, arguments);
-      },
-      dispatchEvent: function(e) { if (real) return real.dispatchEvent(e); return false; },
+    // Use Object.create(OriginalWorker.prototype) so that hasConstructor checks
+    // (e.g. x.__proto__.constructor.name == 'Worker') pass correctly.
+    var proxy = Object.create(OriginalWorker.prototype);
+    proxy.postMessage = function(msg) { if (real) real.postMessage(msg); else pending.push(msg); };
+    proxy.terminate   = function()    { if (real) real.terminate(); };
+    Object.defineProperty(proxy, 'onmessage', {
+      get: function() { return real ? real.onmessage : handlers.message; },
+      set: function(fn) { if (real) real.onmessage = fn; else handlers.message = fn; },
+      configurable: true,
+    });
+    Object.defineProperty(proxy, 'onerror', {
+      get: function() { return real ? real.onerror : handlers.error; },
+      set: function(fn) { if (real) real.onerror = fn; else handlers.error = fn; },
+      configurable: true,
+    });
+    proxy.addEventListener = function() {
+      var args = arguments;
+      if (real) real.addEventListener.apply(real, args);
+      else setTimeout(function() { if (real) real.addEventListener.apply(real, args); }, 100);
     };
+    proxy.removeEventListener = function() {
+      if (real) real.removeEventListener.apply(real, arguments);
+    };
+    proxy.dispatchEvent = function(e) { if (real) return real.dispatchEvent(e); return false; };
+    return proxy;
   } catch(e) {
     return new OriginalWorker(originalUrl, options);
   }
