@@ -150,6 +150,50 @@ func TestDeCasteljau_LinearInterpolation(t *testing.T) {
 	}
 }
 
+// TestDwellDelay_Range verifies that delayMs is always within [50, 500]
+// and that the number of micro-movements is between 1 and 3.
+func TestDwellDelay_Range(t *testing.T) {
+	for range 200 {
+		d, mm := DwellDelay(50)
+		if d < 50 || d > 500 {
+			t.Errorf("DwellDelay: delayMs=%d out of [50, 500]", d)
+		}
+		if len(mm) < 1 || len(mm) > 3 {
+			t.Errorf("DwellDelay: len(microMoves)=%d, want [1, 3]", len(mm))
+		}
+	}
+}
+
+// TestDwellDelay_InverseWidth verifies that narrow targets (10px) produce
+// statistically longer dwell than wide targets (200px) over 100 runs.
+func TestDwellDelay_InverseWidth(t *testing.T) {
+	const trials = 100
+	var narrowSum, wideSum int
+	for range trials {
+		d, _ := DwellDelay(10)
+		narrowSum += d
+		d, _ = DwellDelay(200)
+		wideSum += d
+	}
+	// Exclude hesitation outliers via mean — narrow mean must exceed wide mean.
+	if narrowSum <= wideSum {
+		t.Errorf("narrow target avg dwell (%dms) should exceed wide target avg (%dms)",
+			narrowSum/trials, wideSum/trials)
+	}
+}
+
+// TestDwellDelay_MicroMoves verifies that all micro-movements are within 3px.
+func TestDwellDelay_MicroMoves(t *testing.T) {
+	for range 200 {
+		_, mm := DwellDelay(50)
+		for j, p := range mm {
+			if math.Abs(p.X) > 3 || math.Abs(p.Y) > 3 {
+				t.Errorf("microMove[%d] = (%.2f, %.2f) exceeds 3px radius", j, p.X, p.Y)
+			}
+		}
+	}
+}
+
 // TestMouseDelayForStep_SlowAtEnds verifies that delay at step 0 is greater
 // than delay at the midpoint step.
 func TestMouseDelayForStep_SlowAtEnds(t *testing.T) {

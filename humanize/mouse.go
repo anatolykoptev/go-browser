@@ -43,6 +43,7 @@ const (
 	dwellHesitateMax  = 200
 	dwellHesitateProb = 0.05
 	dwellMicroSigma   = 1.0
+	dwellMicroMax     = 3.0
 )
 
 // fittsSteps computes the number of movement steps for a given pixel
@@ -128,8 +129,8 @@ func DwellDelay(targetWidth float64) (delayMs int, microMoves []Point) {
 	microMoves = make([]Point, n)
 	for i := range n {
 		microMoves[i] = Point{
-			X: gaussJitter() * dwellMicroSigma,
-			Y: gaussJitter() * dwellMicroSigma,
+			X: clamp(gaussJitter()*dwellMicroSigma, -dwellMicroMax, dwellMicroMax),
+			Y: clamp(gaussJitter()*dwellMicroSigma, -dwellMicroMax, dwellMicroMax),
 		}
 	}
 	return
