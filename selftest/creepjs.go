@@ -36,6 +36,8 @@ type creepJSResult struct {
 	} `json:"ua"`
 	Debug    string `json:"_debug,omitempty"`
 	HasScore bool   `json:"_hasScore"`
+	FpID     string `json:"_fpId,omitempty"`
+	FuzzyID  string `json:"_fuzzyId,omitempty"`
 }
 
 // creepJSExtractJS is evaluated in the page to extract results from creepjs.
@@ -78,10 +80,20 @@ const creepJSExtractJS = `
     if (m3) score = parseFloat(m3[1]);
   }
 
+  // Extract fingerprint ID from head content (computed even if score isn't ready)
+  var fpId = '';
+  var fpMatch = bodyText.match(/FP ID:\s*([0-9a-f]{20,})/i);
+  if (fpMatch) fpId = fpMatch[1];
+  var fuzzyId = '';
+  var fuzzyMatch = bodyText.match(/Fuzzy:\s*([0-9a-f]{20,})/i);
+  if (fuzzyMatch) fuzzyId = fuzzyMatch[1];
+
   // Return debug info even if we can't find a score, so we can see what's on the page
   var result = { trustScore: score || 0, lies: [], fonts: {}, webrtc: {}, audio: {}, voices: {}, ua: {},
                  _debug: debugSnippet,
-                 _hasScore: score > 0 };
+                 _hasScore: score > 0,
+                 _fpId: fpId,
+                 _fuzzyId: fuzzyId };
 
   // Collect lies (use for loop to avoid prototype patching issues)
   var lieEls = document.querySelectorAll('.lie, .lies li, [data-lie]');
@@ -176,17 +188,28 @@ func extractCreepJS(ctx context.Context, page *rod.Page) (TargetResult, error) {
 	if cr.Debug != "" {
 		sections["_debug"] = cr.Debug
 	}
+	if cr.FpID != "" {
+		sections["fpId"] = cr.FpID
+	}
+	if cr.FuzzyID != "" {
+		sections["fuzzyId"] = cr.FuzzyID
+	}
 	result.Sections = sections
 
-	if !cr.HasScore {
-		// Page loaded but no score found — return debug info without error.
+	switch {
+	case cr.HasScore:
+		// Full success: trust score computed.
+		result.OK = true
+		result.TrustScore = cr.TrustScore
+		result.Lies = cr.Lies
+	case cr.FpID != "":
+		// Partial success: fingerprint ID computed but score not yet ready.
+		// Treat as ok=true (informational), trust=50 (neutral — can't assess bot score).
+		result.OK = true
+		result.TrustScore = 50
+	default:
 		result.OK = false
-		result.Error = "creepjs: trust score not found in page (see sections._debug)"
-		return result, nil
+		result.Error = "creepjs: no fingerprint data found in page (see sections._debug)"
 	}
-
-	result.OK = true
-	result.TrustScore = cr.TrustScore
-	result.Lies = cr.Lies
 	return result, nil
 }
