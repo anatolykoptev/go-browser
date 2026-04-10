@@ -501,6 +501,47 @@
     configurable: false,
   });
   
+  // Block ServiceWorker and SharedWorker so fingerprinting scripts
+  // (e.g. CreepJS) fall through to the DedicatedWorker path, which
+  // is controlled by our window.Worker override above and receives
+  // the WebGL bootstrap with the correct spoofed GPU values.
+  //
+  // ServiceWorkers run in a separate global scope that does NOT
+  // inherit EvalOnNewDocument injections, so they always expose the
+  // real GPU. Blocking register() forces the fallback to the patched
+  // DedicatedWorker.
+  if (navigator.serviceWorker) {
+    try {
+      const origRegister = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+      Object.defineProperty(navigator.serviceWorker, 'register', {
+        value: function(scriptURL, options) {
+          // Reject — CreepJS catches this and falls through to SharedWorker/DedicatedWorker.
+          return Promise.reject(new DOMException(
+            'ServiceWorker registration failed',
+            'SecurityError'
+          ));
+        },
+        writable: true,
+        configurable: true,
+      });
+    } catch (_) {}
+  }
+  
+  // Block SharedWorker so CreepJS falls through to DedicatedWorker.
+  // SharedWorkers also run without EvalOnNewDocument injections.
+  if (typeof SharedWorker !== 'undefined') {
+    const OriginalSharedWorker = SharedWorker;
+    window.SharedWorker = function(url, options) {
+      // Return an object whose hasConstructor check fails so CreepJS skips it.
+      throw new Error('SharedWorker unavailable');
+    };
+    Object.defineProperty(window.SharedWorker, 'prototype', {
+      value: OriginalSharedWorker.prototype,
+      writable: false,
+      configurable: false,
+    });
+  }
+  
   // Note: stealth marker cleanup (delete window.__sp etc.) is done by 09_fonts_shim.js
   // which runs last, so that all modules can still read window.__sp when they run.
 
