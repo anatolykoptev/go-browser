@@ -43,10 +43,11 @@ func TestLastN_MoreThanSlice(t *testing.T) {
 }
 
 func TestLastN_Zero(t *testing.T) {
+	// n=0 means "no entries": lastN returns empty (not the full slice).
 	s := []int{1, 2, 3}
 	got := lastN(s, 0)
-	if len(got) != 3 {
-		t.Errorf("lastN(0): got %d elements, want 3 (unchanged)", len(got))
+	if len(got) != 0 {
+		t.Errorf("lastN(0): got %d elements, want 0 (empty)", len(got))
 	}
 }
 
