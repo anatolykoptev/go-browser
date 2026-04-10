@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
+
+const frameRetryInterval = 500 * time.Millisecond
 
 // parseFrameSelector returns ("css", selector) or ("url", pattern).
 func parseFrameSelector(sel string) (string, string) {
@@ -24,14 +27,31 @@ func matchFrameURL(frameURL, pattern string) bool {
 
 // resolveFrame finds an iframe and returns its rod.Page context.
 // Supports CSS selectors and url=pattern (matches frame URL via Page.getFrameTree).
+// Retries with polling until ctx deadline if iframe is not immediately available.
 func resolveFrame(ctx context.Context, page *rod.Page, selector string) (*rod.Page, error) {
 	kind, pattern := parseFrameSelector(selector)
 
-	switch kind {
-	case "url":
-		return resolveFrameByURL(ctx, page, pattern)
-	default:
-		return resolveFrameByCSS(ctx, page, pattern)
+	var lastErr error
+	for {
+		var frame *rod.Page
+		var err error
+		switch kind {
+		case "url":
+			frame, err = resolveFrameByURL(ctx, page, pattern)
+		default:
+			frame, err = resolveFrameByCSS(ctx, page, pattern)
+		}
+		if err == nil {
+			return frame, nil
+		}
+		lastErr = err
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("frame %q: %w (last: %v)", selector, ctx.Err(), lastErr)
+		case <-time.After(frameRetryInterval):
+			// retry
+		}
 	}
 }
 
