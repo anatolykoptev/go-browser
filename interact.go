@@ -170,7 +170,17 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 	logs.SubscribeCDP(page)
 
 	cursor := humanize.NewCursor(390, 290)
-	refMap := NewRefMap()
+
+	// Reuse RefMap from existing session so refs survive across calls.
+	var refMap *RefMap
+	if req.SessionID != nil && *req.SessionID != sessionIDNew && pool != nil {
+		if sess, err := pool.Get(*req.SessionID); err == nil {
+			refMap = sess.Refs
+		}
+	}
+	if refMap == nil {
+		refMap = NewRefMap()
+	}
 
 	// Start idle drift
 	driftFunc := func(x, y float64) error {
@@ -209,6 +219,10 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 		if err == nil {
 			sessionID = id
 			disposeCtx = false // pool owns the context now
+			// Attach current refMap so refs from this call survive into subsequent calls.
+			if sess, err := pool.Get(id); err == nil {
+				sess.Refs = refMap
+			}
 		}
 	}
 
