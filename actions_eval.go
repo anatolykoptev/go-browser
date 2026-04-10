@@ -31,5 +31,5 @@ func execScreenshot(dc dispatchContext, _ Action) (any, error) {
 }
 
 func execSnapshot(dc dispatchContext, a Action) (any, error) {
-	return doSnapshot(dc.page, a.Depth, a.Format, a.Filter, a.URLContains)
+	return doSnapshot(dc.page, a.Depth, a.Format, a.Filter, a.Selector)
 }
