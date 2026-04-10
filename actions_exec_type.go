@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/anatolykoptev/go-browser/cdputil"
+	"github.com/anatolykoptev/go-browser/humanize"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
@@ -66,8 +67,9 @@ func doTypeTextCDP(ctx context.Context, page *rod.Page, selector, text string, s
 
 	for _, ch := range text {
 		char := string(ch)
-		code := charToCode(ch)
-		vk := charToVK(ch)
+		ci := humanize.LookupChar(ch)
+		code := ci.Code
+		vk := ci.VK
 
 		_ = (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: char, Code: code,
