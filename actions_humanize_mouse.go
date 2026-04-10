@@ -33,6 +33,20 @@ func doClickHumanized(ctx context.Context, page *rod.Page, selector string, curs
 		return fmt.Errorf("click: %w", err)
 	}
 
+	// Pre-click dwell: visual acquisition delay (T3 TMX behavioral biometric).
+	// Dispatch micro-movements so the browser sees hand-settling jitter.
+	dwell, microMoves := humanize.DwellDelay(box.Width)
+	perMoveDelay := time.Duration(dwell/len(microMoves)) * time.Millisecond
+	for _, mm := range microMoves {
+		ev := proto.InputDispatchMouseEvent{
+			Type: proto.InputDispatchMouseEventTypeMouseMoved,
+			X:    targetX + mm.X,
+			Y:    targetY + mm.Y,
+		}
+		_ = ev.Call(page)
+		sleepCtx(ctx, perMoveDelay)
+	}
+
 	if err := dispatchMouseClick(page, targetX, targetY); err != nil {
 		return fmt.Errorf("click: %w", err)
 	}
