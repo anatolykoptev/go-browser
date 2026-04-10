@@ -24,11 +24,13 @@ const _workerProfile = (() => {
 
 const workerBootstrap = [
   'const PROFILE = ' + _workerProfile + ';',
-  // NOTE: navigator.webdriver is intentionally NOT overridden here.
-  // CloakBrowser's C++ engine patches webdriver at binary level — including in worker
-  // contexts. Adding a JS override on top creates a detectable lie: CreepJS's
-  // queryLies() checks Function.prototype.toString on the getter and detects
-  // "() => false" vs the expected "[native code]" string.
+  // navigator.webdriver — CloakBrowser C++ sets it to false in main thread
+  // but does NOT patch worker scope (remains undefined). Override here to match.
+  // Use Object.defineProperty with value (not getter) to avoid lieProps detection —
+  // a data descriptor with value:false is indistinguishable from a native assignment.
+  'Object.defineProperty(Object.getPrototypeOf(navigator), "webdriver", {',
+  '  value: false, writable: true, configurable: true, enumerable: true',
+  '});',
   'Object.defineProperty(Object.getPrototypeOf(navigator), "hardwareConcurrency", {',
   '  get: () => PROFILE.hardwareConcurrency, configurable: true',
   '});',
