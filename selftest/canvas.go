@@ -13,18 +13,18 @@ const canvasWaitTimeout = 30 * time.Second
 
 // canvasReadyJS returns non-null when the canvas fingerprint has been computed.
 const canvasReadyJS = `
-(function() {
+() => {
   var el = document.querySelector('.hash, [data-hash], #canvas-hash, .fingerprint-hash');
   if (el) return el.textContent.trim();
   // Also check for any canvas-related data in tables
   var rows = document.querySelectorAll('table tr td');
   return rows.length > 2 ? String(rows.length) : null;
-})()
+}
 `
 
 // canvasExtractJS extracts canvas fingerprint hash and uniqueness from browserleaks.
 const canvasExtractJS = `
-(function() {
+() => {
   var out = { hash: '', uniqueness: '', raw: '' };
 
   // browserleaks.com/canvas shows hash in a prominent display element
@@ -54,7 +54,7 @@ const canvasExtractJS = `
   if (section) out.raw = section.textContent.substring(0, 200).trim();
 
   return JSON.stringify(out);
-})()
+}
 `
 
 // extractCanvas extracts canvas fingerprint hash from https://browserleaks.com/canvas

@@ -14,7 +14,7 @@ const sannysoftWaitTimeout = 30 * time.Second
 // sannysoftExtractJS reads the results table from bot.sannysoft.com.
 // Each row has: td[0]=check name, td[1]=result value, with class "passed"/"failed".
 const sannysoftExtractJS = `
-(function() {
+() => {
   var rows = document.querySelectorAll('table tr');
   if (!rows || rows.length === 0) return null;
   var results = { checks: [], passed: 0, failed: 0 };
@@ -41,15 +41,15 @@ const sannysoftExtractJS = `
     }
   }
   return JSON.stringify(results);
-})()
+}
 `
 
 // sannysoftReadyJS returns non-null when the results table is populated.
 const sannysoftReadyJS = `
-(function() {
+() => {
   var rows = document.querySelectorAll('table tr td');
   return rows.length > 0 ? String(rows.length) : null;
-})()
+}
 `
 
 // sannysoftChecks is the parsed result from the sannysoft table.
