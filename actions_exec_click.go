@@ -80,7 +80,17 @@ func resolveElement(ctx context.Context, page *rod.Page, selector string, refMap
 	switch {
 	case strings.HasPrefix(selector, "text="):
 		text := strings.TrimPrefix(selector, "text=")
-		return p.ElementR("*", text)
+		// Try rod's built-in regex text selector first.
+		el, err := p.ElementR("*", text)
+		if err == nil {
+			return el, nil
+		}
+		// Fallback: XPath search for clickable ancestor containing the text.
+		el, err = findByText(ctx, page, text)
+		if err != nil {
+			return nil, fmt.Errorf("text=%s: %w", text, err)
+		}
+		return el, nil
 	case strings.HasPrefix(selector, "xpath="):
 		xpath := strings.TrimPrefix(selector, "xpath=")
 		return p.ElementX(xpath)
