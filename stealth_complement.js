@@ -956,47 +956,67 @@
   // iframe.contentWindow proxy fix — Target.setAutoAttach (Gap C) enables
   // the DevTools protocol to eagerly create browsing contexts for iframes
   // with srcdoc set, even when they are not yet appended to the DOM.
-  // Chrome sets contentWindow via C++ internals as an OWN data property on
-  // the iframe instance, bypassing JS set traps (Object.defineProperty).
-  // Real Chrome returns null contentWindow for detached iframes.
-  // CreepJS hasIframeProxy detects this discrepancy.
+  // Chrome's C++ binding sets contentWindow directly, bypassing JS Proxy
+  // traps entirely — so Proxy-based approaches cannot intercept the read.
   //
-  // Fix: wrap each new iframe in a Proxy. A Proxy get trap intercepts ALL
-  // reads regardless of how the underlying property was stored (C++ or JS).
-  // When contentWindow is read on a detached iframe, return null.
+  // Root cause: when srcdoc is set on a detached iframe, Chrome immediately
+  // creates a browsing context and exposes contentWindow. Real Chrome
+  // (without setAutoAttach) only does this when the iframe is in the DOM.
+  //
+  // Fix: intercept the srcdoc setter on HTMLIFrameElement.prototype.
+  // When srcdoc is set on a detached iframe, defer the actual assignment
+  // until the iframe is connected. Track the pending value and apply it
+  // on the first DOM insertion via MutationObserver on parentNode, or
+  // by overriding insertBefore/appendChild on the element's future parent.
+  //
+  // This prevents Chrome from seeing srcdoc on a detached iframe,
+  // so no browsing context is created, so contentWindow stays null.
+  // CreepJS hasIframeProxy check: !!iframe.contentWindow → false → pass.
   
   (() => {
-    const origCreateElement = Document.prototype.createElement;
+    const origSrcdocDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'srcdoc');
+    if (!origSrcdocDesc) return;
   
-    Document.prototype.createElement = function(tag, options) {
-      const el = origCreateElement.call(this, tag, options);
-      if (typeof tag !== 'string' || tag.toLowerCase() !== 'iframe') {
-        return el;
-      }
+    // Map from iframe element → pending srcdoc value (set while detached).
+    const pendingSrcdoc = new WeakMap();
   
-      const proxy = new Proxy(el, {
-        get(target, prop, receiver) {
-          if (prop === 'contentWindow') {
-            // Read the actual value Chrome stored (may be own C++ property).
-            const val = target.contentWindow;
-            // Return null when the iframe is not in the document — matches
-            // real Chrome behaviour for detached iframes without setAutoAttach.
-            return target.isConnected ? val : null;
-          }
-          const val = Reflect.get(target, prop, receiver);
-          // Bind functions so `this` inside them refers to the real element.
-          if (typeof val === 'function') {
-            return val.bind(target);
-          }
-          return val;
-        },
-        set(target, prop, value, receiver) {
-          return Reflect.set(target, prop, value, target);
-        },
-      });
+    // Apply any pending srcdoc value once the element is connected.
+    function flushPendingSrcdoc(el) {
+      if (!pendingSrcdoc.has(el)) return;
+      const val = pendingSrcdoc.get(el);
+      pendingSrcdoc.delete(el);
+      origSrcdocDesc.set.call(el, val);
+    }
   
-      return proxy;
-    };
+    Object.defineProperty(HTMLIFrameElement.prototype, 'srcdoc', {
+      get() {
+        // Return the pending value if not yet flushed, otherwise the real value.
+        return pendingSrcdoc.has(this)
+          ? pendingSrcdoc.get(this)
+          : origSrcdocDesc.get.call(this);
+      },
+      set(val) {
+        if (!this.isConnected) {
+          // Defer: store the value but don't tell Chrome yet.
+          pendingSrcdoc.set(this, val);
+          // Watch for insertion into the DOM.
+          const observer = new MutationObserver(() => {
+            if (this.isConnected) {
+              observer.disconnect();
+              flushPendingSrcdoc(this);
+            }
+          });
+          // Observe the document body (or documentElement as fallback).
+          const root = document.body || document.documentElement;
+          if (root) observer.observe(root, { childList: true, subtree: true });
+        } else {
+          // Already connected — forward immediately.
+          origSrcdocDesc.set.call(this, val);
+        }
+      },
+      configurable: true,
+      enumerable: true,
+    });
   })();
 
 })();
