@@ -10,68 +10,67 @@
 
 (() => {
   const sp = window.__sp;
-  if (!sp || !sp.screen) return;
+  const scr = (sp && sp.screen) || null;
 
-  const scr = sp.screen;
+  // --- Screen properties (profile-dependent) ---
+  if (scr) {
+    const screenProps = {
+      width:       scr.width,
+      height:      scr.height,
+      availWidth:  scr.availWidth  || scr.width,
+      availHeight: scr.availHeight || scr.height,
+      colorDepth:  scr.colorDepth  || 24,
+      pixelDepth:  scr.pixelDepth  || 24,
+    };
 
-  // --- Screen properties ---
-  // Use value descriptors (not getters) to avoid lieProps detection.
-  const screenProps = {
-    width:       scr.width,
-    height:      scr.height,
-    availWidth:  scr.availWidth  || scr.width,
-    availHeight: scr.availHeight || scr.height,
-    colorDepth:  scr.colorDepth  || 24,
-    pixelDepth:  scr.pixelDepth  || 24,
-  };
+    for (const [prop, val] of Object.entries(screenProps)) {
+      Object.defineProperty(Screen.prototype, prop, {
+        value: val,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+    }
 
-  for (const [prop, val] of Object.entries(screenProps)) {
-    Object.defineProperty(Screen.prototype, prop, {
-      value: val,
+    if (scr.devicePixelRatio) {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        value: scr.devicePixelRatio,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+    }
+
+    Object.defineProperty(window, 'outerWidth', {
+      value: scr.width,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperty(window, 'outerHeight', {
+      value: scr.availHeight || (scr.height - 25),
       writable: true,
       configurable: true,
       enumerable: true,
     });
   }
 
-  // --- devicePixelRatio ---
-  if (scr.devicePixelRatio) {
-    Object.defineProperty(window, 'devicePixelRatio', {
-      value: scr.devicePixelRatio,
-      writable: true,
-      configurable: true,
-      enumerable: true,
-    });
-  }
-
-  // --- outerWidth / outerHeight ---
-  // Real browsers: outerWidth = viewport + chrome UI (usually = screen.width
-  // when maximized). outerHeight = screen.height - taskbar (~25-75px).
-  Object.defineProperty(window, 'outerWidth', {
-    value: scr.width,
-    writable: true,
-    configurable: true,
-    enumerable: true,
-  });
-  Object.defineProperty(window, 'outerHeight', {
-    value: scr.availHeight || (scr.height - 25),
-    writable: true,
-    configurable: true,
-    enumerable: true,
-  });
-
-  // --- matchMedia patch ---
-  // Intercept dimension queries and evaluate them against spoofed values.
+  // --- matchMedia patch (ALWAYS active) ---
+  // Uses current screen.width/height (may be spoofed above or by CDP).
+  // Defeats: matchMedia("(device-width: "+screen.width+"px)").matches === false
   const _origMatchMedia = window.matchMedia;
   if (typeof _origMatchMedia !== 'function') return;
 
-  // Map CSS media features to our spoofed values.
-  const featureValues = {
-    'device-width':  scr.width,
-    'device-height': scr.height,
-    'width':         scr.availWidth  || scr.width,
-    'height':        scr.availHeight || scr.height,
-  };
+  // Read spoofed values lazily so we pick up whatever is set.
+  function getFeatureValue(feature) {
+    switch (feature) {
+      case 'device-width':  return screen.width;
+      case 'device-height': return screen.height;
+      case 'width':         return screen.availWidth  || screen.width;
+      case 'height':        return screen.availHeight || screen.height;
+      default:              return undefined;
+    }
+  }
 
   // Parse and evaluate a single media condition against spoofed values.
   // Handles: (feature: Xpx), (min-feature: Xpx), (max-feature: Xpx).
@@ -80,7 +79,7 @@
   function evaluateQuery(query) {
     let modified = false;
     const result = query.replace(dimPattern, (match, prefix, feature, valStr) => {
-      const spoofed = featureValues[feature];
+      const spoofed = getFeatureValue(feature);
       if (spoofed === undefined) return match;
       modified = true;
       const val = parseFloat(valStr);
