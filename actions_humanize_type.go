@@ -3,7 +3,6 @@ package browser
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/anatolykoptev/go-browser/humanize"
@@ -23,8 +22,9 @@ func doTypeTextHumanized(
 	delays := humanize.TypingDelays(text)
 	for i, ch := range text {
 		char := string(ch)
-		code := charToCode(ch)
-		vk := charToVK(ch)
+		ci := humanize.LookupChar(ch)
+		code := ci.Code
+		vk := ci.VK
 
 		_ = proto.InputDispatchKeyEvent{
 			Type:                  proto.InputDispatchKeyEventTypeRawKeyDown,
@@ -65,70 +65,4 @@ func doTypeTextHumanized(
 		}
 	}
 	return nil
-}
-
-// charToVK maps a character to its Windows Virtual Key code.
-func charToVK(ch rune) int {
-	switch {
-	case ch >= 'a' && ch <= 'z':
-		return int(ch - 32) // VK_A=65 .. VK_Z=90
-	case ch >= 'A' && ch <= 'Z':
-		return int(ch)
-	case ch >= '0' && ch <= '9':
-		return int(ch) // VK_0=48 .. VK_9=57
-	case ch == ' ':
-		return 32 // VK_SPACE
-	case ch == '.':
-		return 190 // VK_OEM_PERIOD
-	case ch == ',':
-		return 188 // VK_OEM_COMMA
-	case ch == '-':
-		return 189 // VK_OEM_MINUS
-	case ch == '=':
-		return 187 // VK_OEM_PLUS
-	case ch == '@':
-		return 50 // Shift+2
-	case ch == '_':
-		return 189 // Shift+Minus
-	case ch == '!':
-		return 49 // Shift+1
-	case ch == '/':
-		return 191 // VK_OEM_2
-	case ch == ':':
-		return 186 // Shift+;
-	case ch == ';':
-		return 186 // VK_OEM_1
-	default:
-		return int(ch)
-	}
-}
-
-// charToCode maps a character to its DOM KeyboardEvent.code value.
-func charToCode(ch rune) string {
-	switch {
-	case ch >= 'a' && ch <= 'z':
-		return "Key" + strings.ToUpper(string(ch))
-	case ch >= 'A' && ch <= 'Z':
-		return "Key" + string(ch)
-	case ch >= '0' && ch <= '9':
-		return "Digit" + string(ch)
-	case ch == ' ':
-		return "Space"
-	case ch == '.':
-		return "Period"
-	case ch == ',':
-		return "Comma"
-	case ch == '-':
-		return "Minus"
-	case ch == '=':
-		return "Equal"
-	case ch == '@':
-		return "Digit2"
-	case ch == '_':
-		return "Minus"
-	case ch == '!':
-		return "Digit1"
-	default:
-		return ""
-	}
 }
