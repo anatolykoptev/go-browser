@@ -9,7 +9,7 @@ import (
 	"github.com/go-rod/rod"
 )
 
-const creepJSWaitTimeout = 30 * time.Second
+const creepJSWaitTimeout = 50 * time.Second
 
 // creepJSResult is the structure extracted from window.__creepResult on creepjs.
 type creepJSResult struct {
@@ -58,7 +58,7 @@ const creepJSExtractJS = `
 
   // Capture body text and debug info before deciding to fail
   var bodyText = document.body ? document.body.innerText : '';
-  var debugSnippet = document.title + ' | body[0:400]: ' + bodyText.substring(0, 400);
+  var debugSnippet = document.title + ' | bodyLen:' + bodyText.length + ' | tail[200]: ' + bodyText.substring(Math.max(0, bodyText.length - 200));
 
   // If no explicit score element, try scanning visible text for "trust score: N" or "N%"
   if (!score) {
@@ -111,12 +111,12 @@ const creepJSReadyJS = `
     var txt = el.textContent.trim();
     if (/\d{2,3}/.test(txt)) return txt;
   }
-  // Fallback: any element whose text looks like a trust percentage
-  var els = document.querySelectorAll('span, div, p');
-  for (var i = 0; i < els.length; i++) {
-    var t = els[i].textContent.trim();
-    if (/^trust score[:\s]*\d/i.test(t) || /^\d{2,3}%?\s*(trusted|bot|lie)/i.test(t)) return t;
-  }
+  // Fallback: scan full body text for trust score or lie count patterns
+  var bodyText = document.body ? document.body.innerText : '';
+  if (/trust score[:\s]*\d/i.test(bodyText)) return 'body-trust';
+  if (/\d+ lie/i.test(bodyText) && bodyText.length > 2000) return 'body-lies';
+  // Also fire when body is large enough (all modules rendered)
+  if (bodyText.length > 5000) return 'body-ready';
   return null;
 }
 `
