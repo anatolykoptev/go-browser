@@ -200,9 +200,11 @@
   
   const workerBootstrap = [
     'const PROFILE = ' + _workerProfile + ';',
-    'Object.defineProperty(Object.getPrototypeOf(navigator), "webdriver", {',
-    '  get: () => false, configurable: true, enumerable: true',
-    '});',
+    // NOTE: navigator.webdriver is intentionally NOT overridden here.
+    // CloakBrowser's C++ engine patches webdriver at binary level — including in worker
+    // contexts. Adding a JS override on top creates a detectable lie: CreepJS's
+    // queryLies() checks Function.prototype.toString on the getter and detects
+    // "() => false" vs the expected "[native code]" string.
     'Object.defineProperty(Object.getPrototypeOf(navigator), "hardwareConcurrency", {',
     '  get: () => PROFILE.hardwareConcurrency, configurable: true',
     '});',
@@ -704,6 +706,16 @@
   // in the same scope. Use window.__sp directly or wrap in a nested IIFE.
   
   (() => {
+    // pdfViewerEnabled — headless Chrome defaults to false; real Chrome sets true.
+    // CreepJS likeHeadless checks this directly.
+    if (!navigator.pdfViewerEnabled) {
+      Object.defineProperty(Navigator.prototype, 'pdfViewerEnabled', {
+        get: () => true,
+        configurable: true,
+        enumerable: true,
+      });
+    }
+  
     // Web Share API — present on macOS Chrome but not in headless.
     if (!navigator.share) {
       Object.defineProperty(Navigator.prototype, 'share', {
