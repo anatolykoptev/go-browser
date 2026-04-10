@@ -11,12 +11,21 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-func doScreenshot(page *rod.Page) (string, error) {
-	buf, err := page.Screenshot(true, nil)
+func doScreenshot(page *rod.Page, fullPage bool) (string, error) {
+	// Use CDP directly for JPEG + quality control.
+	format := proto.PageCaptureScreenshotFormatJpeg
+	quality := 60
+	req := proto.PageCaptureScreenshot{
+		Format:                format,
+		Quality:               &quality,
+		OptimizeForSpeed:      true,
+		CaptureBeyondViewport: fullPage,
+	}
+	res, err := req.Call(page)
 	if err != nil {
 		return "", fmt.Errorf("screenshot: %w", err)
 	}
-	return base64.StdEncoding.EncodeToString(buf), nil
+	return base64.StdEncoding.EncodeToString(res.Data), nil
 }
 
 // doEvaluate runs JS as a raw expression via CDP RuntimeEvaluate.

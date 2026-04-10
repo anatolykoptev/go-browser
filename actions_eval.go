@@ -26,8 +26,10 @@ func execEvalOnNewDocument(dc dispatchContext, a Action) (any, error) {
 	return nil, err
 }
 
-func execScreenshot(dc dispatchContext, _ Action) (any, error) {
-	return doScreenshot(dc.page)
+func execScreenshot(dc dispatchContext, a Action) (any, error) {
+	// Default: viewport only. Use format="full" for full-page screenshot.
+	fullPage := a.Format == "full"
+	return doScreenshot(dc.page, fullPage)
 }
 
 func execSnapshot(dc dispatchContext, a Action) (any, error) {
