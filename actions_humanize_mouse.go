@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"time"
 
@@ -31,6 +32,22 @@ func doClickHumanized(ctx context.Context, page *rod.Page, selector string, curs
 
 	if err := moveMouseBezier(ctx, page, cursor, targetX, targetY); err != nil {
 		return fmt.Errorf("click: %w", err)
+	}
+
+	// Overshoot + correction: imprecise stopping followed by fine motor correction.
+	curX, curY := cursor.Position()
+	dist := math.Sqrt((targetX-curX)*(targetX-curX) + (targetY-curY)*(targetY-curY))
+	if humanize.ShouldOvershoot(dist) {
+		over := humanize.OvershootPoint(curX, curY, targetX, targetY)
+		if err := movePath(ctx, page, cursor, []humanize.Point{over}); err != nil {
+			return fmt.Errorf("click: overshoot: %w", err)
+		}
+		// Pause 50-120ms: brain registering the overshoot.
+		sleepCtx(ctx, time.Duration(50+rand.IntN(71))*time.Millisecond)
+		correction := humanize.CorrectionPath(over, humanize.Point{X: targetX, Y: targetY})
+		if err := movePath(ctx, page, cursor, correction); err != nil {
+			return fmt.Errorf("click: correction: %w", err)
+		}
 	}
 
 	// Pre-click dwell: visual acquisition delay (T3 TMX behavioral biometric).
@@ -102,6 +119,24 @@ func doHoverHumanized(ctx context.Context, page *rod.Page, selector string, curs
 		return fmt.Errorf("hover: %w", err)
 	}
 
+	return nil
+}
+
+// movePath dispatches CDP mouse-move events for each point in path,
+// updating the cursor position at each step. Used for overshoot and correction paths.
+func movePath(ctx context.Context, page *rod.Page, cursor *humanize.Cursor, path []humanize.Point) error {
+	for _, p := range path {
+		ev := proto.InputDispatchMouseEvent{
+			Type: proto.InputDispatchMouseEventTypeMouseMoved,
+			X:    p.X,
+			Y:    p.Y,
+		}
+		if err := ev.Call(page); err != nil {
+			return fmt.Errorf("mouse move: %w", err)
+		}
+		cursor.MoveTo(p.X, p.Y)
+		sleepCtx(ctx, time.Duration(humanize.MouseDelay())*time.Millisecond)
+	}
 	return nil
 }
 
