@@ -10,8 +10,8 @@ import (
 
 // Action describes a single Chrome interaction step.
 type Action struct {
-	Type        string        `json:"type" jsonschema:"Action type: click, type_text, wait_for (CSS selector, text, text_gone, or wait_ms for time-based wait), snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll, select_option (select dropdown values by text), get_storage, set_storage, clear_storage. Selectors support CSS, text=, xpath= prefixes. Prefer snapshot over screenshot."`
-	Selector    string        `json:"selector,omitempty" jsonschema:"CSS selector for click/type_text/wait_for/hover/scroll"`
+	Type        string        `json:"type" jsonschema:"Action type: click, type_text, wait_for (CSS selector, text, text_gone, or wait_ms for time-based wait), snapshot (accessibility tree — best for AI), screenshot (PNG image — only when visual needed), evaluate (any JS expression), eval_on_new_document, press (supports F1-F12), sleep/wait, navigate, set_cookies, handle_dialog, get_cookies, destroy_session, hover, go_back, get_logs, warmup, scroll, select_option (select dropdown values by text), get_storage, set_storage, clear_storage. Selectors support CSS, text=, xpath=, ref= prefixes. Use ref=eN after a snapshot action to click/type elements by their ref id. Prefer snapshot over screenshot."`
+	Selector    string        `json:"selector,omitempty" jsonschema:"Element selector for click/type_text/wait_for/hover/scroll. Supports: CSS (#id, .class), text=Text, xpath=//div, ref=eN (from snapshot). Best practice: snapshot first, then use ref=eN for precise targeting."`
 	Text        string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
 	Script      string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
 	JS          string        `json:"js,omitempty" jsonschema:"Alias for script"`
