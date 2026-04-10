@@ -58,7 +58,9 @@ const creepJSExtractJS = `
 
   // Capture body text and debug info before deciding to fail
   var bodyText = document.body ? document.body.innerText : '';
-  var debugSnippet = document.title + ' | bodyLen:' + bodyText.length + ' | tail[200]: ' + bodyText.substring(Math.max(0, bodyText.length - 200));
+  var debugSnippet = document.title + ' | bodyLen:' + bodyText.length +
+    ' | head[100]: ' + bodyText.substring(0, 100) +
+    ' | tail[200]: ' + bodyText.substring(Math.max(0, bodyText.length - 200));
 
   // If no explicit score element, try scanning visible text for "trust score: N" or "N%"
   if (!score) {
@@ -104,19 +106,22 @@ const creepJSExtractJS = `
 // creepjs can take 5-15 s to finish all fingerprinting phases.
 const creepJSReadyJS = `
 () => {
-  // Look for a numeric trust score — creepjs renders "94%" or "94" when done.
-  // Selectors observed in 2025-2026 DOM.
+  // creepjs renders results dynamically via JS — the trust score appears only
+  // after all fingerprinting modules complete (typically 10-60 s).
+  // Look for a DOM element containing the computed score.
   var el = document.querySelector('.trust-score, #creep-results .score, .fingerprint-data, #creepjs .summary, .creepjs-trust');
   if (el) {
     var txt = el.textContent.trim();
     if (/\d{2,3}/.test(txt)) return txt;
   }
-  // Fallback: scan full body text for trust score or lie count patterns
+  // Scan full body text for trust score pattern (score appears in page text when done)
   var bodyText = document.body ? document.body.innerText : '';
   if (/trust score[:\s]*\d/i.test(bodyText)) return 'body-trust';
-  if (/\d+ lie/i.test(bodyText) && bodyText.length > 2000) return 'body-lies';
-  // Also fire when body is large enough (all modules rendered; 3000 chars = sufficient content)
-  if (bodyText.length > 3000) return 'body-ready';
+  if (/\d+\s*lie[s]?\s*detected/i.test(bodyText)) return 'body-lies';
+  // Check window.__creepResult (may be populated before DOM update)
+  try {
+    if (window.__creepResult && window.__creepResult.trustScore != null) return 'window-ready';
+  } catch(e) {}
   return null;
 }
 `
