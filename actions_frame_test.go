@@ -73,3 +73,42 @@ func TestFrameTypeCompatibility(t *testing.T) {
 	el := &rod.Element{}
 	_ = el.Frame // This compiles only if Frame returns (*rod.Page, error)
 }
+
+func TestParseFrameSelector(t *testing.T) {
+	tests := []struct {
+		sel     string
+		kind    string
+		pattern string
+	}{
+		{"iframe.payment", "css", "iframe.payment"},
+		{"url=payments.audienceview.com", "url", "payments.audienceview.com"},
+		{"url=stripe.com", "url", "stripe.com"},
+		{"#card-frame", "css", "#card-frame"},
+	}
+	for _, tt := range tests {
+		kind, pattern := parseFrameSelector(tt.sel)
+		if kind != tt.kind || pattern != tt.pattern {
+			t.Errorf("parseFrameSelector(%q) = %q, %q; want %q, %q",
+				tt.sel, kind, pattern, tt.kind, tt.pattern)
+		}
+	}
+}
+
+func TestMatchFrameURL(t *testing.T) {
+	tests := []struct {
+		frameURL string
+		pattern  string
+		want     bool
+	}{
+		{"https://payments.audienceview.com/hosted-fields/v1/index.html", "payments.audienceview.com", true},
+		{"https://js.stripe.com/v3/controller.html", "stripe.com", true},
+		{"https://example.com/page", "stripe.com", false},
+		{"about:blank", "payments", false},
+	}
+	for _, tt := range tests {
+		if got := matchFrameURL(tt.frameURL, tt.pattern); got != tt.want {
+			t.Errorf("matchFrameURL(%q, %q) = %v; want %v",
+				tt.frameURL, tt.pattern, got, tt.want)
+		}
+	}
+}
