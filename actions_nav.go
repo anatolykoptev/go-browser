@@ -24,6 +24,9 @@ func execScroll(dc dispatchContext, a Action) (any, error) {
 		}
 		return nil, cdputil.ScrollIntoView(dc.page, nodeID)
 	}
+	if dc.stealthMode && a.Selector == "" && a.DeltaY != 0 {
+		return nil, doScrollHumanized(dc.ctx, dc.page, int(a.DeltaY), dc.cursor)
+	}
 	return nil, doScroll(dc.ctx, dc.page, a.Selector, a.DeltaX, a.DeltaY, dc.refMap)
 }
 
