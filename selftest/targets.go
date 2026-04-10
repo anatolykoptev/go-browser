@@ -20,6 +20,8 @@ var AllTargets = []Target{
 	{Key: "botd", URL: "https://fingerprintjs.github.io/BotD/main/"},
 	{Key: "webrtc_leak", URL: "https://browserleaks.com/webrtc"},
 	{Key: "canvas", URL: "https://browserleaks.com/canvas"},
+	{Key: "incolumitas", URL: "https://bot.incolumitas.com/"},
+	{Key: "browserscan", URL: "https://www.browserscan.net/bot-detection"},
 }
 
 // Extractor is a function that probes a page and returns a TargetResult.
@@ -35,4 +37,6 @@ var Extractors = map[string]Extractor{
 	"botd":        extractBotD,
 	"webrtc_leak": extractWebRTCLeak,
 	"canvas":      extractCanvas,
+	"incolumitas": extractIncolumitas,
+	"browserscan": extractBrowserScan,
 }
