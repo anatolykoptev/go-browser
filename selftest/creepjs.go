@@ -34,6 +34,7 @@ type creepJSResult struct {
 		Brands   []map[string]string `json:"brands"`
 		Platform string              `json:"platform"`
 	} `json:"ua"`
+	Debug string `json:"_debug,omitempty"`
 }
 
 // creepJSExtractJS is evaluated in the page to extract results from creepjs.
@@ -44,11 +45,26 @@ const creepJSExtractJS = `
   // Try window.__creepResult first (internal state)
   if (window.__creepResult) return JSON.stringify(window.__creepResult);
 
-  // Fall back to parsing the rendered DOM
-  var scoreEl = document.querySelector('#creep-results .trust-score, .trust, [data-trust]');
-  if (!scoreEl) return null;
+  // Try finding trust score in the rendered DOM (selectors updated 2026)
+  var scoreEl = document.querySelector(
+    '#creep-results .trust-score, .trust-score, .trust, [data-trust], ' +
+    '#creepjs .summary, .creepjs-trust, .fingerprint-trust'
+  );
+  var score = 0;
+  if (scoreEl) {
+    score = parseFloat(scoreEl.textContent.replace(/[^0-9.]/g, '')) || 0;
+  }
 
-  var result = { trustScore: parseFloat(scoreEl.textContent) || 0, lies: [], fonts: {}, webrtc: {}, audio: {}, voices: {}, ua: {} };
+  // If no explicit score element, try scanning visible text for "trust score: N"
+  if (!score) {
+    var bodyText = document.body ? document.body.innerText : '';
+    var m = bodyText.match(/trust score[:\s]*(\d{1,3})/i);
+    if (m) score = parseFloat(m[1]);
+    if (!score) return null;
+  }
+
+  var result = { trustScore: score, lies: [], fonts: {}, webrtc: {}, audio: {}, voices: {}, ua: {},
+                 _debug: document.title + ' | ' + (document.body ? document.body.innerText.substring(0, 200) : '') };
 
   // Collect lies (use for loop to avoid prototype patching issues)
   var lieEls = document.querySelectorAll('.lie, .lies li, [data-lie]');
@@ -74,11 +90,19 @@ const creepJSExtractJS = `
 const creepJSReadyJS = `
 () => {
   // Look for a numeric trust score — creepjs renders "94%" or "94" when done.
-  var el = document.querySelector('.trust-score, #creep-results .score, .fingerprint-data');
-  if (!el) return null;
-  var txt = el.textContent.trim();
-  // Only return when text looks like a number (score rendered, not loading).
-  return /\d{2,3}/.test(txt) ? txt : null;
+  // Selectors observed in 2025-2026 DOM.
+  var el = document.querySelector('.trust-score, #creep-results .score, .fingerprint-data, #creepjs .summary, .creepjs-trust');
+  if (el) {
+    var txt = el.textContent.trim();
+    if (/\d{2,3}/.test(txt)) return txt;
+  }
+  // Fallback: any element whose text looks like a trust percentage
+  var els = document.querySelectorAll('span, div, p');
+  for (var i = 0; i < els.length; i++) {
+    var t = els[i].textContent.trim();
+    if (/^trust score[:\s]*\d/i.test(t) || /^\d{2,3}%?\s*(trusted|bot|lie)/i.test(t)) return t;
+  }
+  return null;
 }
 `
 
@@ -125,12 +149,16 @@ func extractCreepJS(ctx context.Context, page *rod.Page) (TargetResult, error) {
 	result.OK = true
 	result.TrustScore = cr.TrustScore
 	result.Lies = cr.Lies
-	result.Sections = map[string]any{
+	sections := map[string]any{
 		"fonts":  map[string]any{"hash": cr.Fonts.Hash, "platformClassifier": cr.Fonts.PlatformClassifier},
 		"webrtc": map[string]any{"publicIp": cr.WebRTC.PublicIP, "localIps": cr.WebRTC.LocalIPs},
 		"audio":  map[string]any{"hash": cr.Audio.Hash},
 		"voices": map[string]any{"count": cr.Voices.Count, "hash": cr.Voices.Hash},
 		"ua":     map[string]any{"brands": cr.UA.Brands, "platform": cr.UA.Platform},
 	}
+	if cr.Debug != "" {
+		sections["_debug"] = cr.Debug
+	}
+	result.Sections = sections
 	return result, nil
 }
