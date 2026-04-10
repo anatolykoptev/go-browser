@@ -20,6 +20,7 @@ func buildAXIndex(nodes []*proto.AccessibilityAXNode) (map[string]*nodeInfo, []s
 			continue
 		}
 		info := extractNodeInfo(node)
+		info.backendNodeID = node.BackendDOMNodeID
 		id := string(node.NodeID)
 		for _, cid := range info.children {
 			isChild[cid] = true

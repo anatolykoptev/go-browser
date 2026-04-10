@@ -11,12 +11,18 @@ func init() {
 
 func execTypeText(dc dispatchContext, a Action) (any, error) {
 	if dc.stealthMode || a.Slowly {
-		return nil, doTypeTextCDP(dc.ctx, dc.page, a.Selector, a.Text, a.Submit)
+		return nil, withRetry(dc.ctx, func() error {
+			return doTypeTextCDP(dc.ctx, dc.page, a.Selector, a.Text, a.Submit)
+		})
 	}
 	if a.Humanize && dc.cursor != nil {
-		return nil, doTypeTextHumanized(dc.ctx, dc.page, a.Selector, a.Text, dc.cursor)
+		return nil, withRetry(dc.ctx, func() error {
+			return doTypeTextHumanized(dc.ctx, dc.page, a.Selector, a.Text, dc.cursor)
+		})
 	}
-	return nil, doTypeText(dc.ctx, dc.page, a.Selector, a.Text, a.Slowly, a.Submit)
+	return nil, withRetry(dc.ctx, func() error {
+		return doTypeText(dc.ctx, dc.page, a.Selector, a.Text, a.Slowly, a.Submit)
+	})
 }
 
 func execPress(dc dispatchContext, a Action) (any, error) {
