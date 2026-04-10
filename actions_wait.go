@@ -37,9 +37,9 @@ func dispatchWaitFor(waitCtx context.Context, dc dispatchContext, a Action) erro
 		return doSleep(waitCtx, a.WaitMs)
 	default:
 		if dc.stealthMode {
-			return doWaitForStealth(waitCtx, dc.page, a.Selector)
+			return doWaitForStealth(waitCtx, dc.page, a.Selector, dc.refMap)
 		}
-		return doWaitFor(waitCtx, dc.page, a.Selector)
+		return doWaitFor(waitCtx, dc.page, a.Selector, dc.refMap)
 	}
 }
 
@@ -50,7 +50,7 @@ func execWaitForNavigation(dc dispatchContext, a Action) (any, error) {
 	}
 	waitCtx, cancel := context.WithTimeout(dc.ctx, timeout)
 	defer cancel()
-	return doWaitForNavigation(waitCtx, dc.page, a.URLContains, a.Selector)
+	return doWaitForNavigation(waitCtx, dc.page, a.URLContains, a.Selector, dc.refMap)
 }
 
 func execSleep(dc dispatchContext, a Action) (any, error) {

@@ -170,6 +170,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 	logs.SubscribeCDP(page)
 
 	cursor := humanize.NewCursor(390, 290)
+	refMap := NewRefMap()
 
 	// Start idle drift
 	driftFunc := func(x, y float64) error {
@@ -187,7 +188,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 	var actionErr string
 
 	for _, a := range req.Actions {
-		res := ExecuteAction(ctx, page, a, cursor, logs, req.StealthMode)
+		res := ExecuteAction(ctx, page, a, cursor, logs, req.StealthMode, refMap)
 		results = append(results, res)
 		if !res.Ok {
 			status = "error"
@@ -223,7 +224,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 // runPreActions executes actions that must run before navigation (e.g. eval_on_new_document, set_cookies).
 func runPreActions(ctx context.Context, page *rod.Page, actions []Action) string {
 	for _, a := range actions {
-		result := ExecuteAction(ctx, page, a, nil, nil, false)
+		result := ExecuteAction(ctx, page, a, nil, nil, false, nil)
 		if !result.Ok {
 			return fmt.Sprintf("pre_action %s: %s", a.Type, result.Error)
 		}

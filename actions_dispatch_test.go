@@ -28,7 +28,7 @@ func TestActionRegistry_Populated(t *testing.T) {
 
 // TestExecuteAction_UnknownType verifies that an unknown action type returns an error result.
 func TestExecuteAction_UnknownType(t *testing.T) {
-	result := ExecuteAction(context.Background(), nil, Action{Type: "nonexistent_action"}, nil, nil, false)
+	result := ExecuteAction(context.Background(), nil, Action{Type: "nonexistent_action"}, nil, nil, false, nil)
 	if result.Ok {
 		t.Error("expected Ok=false for unknown action type")
 	}
@@ -39,7 +39,7 @@ func TestExecuteAction_UnknownType(t *testing.T) {
 
 // TestExecuteAction_DestroySessionNoOp verifies destroy_session returns Ok=true with no data.
 func TestExecuteAction_DestroySessionNoOp(t *testing.T) {
-	result := ExecuteAction(context.Background(), nil, Action{Type: "destroy_session"}, nil, nil, false)
+	result := ExecuteAction(context.Background(), nil, Action{Type: "destroy_session"}, nil, nil, false, nil)
 	if !result.Ok {
 		t.Errorf("destroy_session: expected Ok=true, got error: %s", result.Error)
 	}
@@ -67,7 +67,7 @@ func TestExecGetLogs_DefaultLimit(t *testing.T) {
 	}
 
 	dc := dispatchContext{ctx: context.Background(), logs: logs}
-	result := ExecuteAction(context.Background(), nil, Action{Type: "get_logs"}, nil, logs, false)
+	result := ExecuteAction(context.Background(), nil, Action{Type: "get_logs"}, nil, logs, false, nil)
 	if !result.Ok {
 		t.Fatalf("get_logs failed: %s", result.Error)
 	}

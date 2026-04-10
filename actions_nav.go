@@ -18,13 +18,13 @@ func execNavigate(dc dispatchContext, a Action) (any, error) {
 
 func execScroll(dc dispatchContext, a Action) (any, error) {
 	if dc.stealthMode && a.Selector != "" {
-		nodeID, err := cdputil.QuerySelector(dc.page, a.Selector)
+		nodeID, err := resolveRefNodeID(dc.page, a.Selector, dc.refMap)
 		if err != nil {
 			return nil, err
 		}
 		return nil, cdputil.ScrollIntoView(dc.page, nodeID)
 	}
-	return nil, doScroll(dc.ctx, dc.page, a.Selector, a.DeltaX, a.DeltaY)
+	return nil, doScroll(dc.ctx, dc.page, a.Selector, a.DeltaX, a.DeltaY, dc.refMap)
 }
 
 func execResize(dc dispatchContext, a Action) (any, error) {

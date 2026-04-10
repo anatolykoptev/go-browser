@@ -12,7 +12,7 @@ func init() {
 func execTypeText(dc dispatchContext, a Action) (any, error) {
 	if dc.stealthMode || a.Slowly {
 		return nil, withRetry(dc.ctx, func() error {
-			return doTypeTextCDP(dc.ctx, dc.page, a.Selector, a.Text, a.Submit)
+			return doTypeTextCDP(dc.ctx, dc.page, a.Selector, a.Text, a.Submit, dc.refMap)
 		})
 	}
 	if a.Humanize && dc.cursor != nil {
@@ -21,7 +21,7 @@ func execTypeText(dc dispatchContext, a Action) (any, error) {
 		})
 	}
 	return nil, withRetry(dc.ctx, func() error {
-		return doTypeText(dc.ctx, dc.page, a.Selector, a.Text, a.Slowly, a.Submit)
+		return doTypeText(dc.ctx, dc.page, a.Selector, a.Text, a.Slowly, a.Submit, dc.refMap)
 	})
 }
 
@@ -31,11 +31,11 @@ func execPress(dc dispatchContext, a Action) (any, error) {
 
 func execFillForm(dc dispatchContext, a Action) (any, error) {
 	if dc.stealthMode {
-		return nil, doFillFormStealth(dc.ctx, dc.page, a.Fields)
+		return nil, doFillFormStealth(dc.ctx, dc.page, a.Fields, dc.refMap)
 	}
-	return nil, doFillForm(dc.ctx, dc.page, a.Fields)
+	return nil, doFillForm(dc.ctx, dc.page, a.Fields, dc.refMap)
 }
 
 func execSelectOption(dc dispatchContext, a Action) (any, error) {
-	return nil, doSelectOption(dc.ctx, dc.page, a.Selector, a.Values)
+	return nil, doSelectOption(dc.ctx, dc.page, a.Selector, a.Values, dc.refMap)
 }
