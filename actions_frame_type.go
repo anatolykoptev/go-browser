@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -65,10 +66,12 @@ func typeViaKeyboard(ctx context.Context, page *rod.Page, text string) error {
 		_ = (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: char,
 		}).Call(page)
+		// Human-like typing cadence: 50-150ms between characters.
+		delay := 50 + rand.IntN(100)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(time.Duration(delay) * time.Millisecond):
 		}
 	}
 	return nil
