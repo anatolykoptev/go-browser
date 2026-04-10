@@ -13,15 +13,15 @@ const webrtcWaitTimeout = 30 * time.Second
 
 // webrtcReadyJS returns non-null when the WebRTC table has loaded IPs.
 const webrtcReadyJS = `
-(function() {
+() => {
   var cells = document.querySelectorAll('table td, .ip-address, [data-ip]');
   return cells.length > 0 ? String(cells.length) : null;
-})()
+}
 `
 
 // webrtcExtractJS extracts IP addresses from the browserleaks WebRTC page.
 const webrtcExtractJS = `
-(function() {
+() => {
   var out = { publicIps: [], localIps: [], allIps: [] };
 
   // browserleaks.com/webrtc renders IPs in a table
@@ -67,7 +67,7 @@ const webrtcExtractJS = `
   out.publicIps = dedup(out.publicIps);
 
   return JSON.stringify(out);
-})()
+}
 `
 
 // extractWebRTCLeak checks for IP leaks at https://browserleaks.com/webrtc

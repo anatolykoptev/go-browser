@@ -13,7 +13,7 @@ const botdWaitTimeout = 30 * time.Second
 
 // botdReadyJS returns a non-empty string once BotD has rendered its result.
 const botdReadyJS = `
-(function() {
+() => {
   // BotD renders a result element with bot/not-bot verdict
   var el = document.querySelector('.result, #result, [data-result], .bd-result');
   if (el) return el.textContent.trim();
@@ -21,12 +21,12 @@ const botdReadyJS = `
   var body = document.body ? document.body.innerText : '';
   if (body.includes('bot') || body.includes('Bot') || body.includes('human')) return body.substring(0, 100);
   return null;
-})()
+}
 `
 
 // botdExtractJS extracts the BotD verdict and confidence.
 const botdExtractJS = `
-(function() {
+() => {
   // BotD exposes window.BotD or a result element
   var out = { bot: null, confidence: null, raw: '' };
 
@@ -53,7 +53,7 @@ const botdExtractJS = `
   }
 
   return JSON.stringify(out);
-})()
+}
 `
 
 // extractBotD reads the bot detection verdict from https://fingerprintjs.github.io/BotD/main/

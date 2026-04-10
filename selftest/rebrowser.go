@@ -13,18 +13,18 @@ const rebrowserWaitTimeout = 30 * time.Second
 
 // rebrowserReadyJS returns non-null when botDetectorResults is populated.
 const rebrowserReadyJS = `
-(function() {
+() => {
   if (window.botDetectorResults && Object.keys(window.botDetectorResults).length > 0)
     return JSON.stringify(window.botDetectorResults);
   // Fall back to DOM-based detection result
   var el = document.querySelector('.results, #results, [data-results]');
   return el ? el.textContent.trim() : null;
-})()
+}
 `
 
 // rebrowserExtractJS extracts the full botDetectorResults object.
 const rebrowserExtractJS = `
-(function() {
+() => {
   if (window.botDetectorResults) return JSON.stringify(window.botDetectorResults);
   // Parse visible result cards using for loop (safer with stealth-patched prototypes)
   var out = {};
@@ -38,7 +38,7 @@ const rebrowserExtractJS = `
     if (name && (passed || failed)) out[name] = passed;
   }
   return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
-})()
+}
 `
 
 // extractRebrowser reads window.botDetectorResults from https://bot-detector.rebrowser.net/

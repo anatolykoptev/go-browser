@@ -41,7 +41,7 @@ type creepJSResult struct {
 // creepjs populates window.__fingerprint or exposes the score in the DOM.
 // We poll for the trust score element to appear then extract via the DOM.
 const creepJSExtractJS = `
-(function() {
+() => {
   // Try window.__creepResult first (internal state)
   if (window.__creepResult) return JSON.stringify(window.__creepResult);
 
@@ -51,11 +51,12 @@ const creepJSExtractJS = `
 
   var result = { trustScore: parseFloat(scoreEl.textContent) || 0, lies: [], fonts: {}, webrtc: {}, audio: {}, voices: {}, ua: {} };
 
-  // Collect lies
-  document.querySelectorAll('.lie, .lies li, [data-lie]').forEach(function(el) {
-    var t = el.textContent.trim();
+  // Collect lies (use for loop to avoid prototype patching issues)
+  var lieEls = document.querySelectorAll('.lie, .lies li, [data-lie]');
+  for (var i = 0; i < lieEls.length; i++) {
+    var t = lieEls[i].textContent.trim();
     if (t) result.lies.push(t);
-  });
+  }
 
   // Fonts
   var fontEl = document.querySelector('[data-id="fonts"] .hash, .fonts-hash');
@@ -66,16 +67,16 @@ const creepJSExtractJS = `
   if (audioEl) result.audio.hash = audioEl.textContent.trim();
 
   return JSON.stringify(result);
-})()
+}
 `
 
 // creepJSReadyJS returns non-null when the page has fully rendered its results.
 const creepJSReadyJS = `
-(function() {
+() => {
   // creepjs renders into #creep-results; trust score appears when analysis completes
   var el = document.querySelector('.trust-score, #creep-results .score, .fingerprint-data');
   return el ? el.textContent : null;
-})()
+}
 `
 
 // extractCreepJS extracts trust score, lies, and per-section hashes from
