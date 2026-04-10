@@ -9,6 +9,7 @@ import (
 
 func init() {
 	registerAction("wait_for", execWaitFor)
+	registerAction("wait_for_navigation", execWaitForNavigation)
 	registerAction("sleep", execSleep)
 	registerAction("wait", execSleep)
 }
@@ -40,6 +41,16 @@ func dispatchWaitFor(waitCtx context.Context, dc dispatchContext, a Action) erro
 		}
 		return doWaitFor(waitCtx, dc.page, a.Selector)
 	}
+}
+
+func execWaitForNavigation(dc dispatchContext, a Action) (any, error) {
+	timeout := 10 * time.Second
+	if a.TimeoutMs > 0 {
+		timeout = time.Duration(a.TimeoutMs) * time.Millisecond
+	}
+	waitCtx, cancel := context.WithTimeout(dc.ctx, timeout)
+	defer cancel()
+	return doWaitForNavigation(waitCtx, dc.page, a.URLContains, a.Selector)
 }
 
 func execSleep(dc dispatchContext, a Action) (any, error) {

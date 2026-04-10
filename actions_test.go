@@ -243,6 +243,12 @@ func TestParseAction_SnapshotDepth(t *testing.T) {
 	}
 }
 
+func TestActionRegistry_WaitForNavigation(t *testing.T) {
+	if _, ok := actionRegistry["wait_for_navigation"]; !ok {
+		t.Error("wait_for_navigation not registered in actionRegistry")
+	}
+}
+
 func TestParseAction_ClickModifiers(t *testing.T) {
 	raw := `{"type":"click","selector":"a.link","button":"right","double_click":true,"modifiers":["Control","Shift"]}`
 	var a Action
