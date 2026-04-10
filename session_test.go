@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,9 +18,9 @@ func TestSessionPool_CreateAndGet(t *testing.T) {
 		t.Fatal("Create: expected non-empty ID")
 	}
 
-	s, ok := pool.Get(id)
-	if !ok {
-		t.Fatalf("Get(%q): expected session to exist", id)
+	s, err := pool.Get(id)
+	if err != nil {
+		t.Fatalf("Get(%q): unexpected error: %v", id, err)
 	}
 	if s.ID != id {
 		t.Errorf("Get: session ID = %q, want %q", s.ID, id)
@@ -47,8 +48,8 @@ func TestSessionPool_Destroy(t *testing.T) {
 	if ok := pool.Destroy(id); ok {
 		t.Error("Destroy: expected false for already-destroyed session")
 	}
-	if _, ok := pool.Get(id); ok {
-		t.Error("Get after Destroy: expected session to be gone")
+	if _, err := pool.Get(id); err == nil {
+		t.Error("Get after Destroy: expected error, got nil")
 	}
 }
 
@@ -68,7 +69,7 @@ func TestSessionPool_TTLExpiry(t *testing.T) {
 	// Trigger eviction manually (reaper fires every 30s in production).
 	pool.evictExpired()
 
-	if _, ok := pool.Get(id); ok {
+	if _, err := pool.Get(id); err == nil {
 		t.Error("session should have been evicted after TTL expiry")
 	}
 }
@@ -118,13 +119,104 @@ func TestSessionPool_GetUpdatesLastUsed(t *testing.T) {
 
 	id, _ := pool.Create("proxy")
 
-	s1, _ := pool.Get(id)
+	s1, err := pool.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	t1 := s1.LastUsed
 
 	time.Sleep(5 * time.Millisecond)
 
-	s2, _ := pool.Get(id)
+	s2, err := pool.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	if !s2.LastUsed.After(t1) {
 		t.Error("Get: LastUsed should be updated on each access")
+	}
+}
+
+// --- TTL validation tests ---
+
+func TestSession_IsExpired_FreshSession(t *testing.T) {
+	pool := NewSessionPool(time.Minute, 0)
+	defer pool.Close()
+
+	id, _ := pool.Create("proxy")
+
+	pool.mu.Lock()
+	s := pool.sessions[id]
+	pool.mu.Unlock()
+
+	if s.isExpired() {
+		t.Error("isExpired: fresh session should not be expired")
+	}
+}
+
+func TestSession_IsExpired_AfterTTL(t *testing.T) {
+	pool := NewSessionPool(50*time.Millisecond, 0)
+	defer pool.Close()
+
+	id, _ := pool.Create("proxy")
+
+	time.Sleep(120 * time.Millisecond)
+
+	pool.mu.Lock()
+	s := pool.sessions[id]
+	pool.mu.Unlock()
+
+	if !s.isExpired() {
+		t.Error("isExpired: session past TTL should be expired")
+	}
+}
+
+func TestSession_IsExpired_ZeroTTL(t *testing.T) {
+	pool := NewSessionPool(0, 0)
+	defer pool.Close()
+
+	id, _ := pool.Create("proxy")
+
+	pool.mu.Lock()
+	s := pool.sessions[id]
+	pool.mu.Unlock()
+
+	if s.isExpired() {
+		t.Error("isExpired: zero TTL means never expires")
+	}
+}
+
+func TestSessionPool_Get_EagerlyEvictsExpired(t *testing.T) {
+	pool := NewSessionPool(50*time.Millisecond, 0)
+	defer pool.Close()
+
+	id, _ := pool.Create("proxy")
+
+	// Wait past the TTL — do NOT call evictExpired.
+	time.Sleep(120 * time.Millisecond)
+
+	_, err := pool.Get(id)
+	if err == nil {
+		t.Fatal("Get: expected error for expired session, got nil")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("Get: error should mention 'expired', got: %v", err)
+	}
+
+	// Session must have been removed eagerly.
+	if pool.Count() != 0 {
+		t.Errorf("Get: expired session should have been removed from pool, count = %d", pool.Count())
+	}
+}
+
+func TestSessionPool_Get_NotFound(t *testing.T) {
+	pool := NewSessionPool(time.Minute, 0)
+	defer pool.Close()
+
+	_, err := pool.Get("nonexistent-id")
+	if err == nil {
+		t.Fatal("Get: expected error for unknown session, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Get: error should mention 'not found', got: %v", err)
 	}
 }
