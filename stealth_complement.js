@@ -783,6 +783,57 @@
         });
       }
     } catch (_) {}
+  
+    // hasKnownBgColor — headless Chrome renders CSS ActiveText as rgb(255,0,0).
+    // Real macOS Chrome renders it as system accent color (varies, but never pure red).
+    // Override getComputedStyle to return non-red for ActiveText-styled elements.
+    const origGetComputedStyle = window.getComputedStyle;
+    window.getComputedStyle = function(el, pseudo) {
+      const style = origGetComputedStyle.call(window, el, pseudo);
+      if (style && style.backgroundColor === 'rgb(255, 0, 0)') {
+        const s = el?.style;
+        if (s && /ActiveText/i.test(s.backgroundColor || s.cssText || '')) {
+          return new Proxy(style, {
+            get(target, prop) {
+              if (prop === 'backgroundColor') return 'rgb(0, 0, 0)';
+              const v = target[prop];
+              return typeof v === 'function' ? v.bind(target) : v;
+            }
+          });
+        }
+      }
+      return style;
+    };
+  
+    // prefersLightColor — Xvfb defaults to light scheme, ~60% of macOS users
+    // have dark mode. Returning false for light = dark mode user = more common.
+    const origMatchMedia = window.matchMedia;
+    window.matchMedia = function(query) {
+      const mql = origMatchMedia.call(window, query);
+      if (/prefers-color-scheme:\s*light/i.test(query)) {
+        return Object.create(mql, {
+          matches: { get: () => false, configurable: true },
+        });
+      }
+      return mql;
+    };
+  
+    // ContentIndex — Chrome 84+, CreepJS checks window-level constructor.
+    if (typeof window.ContentIndex === 'undefined') {
+      window.ContentIndex = class ContentIndex {
+        async add() { throw new DOMException('Not allowed', 'InvalidStateError'); }
+        async delete() {}
+        async getAll() { return []; }
+      };
+    }
+  
+    // ContactsManager — CreepJS checks window-level constructor.
+    if (typeof window.ContactsManager === 'undefined') {
+      window.ContactsManager = class ContactsManager {
+        async getProperties() { return ['name', 'email', 'tel']; }
+        async select() { throw new DOMException('Not allowed', 'InvalidStateError'); }
+      };
+    }
   })();
 
   // === 12_iframe_proxy.js ===
