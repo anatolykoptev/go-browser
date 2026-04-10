@@ -19,6 +19,16 @@ type Session struct {
 	CreatedAt time.Time
 	LastUsed  time.Time
 	Proxy     string
+	ttl       time.Duration // 0 means never expires; set from pool at creation time
+}
+
+// isExpired reports whether the session has been idle longer than its TTL.
+// A zero TTL means the session never expires.
+func (s *Session) isExpired() bool {
+	if s.ttl <= 0 {
+		return false
+	}
+	return time.Since(s.LastUsed) > s.ttl
 }
 
 // SessionPool is a thread-safe pool of sessions with TTL-based eviction.
@@ -66,22 +76,28 @@ func (p *SessionPool) Create(proxy string) (string, error) {
 		CreatedAt: now,
 		LastUsed:  now,
 		Proxy:     proxy,
+		ttl:       p.ttl,
 	}
 	return id, nil
 }
 
 // Get returns the session with the given ID, updating LastUsed.
-// Returns false if the session does not exist.
-func (p *SessionPool) Get(id string) (*Session, bool) {
+// Returns an error if the session does not exist or has expired.
+// Expired sessions are eagerly removed from the pool without waiting for the reaper.
+func (p *SessionPool) Get(id string) (*Session, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	s, ok := p.sessions[id]
 	if !ok {
-		return nil, false
+		return nil, fmt.Errorf("session %q not found (may have expired)", id)
+	}
+	if s.isExpired() {
+		delete(p.sessions, id)
+		return nil, fmt.Errorf("session %q expired (TTL exceeded)", id)
 	}
 	s.LastUsed = time.Now()
-	return s, true
+	return s, nil
 }
 
 // Destroy removes the session with the given ID. Returns true if it existed.
