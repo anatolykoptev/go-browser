@@ -4,17 +4,26 @@
 if (!window.chrome) window.chrome = {};
 
 if (!window.chrome.runtime) {
-  window.chrome.runtime = {
-    connect: () => ({
-      name: '', sender: undefined,
-      onDisconnect: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
-      onMessage: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
-      postMessage(){}, disconnect(){}
-    }),
-    sendMessage: () => {},
-    onMessage: {addListener: () => {}, removeListener: () => {}},
-    id: undefined,
-  };
+  window.chrome.runtime = {};
+}
+
+// CreepJS hasBadChromeRuntime: checks 'prototype' in sendMessage/connect and
+// that `new fn()` throws TypeError.  Arrow functions naturally satisfy both:
+// they have no .prototype and throw TypeError when constructed.
+// We always override these (even if runtime already exists in headless Chrome)
+// because the native headless stubs are regular functions with .prototype.
+window.chrome.runtime.sendMessage = () => {};
+window.chrome.runtime.connect = () => ({
+  name: '', sender: undefined,
+  onDisconnect: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+  onMessage: {addListener(){}, removeListener(){}, hasListener(){return false}, hasListeners(){return false}},
+  postMessage(){}, disconnect(){}
+});
+if (!window.chrome.runtime.onMessage) {
+  window.chrome.runtime.onMessage = {addListener: () => {}, removeListener: () => {}};
+}
+if (window.chrome.runtime.id === undefined) {
+  window.chrome.runtime.id = undefined;
 }
 
 if (!window.chrome.csi) {
