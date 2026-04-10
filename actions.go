@@ -41,7 +41,7 @@ type Action struct {
 	Cookie        string        `json:"cookie,omitempty" jsonschema:"Cookie name to wait for (wait_for action — polls until cookie appears)"`
 	Limit         int           `json:"limit,omitempty" jsonschema:"Max entries to return for get_logs (default: 30 network / 20 console) and get_cookies"`
 	StorageType   string        `json:"storage_type,omitempty" jsonschema:"Storage type: local (default) or session"`
-	FrameSelector string        `json:"frame_selector,omitempty" jsonschema:"CSS selector of iframe element. When set, action executes inside the iframe context instead of the top-level page. Works with cross-origin iframes."`
+	FrameSelector string        `json:"frame_selector,omitempty" jsonschema:"Target iframe for this action. CSS selector (iframe.payment) or url=pattern (url=payments.audienceview.com) to match by frame URL. Cross-origin safe. type_text auto-uses CDP events inside frames."`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
