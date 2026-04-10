@@ -125,33 +125,49 @@ func markWithAncestors(id string, index map[string]*nodeInfo, parent map[string]
 }
 
 // markSubtree marks a node and all of its descendants.
+// Iterative BFS to avoid stack overflow on deep trees and infinite loops on cycles.
 func markSubtree(id string, index map[string]*nodeInfo, keep map[string]bool) {
-	n, ok := index[id]
-	if !ok {
-		return
-	}
-	keep[id] = true
-	for _, cid := range n.children {
-		markSubtree(cid, index, keep)
+	queue := []string{id}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if keep[cur] {
+			continue // already visited — handles cycles
+		}
+		n, ok := index[cur]
+		if !ok {
+			continue
+		}
+		keep[cur] = true
+		queue = append(queue, n.children...)
 	}
 }
 
 // buildParentMap builds a child→parent id map by walking the tree from roots.
+// Iterative BFS to avoid stack overflow on deep trees and infinite loops on cycles.
 func buildParentMap(index map[string]*nodeInfo, roots []string) map[string]string {
 	parent := make(map[string]string, len(index))
-	var walk func(id, par string)
-	walk = func(id, par string) {
-		parent[id] = par
-		n, ok := index[id]
+	type entry struct{ id, par string }
+	queue := make([]entry, 0, len(index))
+	for _, r := range roots {
+		queue = append(queue, entry{r, ""})
+	}
+	for len(queue) > 0 {
+		e := queue[0]
+		queue = queue[1:]
+		if _, already := parent[e.id]; already && e.par != "" {
+			continue // already visited — handles cycles (root "" is the sentinel)
+		}
+		parent[e.id] = e.par
+		n, ok := index[e.id]
 		if !ok {
-			return
+			continue
 		}
 		for _, cid := range n.children {
-			walk(cid, id)
+			if _, already := parent[cid]; !already {
+				queue = append(queue, entry{cid, e.id})
+			}
 		}
-	}
-	for _, r := range roots {
-		walk(r, "")
 	}
 	return parent
 }
