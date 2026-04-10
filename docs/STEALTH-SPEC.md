@@ -9,7 +9,7 @@
 ## Three-Layer Architecture
 
 ```
-Layer 3: go-rod/stealth (puppeteer-extra JS evasions)
+Layer 3: (removed — stealth_complement.js is the sole JS layer)
 Layer 2: stealth_complement.js (6 modules, fills gaps CloakBrowser doesn't cover)
 Layer 1: CloakBrowser C++ (33 chromium patches: canvas, webgl, audio, fonts, locale, CDP input)
 ```
@@ -34,7 +34,7 @@ Layer 1: CloakBrowser C++ (33 chromium patches: canvas, webgl, audio, fonts, loc
 | Languages | `["en-US", "en"]` | JS override |
 | Timezone | America/Los_Angeles | CloakBrowser `--timezone` flag |
 | Connection | wifi, 10 Mbps, 50ms RTT, 4g | JS override |
-| Plugins | 5 (PDF viewers) | go-rod/stealth |
+| Plugins | 5 (PDF viewers) | stealth_complement.js |
 | maxTouchPoints | 0 (not touch device) | JS override |
 
 ### Profile JSON: `stealth/profiles/mac_chrome145.json`
