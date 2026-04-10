@@ -7,7 +7,6 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/stealth"
 	"github.com/ysmood/gson"
 )
 
@@ -15,8 +14,9 @@ import (
 var complementJS string
 
 // NewStealthPage creates a page with stealth evasions applied.
-// It runs go-rod/stealth JS patches followed by the complement JS that fills gaps
-// not covered by CloakBrowser's C++ patches.
+// stealth_complement.js (684 LOC) is the sole stealth layer — go-rod/stealth
+// was removed because its Proxy on Function.prototype.toString triggered
+// CreepJS hasToStringProxy detection.
 //
 // Gap B: CDP Emulation.setTimezoneOverride and setLocaleOverride are applied so
 // the browser's JS timezone/locale matches the profile, not the host OS.
@@ -24,9 +24,9 @@ var complementJS string
 // Gap C: Target.setAutoAttach is enabled so child iframes and workers inherit
 // all EvalOnNewDocument injections applied on the parent page.
 func (m *ChromeManager) NewStealthPage(ctx *rod.Browser, profile *StealthProfile) (*rod.Page, error) {
-	page, err := stealth.Page(ctx)
+	page, err := ctx.Page(proto.TargetCreateTarget{})
 	if err != nil {
-		return nil, fmt.Errorf("chrome: stealth page: %w", err)
+		return nil, fmt.Errorf("chrome: create page: %w", err)
 	}
 
 	// Inject profile data before complement JS so modules can read __sp.
