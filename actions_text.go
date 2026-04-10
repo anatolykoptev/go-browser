@@ -8,17 +8,31 @@ import (
 )
 
 // findByText finds a clickable element containing the given text using XPath.
-// It prefers interactive elements (a, button, input, label, li, span, div)
-// over generic text nodes to ensure the returned element can be clicked.
+// Uses contains(.,text) to match text anywhere in the subtree (not just direct text nodes).
+// Tries interactive ancestors first (label, li, button, a), then falls back to any container.
 func findByText(ctx context.Context, page *rod.Page, text string) (*rod.Element, error) {
-	// XPath: find element containing text, prefer clickable elements first.
-	xpath := fmt.Sprintf(
-		`//*[contains(text(),"%s")][self::a or self::button or self::label or self::input or self::li or self::span or self::div]`,
-		text,
+	p := page.Context(ctx)
+
+	// Phase 1: find a clickable ancestor containing the text (label > li > button > a).
+	// Uses "." instead of "text()" to match text in any descendant.
+	clickable := fmt.Sprintf(
+		`//*[contains(.,"%s")][self::label or self::li or self::button or self::a][not(ancestor::*[contains(.,"%s")][self::label or self::li or self::button or self::a])]`,
+		text, text,
 	)
-	el, err := page.Context(ctx).ElementX(xpath)
-	if err != nil {
-		return nil, fmt.Errorf("no clickable element containing %q", text)
+	el, err := p.ElementX(clickable)
+	if err == nil {
+		return el, nil
 	}
-	return el, nil
+
+	// Phase 2: find any element with the text (span, div, td, etc.).
+	any := fmt.Sprintf(
+		`//*[contains(.,"%s")][not(self::html or self::body or self::head)][not(*[contains(.,"%s")])]`,
+		text, text,
+	)
+	el, err = p.ElementX(any)
+	if err == nil {
+		return el, nil
+	}
+
+	return nil, fmt.Errorf("no element containing %q", text)
 }
