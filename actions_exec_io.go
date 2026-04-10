@@ -1,31 +1,74 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/png"
 	"time"
+
+	"golang.org/x/image/draw"
 
 	"github.com/anatolykoptev/go-browser/cdputil"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
 
+// screenshotMaxWidth is the max width sent to LLMs.
+// Claude processes 16:9 at 1456x819 internally — anything larger is downscaled and wastes tokens.
+// browser-use uses 1400x850, Anthropic computer-use uses 1280x800.
+const screenshotMaxWidth = 1280
+
+func resizeScreenshot(data []byte, maxWidth int) ([]byte, error) {
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	if w <= maxWidth {
+		return data, nil // already small enough
+	}
+
+	// Scale down proportionally using nearest-neighbor (fast, good enough for text).
+	scale := float64(maxWidth) / float64(w)
+	newW := maxWidth
+	newH := int(float64(bounds.Dy()) * scale)
+
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	draw.NearestNeighbor.Scale(dst, dst.Bounds(), img, bounds, draw.Src, nil)
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func doScreenshot(page *rod.Page, fullPage bool) (string, error) {
-	// Use CDP directly for JPEG + quality control.
-	format := proto.PageCaptureScreenshotFormatJpeg
-	quality := 60
+	// PNG viewport-only — industry standard for LLM screenshots.
+	// All major frameworks (Playwright MCP, browser-use, Anthropic computer-use) use PNG
+	// because JPEG loses text readability at compression levels that save meaningful bytes.
 	req := proto.PageCaptureScreenshot{
-		Format:                format,
-		Quality:               &quality,
-		OptimizeForSpeed:      true,
+		Format:                proto.PageCaptureScreenshotFormatPng,
 		CaptureBeyondViewport: fullPage,
 	}
 	res, err := req.Call(page)
 	if err != nil {
 		return "", fmt.Errorf("screenshot: %w", err)
 	}
-	return base64.StdEncoding.EncodeToString(res.Data), nil
+
+	// Resize if wider than screenshotMaxWidth.
+	data := res.Data
+	data, err = resizeScreenshot(data, screenshotMaxWidth)
+	if err != nil {
+		// Non-fatal — return original if resize fails.
+		data = res.Data
+	}
+
+	return base64.StdEncoding.EncodeToString(data), nil
 }
 
 // doEvaluate runs JS as a raw expression via CDP RuntimeEvaluate.
