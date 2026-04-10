@@ -82,7 +82,7 @@ func TestSessionPool_ConcurrentCreateDestroy(t *testing.T) {
 // TestSessionPool_GetRefreshesLastUsed verifies that calling Get refreshes
 // LastUsed, which prevents premature expiry on actively-used sessions.
 func TestSessionPool_GetRefreshesLastUsed(t *testing.T) {
-	pool := NewSessionPool(200*time.Millisecond, 0)
+	pool := NewSessionPool(500*time.Millisecond, 0)
 	defer pool.Close()
 
 	id, err := pool.Create("proxy")
@@ -91,7 +91,7 @@ func TestSessionPool_GetRefreshesLastUsed(t *testing.T) {
 	}
 
 	// Sleep for half the TTL, then Get to refresh LastUsed.
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
 	s, err := pool.Get(id)
 	if err != nil {
@@ -99,8 +99,8 @@ func TestSessionPool_GetRefreshesLastUsed(t *testing.T) {
 	}
 	before := s.LastUsed
 
-	// Sleep another 120 ms — without refresh the session would have expired.
-	time.Sleep(120 * time.Millisecond)
+	// Sleep another 300 ms — without refresh the session would have expired (500ms total > 500ms TTL).
+	time.Sleep(300 * time.Millisecond)
 
 	s2, err := pool.Get(id)
 	if err != nil {
