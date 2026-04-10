@@ -50,7 +50,7 @@ func TestExecuteAction_DestroySessionNoOp(t *testing.T) {
 
 // TestActionRegistry_Count verifies the registry has the expected number of entries.
 func TestActionRegistry_Count(t *testing.T) {
-	const wantCount = 29
+	const wantCount = 30
 	if got := len(actionRegistry); got != wantCount {
 		t.Errorf("actionRegistry has %d entries, want %d", got, wantCount)
 	}
