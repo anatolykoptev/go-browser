@@ -3,6 +3,7 @@ package browser
 import (
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
@@ -15,17 +16,30 @@ const (
 	maxURLLength        = 150
 )
 
-// truncateURL shortens a URL to maxURLLength characters.
+// truncateURL shortens a URL to maxURLLength runes.
+// Uses rune-aware slicing to avoid splitting multi-byte UTF-8 sequences.
 func truncateURL(u string) string {
-	if len(u) <= maxURLLength {
+	if utf8.RuneCountInString(u) <= maxURLLength {
 		return u
 	}
-	return u[:maxURLLength] + "…"
+	// Walk runes until we reach the limit, tracking the byte index.
+	byteIdx, count := 0, 0
+	for byteIdx < len(u) && count < maxURLLength {
+		_, size := utf8.DecodeRuneInString(u[byteIdx:])
+		byteIdx += size
+		count++
+	}
+	return u[:byteIdx] + "…"
 }
 
-// lastN returns the last n elements of s. If n <= 0 or n >= len(s), returns s unchanged.
+// lastN returns the last n elements of s.
+// If n <= 0, returns an empty slice.
+// If n >= len(s), returns all elements unchanged.
 func lastN[T any](s []T, n int) []T {
-	if n <= 0 || n >= len(s) {
+	if n <= 0 {
+		return s[:0]
+	}
+	if n >= len(s) {
 		return s
 	}
 	return s[len(s)-n:]
