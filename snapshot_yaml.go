@@ -10,19 +10,25 @@ import (
 
 // renderAXTreeYAMLWithURLs builds a YAML snapshot with link URL extraction.
 func renderAXTreeYAMLWithURLs(
-	nodes []*proto.AccessibilityAXNode, maxDepth int, page *rod.Page,
+	nodes []*proto.AccessibilityAXNode, maxDepth int, page *rod.Page, filter, selector string,
 ) string {
 	index, roots := buildAXIndex(nodes)
 	urls := collectLinkURLs(page)
 	if urls != nil {
 		applyLinkURLs(index, nodes, urls)
 	}
+	if filter != "" || selector != "" {
+		index, roots = filterAXTree(index, roots, filter, selector)
+	}
 	return renderYAML(index, roots, maxDepth)
 }
 
 // renderAXTree builds a plain text representation of the accessibility tree.
-func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int) string {
+func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int, filter, selector string) string {
 	index, roots := buildAXIndex(nodes)
+	if filter != "" || selector != "" {
+		index, roots = filterAXTree(index, roots, filter, selector)
+	}
 
 	var sb strings.Builder
 	var walk func(id string, level int)

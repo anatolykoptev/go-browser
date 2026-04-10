@@ -118,7 +118,7 @@ func isNoiseRole(role string) bool {
 	}
 }
 
-func doSnapshot(page *rod.Page, maxDepth int, format string) (string, error) {
+func doSnapshot(page *rod.Page, maxDepth int, format, filter, selector string) (string, error) {
 	// Collect AX trees from main frame + all child frames.
 	allNodes := collectAXNodes(page, proto.PageFrameID(""))
 
@@ -144,9 +144,9 @@ func doSnapshot(page *rod.Page, maxDepth int, format string) (string, error) {
 
 	switch format {
 	case "text":
-		return renderAXTree(allNodes, maxDepth), nil
+		return renderAXTree(allNodes, maxDepth, filter, selector), nil
 	default:
-		return renderAXTreeYAMLWithURLs(allNodes, maxDepth, page), nil
+		return renderAXTreeYAMLWithURLs(allNodes, maxDepth, page, filter, selector), nil
 	}
 }
 
