@@ -90,6 +90,47 @@ func doSleep(ctx context.Context, waitMs int) error {
 	}
 }
 
+// doWaitForNavigation polls until the page URL changes from startURL.
+// If urlContains is non-empty, the new URL must also contain that substring.
+// If selector is non-empty, waits for the element after URL change.
+// Returns map with "url" and "title" (and "timeout"="true" on timeout).
+func doWaitForNavigation(ctx context.Context, page *rod.Page, urlContains, selector string) (map[string]string, error) {
+	startURL := page.MustInfo().URL
+	for {
+		select {
+		case <-ctx.Done():
+			info, _ := page.Info()
+			cur := startURL
+			title := ""
+			if info != nil {
+				cur = info.URL
+				title = info.Title
+			}
+			return map[string]string{"url": cur, "title": title, "timeout": "true"},
+				fmt.Errorf("wait_for_navigation: %w", ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+			info, err := page.Info()
+			if err != nil {
+				continue
+			}
+			currentURL := info.URL
+			if currentURL == startURL {
+				continue
+			}
+			if urlContains != "" && !strings.Contains(currentURL, urlContains) {
+				continue
+			}
+			if selector != "" {
+				if _, err := resolveElement(ctx, page, selector); err != nil {
+					return map[string]string{"url": currentURL, "title": info.Title, "timeout": "true"},
+						fmt.Errorf("wait_for_navigation selector %q: %w", selector, err)
+				}
+			}
+			return map[string]string{"url": currentURL, "title": info.Title}, nil
+		}
+	}
+}
+
 func doWaitForStealth(ctx context.Context, page *rod.Page, selector string) error {
 	for {
 		_, err := cdputil.QuerySelector(page, selector)
