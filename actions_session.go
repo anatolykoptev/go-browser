@@ -18,8 +18,15 @@ func execSetCookies(dc dispatchContext, a Action) (any, error) {
 	return nil, doSetCookies(dc.page, a.Cookies)
 }
 
-func execGetCookies(dc dispatchContext, _ Action) (any, error) {
-	return doGetCookies(dc.page)
+func execGetCookies(dc dispatchContext, a Action) (any, error) {
+	cookies, err := doGetCookies(dc.page)
+	if err != nil {
+		return nil, err
+	}
+	if a.Limit > 0 && a.Limit < len(cookies) {
+		cookies = cookies[len(cookies)-a.Limit:]
+	}
+	return cookies, nil
 }
 
 func execHandleDialog(dc dispatchContext, a Action) (any, error) {
@@ -35,12 +42,42 @@ func execDestroySession(_ dispatchContext, _ Action) (any, error) {
 	return nil, nil
 }
 
-func execGetLogs(dc dispatchContext, _ Action) (any, error) {
-	if dc.logs != nil {
-		net, con := dc.logs.Collect()
-		return map[string]any{"network": net, "console": con}, nil
+func execGetLogs(dc dispatchContext, a Action) (any, error) {
+	netLimit := defaultNetworkLimit
+	conLimit := defaultConsoleLimit
+	if a.Limit > 0 {
+		netLimit = a.Limit
+		conLimit = a.Limit
 	}
-	return map[string]any{"network": []NetworkEntry{}, "console": []ConsoleEntry{}}, nil
+
+	if dc.logs == nil {
+		return map[string]any{"network": []NetworkEntry{}, "console": []ConsoleEntry{}}, nil
+	}
+
+	net, con := dc.logs.Collect()
+	net = lastN(net, netLimit)
+	con = lastN(con, conLimit)
+
+	// Return compact network entries: drop body_size, truncate URL.
+	type compactNetwork struct {
+		Method   string `json:"method"`
+		URL      string `json:"url"`
+		Status   int    `json:"status,omitempty"`
+		MimeType string `json:"mime_type,omitempty"`
+		Error    string `json:"error,omitempty"`
+	}
+	compact := make([]compactNetwork, len(net))
+	for i, e := range net {
+		compact[i] = compactNetwork{
+			Method:   e.Method,
+			URL:      truncateURL(e.URL),
+			Status:   e.Status,
+			MimeType: e.MimeType,
+			Error:    e.Error,
+		}
+	}
+
+	return map[string]any{"network": compact, "console": con}, nil
 }
 
 func execWarmup(dc dispatchContext, a Action) (any, error) {
