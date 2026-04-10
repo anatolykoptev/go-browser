@@ -18,12 +18,13 @@ const (
 	// maxConcurrent caps parallel page opens against CloakBrowser.
 	maxConcurrent = 3
 	// perTargetTimeout is the total per-target budget (navigation + extraction).
-	// Heavy antibot pages (creepjs, browserleaks) can take 20-25 s to load alone.
-	perTargetTimeout = 60 * time.Second
+	// creepjs fingerprinting alone can take 50+ s after the page loads.
+	perTargetTimeout = 90 * time.Second
 	// pageNavTimeout is the rod page-level timeout for Navigate + WaitLoad.
 	pageNavTimeout = 25 * time.Second
-	// overallTimeout caps the entire /selftest run.
-	overallTimeout = 120 * time.Second
+	// overallTimeout caps the entire /selftest run. With 3 concurrent slots and
+	// creepjs taking up to 90s, overall is capped at 180s.
+	overallTimeout = 180 * time.Second
 	// screenshotDir is where per-run screenshots are saved.
 	screenshotDir = "/tmp/selftest"
 )

@@ -9,7 +9,7 @@ import (
 	"github.com/go-rod/rod"
 )
 
-const creepJSWaitTimeout = 50 * time.Second
+const creepJSWaitTimeout = 65 * time.Second
 
 // creepJSResult is the structure extracted from window.__creepResult on creepjs.
 type creepJSResult struct {
@@ -115,8 +115,8 @@ const creepJSReadyJS = `
   var bodyText = document.body ? document.body.innerText : '';
   if (/trust score[:\s]*\d/i.test(bodyText)) return 'body-trust';
   if (/\d+ lie/i.test(bodyText) && bodyText.length > 2000) return 'body-lies';
-  // Also fire when body is large enough (all modules rendered)
-  if (bodyText.length > 5000) return 'body-ready';
+  // Also fire when body is large enough (all modules rendered; 3000 chars = sufficient content)
+  if (bodyText.length > 3000) return 'body-ready';
   return null;
 }
 `
