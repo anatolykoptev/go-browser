@@ -64,11 +64,32 @@
   })();
 
   // === 02_navigator.js ===
-  // Native toString masking — we do NOT proxy Function.prototype.toString
-  // via its utils.patchToString mechanism. We do NOT add another proxy layer on top
-  // because double-wrapping breaks CreepJS's chain-cycle TypeError check, causing
-  // lieProps['Function.toString'] to be set → hasToStringProxy = true (detected).
-  //
+  // Navigator property alignment — ensure main thread matches worker bootstrap.
+  // We do NOT proxy Function.prototype.toString (CreepJS hasToStringProxy).
+  // We do NOT override navigator.webdriver (CloakBrowser C++ handles it).
+  // We ONLY set properties that the worker bootstrap also sets, to prevent
+  // bot.incolumitas.com inconsistentWebWorkerNavigatorPropery detection.
+  
+  const __sp = window.__sp || {};
+  
+  // deviceMemory — worker gets it from profile (default 8), main must match.
+  if (__sp.hardware && __sp.hardware.deviceMemory) {
+    Object.defineProperty(Navigator.prototype, 'deviceMemory', {
+      get: () => __sp.hardware.deviceMemory,
+      configurable: true, enumerable: true,
+    });
+  }
+  
+  // languages — worker gets profile.languages (e.g. ["en-US","en"]),
+  // but main gets CDP Accept-Language which adds ";q=0.9" quality values.
+  // Override main to match worker's clean array from profile.
+  if (__sp.languages && __sp.languages.length) {
+    const frozenLangs = Object.freeze(__sp.languages.slice());
+    Object.defineProperty(Navigator.prototype, 'languages', {
+      get: () => frozenLangs,
+      configurable: true, enumerable: true,
+    });
+  }
 
   // === 03_chrome_object.js ===
   // Chrome object stubs — Castle.io and other detectors check these.
@@ -200,11 +221,13 @@
   
   const workerBootstrap = [
     'const PROFILE = ' + _workerProfile + ';',
-    // NOTE: navigator.webdriver is intentionally NOT overridden here.
-    // CloakBrowser's C++ engine patches webdriver at binary level — including in worker
-    // contexts. Adding a JS override on top creates a detectable lie: CreepJS's
-    // queryLies() checks Function.prototype.toString on the getter and detects
-    // "() => false" vs the expected "[native code]" string.
+    // navigator.webdriver — CloakBrowser C++ sets it to false in main thread
+    // but does NOT patch worker scope (remains undefined). Override here to match.
+    // Use Object.defineProperty with value (not getter) to avoid lieProps detection —
+    // a data descriptor with value:false is indistinguishable from a native assignment.
+    'Object.defineProperty(Object.getPrototypeOf(navigator), "webdriver", {',
+    '  value: false, writable: true, configurable: true, enumerable: true',
+    '});',
     'Object.defineProperty(Object.getPrototypeOf(navigator), "hardwareConcurrency", {',
     '  get: () => PROFILE.hardwareConcurrency, configurable: true',
     '});',
