@@ -17,6 +17,8 @@ const _workerProfile = (() => {
     platform:            sp.platform  || 'MacIntel',
     languages:           sp.languages || ['en-US', 'en'],
     userAgent:           sp.userAgent || navigator.userAgent,
+    gpuVendor:           (sp.gpu || {}).vendor || '',
+    gpuRenderer:         (sp.gpu || {}).renderer || '',
   });
 })();
 
@@ -46,6 +48,23 @@ const workerBootstrap = [
   'Object.defineProperty(Object.getPrototypeOf(navigator), "userAgent", {',
   '  get: () => PROFILE.userAgent, configurable: true',
   '});',
+  // WebGL GPU spoof in workers — CreepJS hasBadWebGL compares main vs worker GPU.
+  // Workers can create OffscreenCanvas and call getParameter(UNMASKED_RENDERER_WEBGL).
+  // We must return the same vendor/renderer as the main world.
+  '(function() {',
+  '  if (!PROFILE.gpuVendor && !PROFILE.gpuRenderer) return;',
+  '  function spoofWebGL(proto) {',
+  '    if (!proto) return;',
+  '    var origGet = proto.getParameter;',
+  '    proto.getParameter = function(param) {',
+  '      if (param === 37445) return PROFILE.gpuVendor;',   // UNMASKED_VENDOR_WEBGL
+  '      if (param === 37446) return PROFILE.gpuRenderer;', // UNMASKED_RENDERER_WEBGL
+  '      return origGet.apply(this, arguments);',
+  '    };',
+  '  }',
+  '  if (typeof WebGLRenderingContext !== "undefined") spoofWebGL(WebGLRenderingContext.prototype);',
+  '  if (typeof WebGL2RenderingContext !== "undefined") spoofWebGL(WebGL2RenderingContext.prototype);',
+  '})();',
 ].join('\n');
 
 function createPatchedWorker(originalUrl, options) {
