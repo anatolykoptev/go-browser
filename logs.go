@@ -8,7 +8,28 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
-const maxLogEntries = 1000
+const (
+	maxLogEntries       = 1000
+	defaultNetworkLimit = 30
+	defaultConsoleLimit = 20
+	maxURLLength        = 150
+)
+
+// truncateURL shortens a URL to maxURLLength characters.
+func truncateURL(u string) string {
+	if len(u) <= maxURLLength {
+		return u
+	}
+	return u[:maxURLLength] + "…"
+}
+
+// lastN returns the last n elements of s. If n <= 0 or n >= len(s), returns s unchanged.
+func lastN[T any](s []T, n int) []T {
+	if n <= 0 || n >= len(s) {
+		return s
+	}
+	return s[len(s)-n:]
+}
 
 // NetworkEntry is a captured network request/response.
 type NetworkEntry struct {
