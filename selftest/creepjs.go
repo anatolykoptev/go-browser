@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -70,12 +69,16 @@ const creepJSExtractJS = `
 }
 `
 
-// creepJSReadyJS returns non-null when the page has fully rendered its results.
+// creepJSReadyJS returns a non-null numeric string when the trust score has been computed.
+// creepjs can take 5-15 s to finish all fingerprinting phases.
 const creepJSReadyJS = `
 () => {
-  // creepjs renders into #creep-results; trust score appears when analysis completes
+  // Look for a numeric trust score — creepjs renders "94%" or "94" when done.
   var el = document.querySelector('.trust-score, #creep-results .score, .fingerprint-data');
-  return el ? el.textContent : null;
+  if (!el) return null;
+  var txt = el.textContent.trim();
+  // Only return when text looks like a number (score rendered, not loading).
+  return /\d{2,3}/.test(txt) ? txt : null;
 }
 `
 
@@ -94,7 +97,7 @@ func extractCreepJS(ctx context.Context, page *rod.Page) (TargetResult, error) {
 	var rawJSON string
 	for time.Now().Before(deadline) {
 		val, err := page.Eval(creepJSReadyJS)
-		if err == nil && val != nil && strings.TrimSpace(val.Value.String()) != "" {
+		if err == nil && val != nil && !isNullResult(val.Value.String()) {
 			break
 		}
 		select {
@@ -109,7 +112,7 @@ func extractCreepJS(ctx context.Context, page *rod.Page) (TargetResult, error) {
 	if err != nil {
 		return result, fmt.Errorf("creepjs: eval extract: %w", err)
 	}
-	if val == nil || val.Value.String() == "" || val.Value.String() == "null" {
+	if val == nil || isNullResult(val.Value.String()) {
 		return result, fmt.Errorf("creepjs: selector not found — page may have changed structure")
 	}
 	rawJSON = val.Value.String()

@@ -3,7 +3,6 @@ package selftest
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -11,33 +10,26 @@ import (
 
 const rebrowserWaitTimeout = 30 * time.Second
 
-// rebrowserReadyJS returns non-null when botDetectorResults is populated.
+// rebrowserReadyJS polls for window.botDetectorResults to be populated.
+// Returns a sentinel "ready" string when results are available.
 const rebrowserReadyJS = `
 () => {
-  if (window.botDetectorResults && Object.keys(window.botDetectorResults).length > 0)
-    return JSON.stringify(window.botDetectorResults);
-  // Fall back to DOM-based detection result
-  var el = document.querySelector('.results, #results, [data-results]');
-  return el ? el.textContent.trim() : null;
+  try {
+    var r = window.botDetectorResults;
+    if (r && typeof r === 'object' && Object.keys(r).length > 0) return 'ready';
+  } catch(e) {}
+  return null;
 }
 `
 
-// rebrowserExtractJS extracts the full botDetectorResults object.
+// rebrowserExtractJS extracts the full botDetectorResults object as JSON.
 const rebrowserExtractJS = `
 () => {
-  if (window.botDetectorResults) return JSON.stringify(window.botDetectorResults);
-  // Parse visible result cards using for loop (safer with stealth-patched prototypes)
-  var out = {};
-  var els = document.querySelectorAll('[class*="test"], [data-test-id]');
-  for (var i = 0; i < els.length; i++) {
-    var el = els[i];
-    var name = el.getAttribute('data-test-id') || el.className;
-    var cls = el.getAttribute('class') || '';
-    var passed = cls.indexOf('pass') >= 0 || cls.indexOf('success') >= 0;
-    var failed = cls.indexOf('fail') >= 0 || cls.indexOf('error') >= 0;
-    if (name && (passed || failed)) out[name] = passed;
-  }
-  return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
+  try {
+    var r = window.botDetectorResults;
+    if (r && typeof r === 'object') return JSON.stringify(r);
+  } catch(e) {}
+  return null;
 }
 `
 
@@ -52,15 +44,11 @@ func extractRebrowser(ctx context.Context, page *rod.Page) (TargetResult, error)
 	}
 
 	deadline := time.Now().Add(rebrowserWaitTimeout)
-	var rawJSON string
+	// Wait for botDetectorResults to be populated.
 	for time.Now().Before(deadline) {
 		val, err := page.Eval(rebrowserReadyJS)
-		if err == nil && val != nil {
-			s := strings.TrimSpace(val.Value.String())
-			if s != "" && s != "null" {
-				rawJSON = s
-				break
-			}
+		if err == nil && val != nil && !isNullResult(val.Value.String()) {
+			break
 		}
 		select {
 		case <-ctx.Done():
@@ -69,21 +57,15 @@ func extractRebrowser(ctx context.Context, page *rod.Page) (TargetResult, error)
 		}
 	}
 
-	if rawJSON == "" {
-		// Try one final extract pass.
-		val, err := page.Eval(rebrowserExtractJS)
-		if err != nil {
-			return result, fmt.Errorf("rebrowser: eval extract: %w", err)
-		}
-		if val == nil {
-			return result, fmt.Errorf("rebrowser: selector not found")
-		}
-		rawJSON = val.Value.String()
+	// Extract the JSON now that results are ready.
+	val, err := page.Eval(rebrowserExtractJS)
+	if err != nil {
+		return result, fmt.Errorf("rebrowser: eval extract: %w", err)
 	}
-
-	if rawJSON == "" || rawJSON == "null" {
-		return result, fmt.Errorf("rebrowser: no results extracted — page structure may have changed")
+	if val == nil || isNullResult(val.Value.String()) {
+		return result, fmt.Errorf("rebrowser: botDetectorResults not found — page structure may have changed")
 	}
+	rawJSON := val.Value.String()
 
 	// botDetectorResults is a map[string]bool: key=check name, value=true means bot detected.
 	var checks map[string]any

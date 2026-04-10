@@ -85,7 +85,7 @@ func extractWebRTCLeak(ctx context.Context, page *rod.Page) (TargetResult, error
 		val, err := page.Eval(webrtcReadyJS)
 		if err == nil && val != nil {
 			s := strings.TrimSpace(val.Value.String())
-			if s != "" && s != "null" {
+			if !isNullResult(s) {
 				break
 			}
 		}
@@ -107,7 +107,7 @@ func extractWebRTCLeak(ctx context.Context, page *rod.Page) (TargetResult, error
 	if err != nil {
 		return result, fmt.Errorf("webrtc_leak: eval extract: %w", err)
 	}
-	if val == nil || val.Value.String() == "" || val.Value.String() == "null" {
+	if val == nil || isNullResult(val.Value.String()) {
 		return result, fmt.Errorf("webrtc_leak: selector not found")
 	}
 

@@ -3,7 +3,6 @@ package selftest
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -77,7 +76,7 @@ func extractSannysoft(ctx context.Context, page *rod.Page) (TargetResult, error)
 	deadline := time.Now().Add(sannysoftWaitTimeout)
 	for time.Now().Before(deadline) {
 		val, err := page.Eval(sannysoftReadyJS)
-		if err == nil && val != nil && strings.TrimSpace(val.Value.String()) != "" {
+		if err == nil && val != nil && !isNullResult(val.Value.String()) {
 			break
 		}
 		select {
@@ -98,7 +97,7 @@ func extractSannysoft(ctx context.Context, page *rod.Page) (TargetResult, error)
 	if err != nil {
 		return result, fmt.Errorf("sannysoft: eval extract: %w", err)
 	}
-	if val == nil || val.Value.String() == "" || val.Value.String() == "null" {
+	if val == nil || isNullResult(val.Value.String()) {
 		return result, fmt.Errorf("sannysoft: selector not found — page may have changed structure")
 	}
 
