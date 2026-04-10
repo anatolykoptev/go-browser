@@ -1,13 +1,37 @@
 // Native toString masking — make overridden getters look like [native code]
+//
+// We use a Proxy on Function.prototype.toString rather than replacing it with
+// a regular function.  A Proxy around the native toString:
+//   - has no .prototype (forwarded to native, which has none)
+//   - throws TypeError for new Proxy() (native toString is not a constructor)
+//   - passes all descriptor checks (get/set/enumerable come from native)
+//   - returns native-looking strings for our spoofed functions via apply trap
+//
+// This avoids the `lieProps['Function.toString']` detection in CreepJS which
+// fires when Function.prototype.toString is replaced with a regular function.
 (function() {
-  const _toString = Function.prototype.toString;
+  const _nativeToString = Function.prototype.toString;
   const _nativeMap = new WeakMap();
 
-  Function.prototype.toString = function() {
-    const native = _nativeMap.get(this);
-    if (native) return native;
-    return _toString.call(this);
-  };
+  const _toStringProxy = new Proxy(_nativeToString, {
+    apply(target, thisArg, args) {
+      const native = _nativeMap.get(thisArg);
+      if (native) return native;
+      return Reflect.apply(target, thisArg, args);
+    },
+  });
+
+  // Replace on the prototype — the Proxy wraps the native fn, so all structural
+  // checks (typeof, prototype presence, descriptor) forward to the native.
+  Object.defineProperty(Function.prototype, 'toString', {
+    value: _toStringProxy,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+
+  // The proxy itself must also look native when probed.
+  _nativeMap.set(_toStringProxy, 'function toString() { [native code] }');
 
   // Helper: define a property with a getter that reports as native code
   window.__defineNativeGetter = function(obj, prop, getter, nativeName) {
@@ -18,9 +42,6 @@
       enumerable: true
     });
   };
-
-  // Also mask Function.prototype.toString itself
-  _nativeMap.set(Function.prototype.toString, 'function toString() { [native code] }');
 })();
 
 // Navigator property overrides — all values from active stealth profile.
