@@ -3,6 +3,9 @@ package browser
 import (
 	"context"
 	"time"
+
+	"github.com/anatolykoptev/go-browser/humanize"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 // actions_wait.go — executors for wait_for, sleep, wait actions.
@@ -20,6 +23,10 @@ func execWaitFor(dc dispatchContext, a Action) (any, error) {
 		var cancel context.CancelFunc
 		waitCtx, cancel = context.WithTimeout(dc.ctx, time.Duration(a.TimeoutMs)*time.Millisecond)
 		defer cancel()
+	}
+	if dc.stealthMode && dc.cursor != nil {
+		stop := startWaitDrift(waitCtx, dc)
+		defer stop()
 	}
 	return nil, dispatchWaitFor(waitCtx, dc, a)
 }
@@ -54,5 +61,26 @@ func execWaitForNavigation(dc dispatchContext, a Action) (any, error) {
 }
 
 func execSleep(dc dispatchContext, a Action) (any, error) {
+	if dc.stealthMode && dc.cursor != nil && a.WaitMs > 0 {
+		sleepCtx, cancel := context.WithTimeout(dc.ctx, time.Duration(a.WaitMs)*time.Millisecond)
+		defer cancel()
+		stop := startWaitDrift(sleepCtx, dc)
+		defer stop()
+		return nil, doSleep(sleepCtx, a.WaitMs)
+	}
 	return nil, doSleep(dc.ctx, a.WaitMs)
+}
+
+// startWaitDrift starts idle drift for the duration of a wait/sleep action.
+// Returns a stop function that must be called when the wait is done.
+// The drift dispatches micro mouse-moves via CDP Input events.
+func startWaitDrift(ctx context.Context, dc dispatchContext) func() {
+	dispatch := func(x, y float64) error {
+		return proto.InputDispatchMouseEvent{
+			Type: proto.InputDispatchMouseEventTypeMouseMoved,
+			X:    x,
+			Y:    y,
+		}.Call(dc.page)
+	}
+	return humanize.StartIdleDrift(ctx, dc.cursor, dispatch)
 }

@@ -19,8 +19,21 @@ func doWarmup(ctx context.Context, page *rod.Page, durationMs int, cursor *human
 	}
 	deadline := time.Now().Add(time.Duration(durationMs) * time.Millisecond)
 	eventCount := 0
-	vw := 1920.0
-	vh := 1080.0
+
+	// Read actual viewport dimensions; fall back to 1440×900 on error.
+	vw, vh, _ := humanize.ReadViewport(page)
+	bounds := humanize.ViewportBounds{
+		MinX: 50, MaxX: vw - 50,
+		MinY: 50, MaxY: vh - 50,
+	}
+
+	// dispatch wraps CDP mouse-move for idle drift.
+	dispatch := func(x, y float64) error {
+		return proto.InputDispatchMouseEvent{
+			Type: proto.InputDispatchMouseEventTypeMouseMoved,
+			X:    x, Y: y,
+		}.Call(page)
+	}
 
 	for time.Now().Before(deadline) {
 		select {
@@ -29,31 +42,35 @@ func doWarmup(ctx context.Context, page *rod.Page, durationMs int, cursor *human
 		default:
 		}
 
-		// Random target within viewport
-		targetX := 100 + rand.Float64()*(vw-200)
-		targetY := 100 + rand.Float64()*(vh-200)
+		// Random target within viewport margins.
+		targetX := bounds.MinX + rand.Float64()*(bounds.MaxX-bounds.MinX)
+		targetY := bounds.MinY + rand.Float64()*(bounds.MaxY-bounds.MinY)
 
-		// Bezier mouse move (5-10 steps, faster than normal)
+		// Bezier mouse move (5-10 steps, faster than normal).
 		steps := 5 + rand.IntN(6)
 		startX, startY := cursor.Position()
 		path := humanize.BezierPath(startX, startY, targetX, targetY, steps)
 		for _, p := range path {
-			_ = proto.InputDispatchMouseEvent{
-				Type: proto.InputDispatchMouseEventTypeMouseMoved,
-				X:    p.X, Y: p.Y,
-			}.Call(page)
+			_ = dispatch(p.X, p.Y)
 			cursor.MoveTo(p.X, p.Y)
 			eventCount++
 		}
-		sleepCtx(ctx, time.Duration(30+rand.IntN(70))*time.Millisecond)
 
-		// Occasional scroll (20% chance)
+		// Idle drift pause between Bezier sequences (500ms-1s).
+		driftDuration := time.Duration(500+rand.IntN(500)) * time.Millisecond
+		driftCtx, driftStop := context.WithTimeout(ctx, driftDuration)
+		stopDrift := humanize.StartIdleDrift(driftCtx, cursor, dispatch)
+		sleepCtx(driftCtx, driftDuration)
+		stopDrift()
+		driftStop()
+
+		// Occasional scroll (20% chance).
 		if rand.Float64() < 0.2 {
 			_ = page.Mouse.Scroll(0, float64(50-rand.IntN(100)), 1)
 			eventCount++
 		}
 
-		// Occasional click (10% chance)
+		// Occasional click (10% chance).
 		if rand.Float64() < 0.1 {
 			_ = dispatchMouseClick(page, targetX, targetY)
 			eventCount += 2
