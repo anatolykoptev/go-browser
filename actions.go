@@ -41,6 +41,7 @@ type Action struct {
 	Cookie        string        `json:"cookie,omitempty" jsonschema:"Cookie name to wait for (wait_for action — polls until cookie appears)"`
 	Limit         int           `json:"limit,omitempty" jsonschema:"Max entries to return for get_logs (default: 30 network / 20 console) and get_cookies"`
 	StorageType   string        `json:"storage_type,omitempty" jsonschema:"Storage type: local (default) or session"`
+	Goal          string        `json:"goal,omitempty" jsonschema:"Goal description for plan_actions (what you want to accomplish on this page)"`
 	FrameSelector string        `json:"frame_selector,omitempty" jsonschema:"Target iframe for this action. CSS selector (iframe.payment) or url=pattern (url=payments.audienceview.com). Auto-waits for iframe to load (retries until timeout). type_text auto-uses CDP events. Pattern: snapshot with frame_selector to get ref=eN inside iframe, then type_text/click with same frame_selector and ref=eN."`
 }
 
