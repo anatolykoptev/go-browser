@@ -66,11 +66,24 @@
   // === 02_navigator.js ===
   // Navigator property alignment — ensure main thread matches worker bootstrap.
   // We do NOT proxy Function.prototype.toString (CreepJS hasToStringProxy).
-  // We do NOT override navigator.webdriver (CloakBrowser C++ handles it).
+  // navigator.webdriver — CloakBrowser C++ handles it at C++ level.
+  // For non-CloakBrowser Chrome, we apply a JS fallback below.
   // We ONLY set properties that the worker bootstrap also sets, to prevent
   // bot.incolumitas.com inconsistentWebWorkerNavigatorPropery detection.
   
   const __sp = window.__sp || {};
+  
+  // navigator.webdriver — CloakBrowser C++ sets it to false in main thread.
+  // For non-CloakBrowser Chrome (direct rod/CDP), we override via JS.
+  // Use Object.defineProperty with value (not getter) to avoid lieProps detection.
+  if (navigator.webdriver !== false) {
+    Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', {
+      value: false,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  }
   
   // deviceMemory — worker gets it from profile (default 8), main must match.
   if (__sp.hardware && __sp.hardware.deviceMemory) {
