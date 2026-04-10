@@ -34,7 +34,8 @@ type creepJSResult struct {
 		Brands   []map[string]string `json:"brands"`
 		Platform string              `json:"platform"`
 	} `json:"ua"`
-	Debug string `json:"_debug,omitempty"`
+	Debug    string `json:"_debug,omitempty"`
+	HasScore bool   `json:"_hasScore"`
 }
 
 // creepJSExtractJS is evaluated in the page to extract results from creepjs.
@@ -55,16 +56,30 @@ const creepJSExtractJS = `
     score = parseFloat(scoreEl.textContent.replace(/[^0-9.]/g, '')) || 0;
   }
 
-  // If no explicit score element, try scanning visible text for "trust score: N"
+  // Capture body text and debug info before deciding to fail
+  var bodyText = document.body ? document.body.innerText : '';
+  var debugSnippet = document.title + ' | body[0:400]: ' + bodyText.substring(0, 400);
+
+  // If no explicit score element, try scanning visible text for "trust score: N" or "N%"
   if (!score) {
-    var bodyText = document.body ? document.body.innerText : '';
-    var m = bodyText.match(/trust score[:\s]*(\d{1,3})/i);
-    if (m) score = parseFloat(m[1]);
-    if (!score) return null;
+    var m1 = bodyText.match(/trust score[:\s]*(\d{1,3})/i);
+    if (m1) score = parseFloat(m1[1]);
+  }
+  if (!score) {
+    // creepjs often renders score as "NN%" near "bot" or "lie" indicators
+    var m2 = bodyText.match(/\b(\d{2,3})%?\s*(trusted|bot detected|lie)/i);
+    if (m2) score = parseFloat(m2[1]);
+  }
+  if (!score) {
+    // Last resort: look for any 2-3 digit number after "score"
+    var m3 = bodyText.match(/score[^0-9]*(\d{2,3})/i);
+    if (m3) score = parseFloat(m3[1]);
   }
 
-  var result = { trustScore: score, lies: [], fonts: {}, webrtc: {}, audio: {}, voices: {}, ua: {},
-                 _debug: document.title + ' | ' + (document.body ? document.body.innerText.substring(0, 200) : '') };
+  // Return debug info even if we can't find a score, so we can see what's on the page
+  var result = { trustScore: score || 0, lies: [], fonts: {}, webrtc: {}, audio: {}, voices: {}, ua: {},
+                 _debug: debugSnippet,
+                 _hasScore: score > 0 };
 
   // Collect lies (use for loop to avoid prototype patching issues)
   var lieEls = document.querySelectorAll('.lie, .lies li, [data-lie]');
@@ -146,9 +161,6 @@ func extractCreepJS(ctx context.Context, page *rod.Page) (TargetResult, error) {
 		return result, fmt.Errorf("creepjs: parse result: %w (raw: %.100s)", err, rawJSON)
 	}
 
-	result.OK = true
-	result.TrustScore = cr.TrustScore
-	result.Lies = cr.Lies
 	sections := map[string]any{
 		"fonts":  map[string]any{"hash": cr.Fonts.Hash, "platformClassifier": cr.Fonts.PlatformClassifier},
 		"webrtc": map[string]any{"publicIp": cr.WebRTC.PublicIP, "localIps": cr.WebRTC.LocalIPs},
@@ -160,5 +172,16 @@ func extractCreepJS(ctx context.Context, page *rod.Page) (TargetResult, error) {
 		sections["_debug"] = cr.Debug
 	}
 	result.Sections = sections
+
+	if !cr.HasScore {
+		// Page loaded but no score found — return debug info without error.
+		result.OK = false
+		result.Error = "creepjs: trust score not found in page (see sections._debug)"
+		return result, nil
+	}
+
+	result.OK = true
+	result.TrustScore = cr.TrustScore
+	result.Lies = cr.Lies
 	return result, nil
 }
