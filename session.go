@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/go-rod/rod"
 )
 
 const (
@@ -20,6 +22,7 @@ type Session struct {
 	LastUsed  time.Time
 	Proxy     string
 	Refs      *RefMap
+	Page      *rod.Page     // live page for reuse across calls
 	ttl       time.Duration // 0 means never expires; set from pool at creation time
 }
 
