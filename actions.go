@@ -100,6 +100,29 @@ func registerAction(actionType string, exec actionExecutor) {
 func ExecuteAction(
 	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool, refMap *RefMap,
 ) ActionResult {
+	// type_into_frame handles its own iframe targeting via clickIframeArea.
+	// Do NOT route through resolveFrame: it fails on OOP cross-origin iframes
+	// and the fallback only covers type_text.
+	if a.Type == "type_into_frame" {
+		exec, ok := actionRegistry[a.Type]
+		if !ok {
+			return ActionResult{Action: a.Type, Ok: false, Error: "type_into_frame not registered"}
+		}
+		dc := dispatchContext{
+			ctx:         ctx,
+			page:        page,
+			cursor:      cursor,
+			logs:        logs,
+			stealthMode: stealthMode,
+			refMap:      refMap,
+		}
+		data, err := exec(dc, a)
+		if err != nil {
+			return ActionResult{Action: a.Type, Ok: false, Error: err.Error()}
+		}
+		return ActionResult{Action: a.Type, Ok: true, Data: data}
+	}
+
 	// Frame targeting: switch context to iframe if specified.
 	targetPage := page
 	if a.FrameSelector != "" {

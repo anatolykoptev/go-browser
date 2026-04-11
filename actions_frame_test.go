@@ -94,6 +94,13 @@ func TestParseFrameSelector(t *testing.T) {
 	}
 }
 
+func TestTypeIntoFrameRegistered(t *testing.T) {
+	_, ok := actionRegistry["type_into_frame"]
+	if !ok {
+		t.Fatal("type_into_frame action not registered in actionRegistry")
+	}
+}
+
 func TestMatchFrameURL(t *testing.T) {
 	tests := []struct {
 		frameURL string
