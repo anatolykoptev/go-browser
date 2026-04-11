@@ -119,6 +119,32 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 	}()
 
 	var page *rod.Page
+	closePage := true
+	defer func() {
+		if closePage && page != nil {
+			_ = page.Close()
+		}
+	}()
+
+	// Session page reuse: reattach to stored page from a previous call.
+	if req.SessionID != nil && *req.SessionID != sessionIDNew && pool != nil {
+		if storedPage := pool.GetPage(*req.SessionID); storedPage != nil {
+			page = storedPage
+			disposeCtx = false
+			closePage = false
+			if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
+				return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
+			}
+			// Only navigate if URL is provided and ReusePage is false.
+			// ReusePage=true means "stay on current page, don't navigate".
+			if req.URL != "" && req.URL != "about:blank" && !req.ReusePage {
+				if err := doNavigate(ctx, page, req.URL); err != nil {
+					return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+				}
+			}
+			goto runActions
+		}
+	}
 
 	if req.ReusePage {
 		// Attach to existing page — no TargetCreateTarget CDP call.
@@ -139,7 +165,6 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "plain page: " + err.Error()}
 		}
-		defer func() { _ = page.Close() }()
 
 		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
 			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
@@ -156,7 +181,6 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 		}
-		defer func() { _ = page.Close() }()
 
 		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
 			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
@@ -166,6 +190,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 		}
 	}
 
+runActions:
 	logs := NewLogCollector()
 	logs.SubscribeCDP(page)
 
@@ -219,7 +244,8 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 		if err == nil {
 			sessionID = id
 			disposeCtx = false // pool owns the context now
-			// Attach current refMap so refs from this call survive into subsequent calls.
+			closePage = false  // keep page alive for reuse
+			pool.StorePage(id, page)
 			if sess, err := pool.Get(id); err == nil {
 				sess.Refs = refMap
 			}
