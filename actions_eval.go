@@ -27,9 +27,16 @@ func execEvalOnNewDocument(dc dispatchContext, a Action) (any, error) {
 }
 
 func execScreenshot(dc dispatchContext, a Action) (any, error) {
-	// Default: viewport only. Use format="full" for full-page screenshot.
-	fullPage := a.Format == "full"
-	return doScreenshot(dc.page, fullPage)
+	// format="image" or "full" → actual JPEG screenshot.
+	// Default (no format) → return snapshot text instead — saves ~150K tokens.
+	switch a.Format {
+	case "image":
+		return doScreenshot(dc.page, false)
+	case "full":
+		return doScreenshot(dc.page, true)
+	default:
+		return doSnapshot(dc.page, a.Depth, "", a.Filter, a.Selector, dc.refMap)
+	}
 }
 
 func execSnapshot(dc dispatchContext, a Action) (any, error) {
