@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"image/png"
+	"image/jpeg"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -21,38 +21,38 @@ import (
 // browser-use uses 1400x850, Anthropic computer-use uses 1280x800.
 const screenshotMaxWidth = 1280
 
-func resizeScreenshot(data []byte, maxWidth int) ([]byte, error) {
-	img, err := png.Decode(bytes.NewReader(data))
+// screenshotJPEGQuality controls CDP JPEG quality (1-100).
+// 80 gives ~60-70% size reduction vs PNG while keeping text readable.
+const screenshotJPEGQuality = 80
+
+// resizeJPEG decodes a JPEG, scales it down to maxWidth, and re-encodes.
+// Returns original data unchanged if already within maxWidth.
+func resizeJPEG(data []byte, maxWidth int) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	bounds := img.Bounds()
-	w := bounds.Dx()
-	if w <= maxWidth {
-		return data, nil // already small enough
+	if bounds.Dx() <= maxWidth {
+		return data, nil
 	}
-
-	// Scale down proportionally using nearest-neighbor (fast, good enough for text).
-	scale := float64(maxWidth) / float64(w)
-	newW := maxWidth
+	scale := float64(maxWidth) / float64(bounds.Dx())
 	newH := int(float64(bounds.Dy()) * scale)
-
-	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	dst := image.NewRGBA(image.Rect(0, 0, maxWidth, newH))
 	draw.NearestNeighbor.Scale(dst, dst.Bounds(), img, bounds, draw.Src, nil)
-
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, dst); err != nil {
+	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: screenshotJPEGQuality}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
 func doScreenshot(page *rod.Page, fullPage bool) (string, error) {
-	// PNG viewport-only — industry standard for LLM screenshots.
-	// All major frameworks (Playwright MCP, browser-use, Anthropic computer-use) use PNG
-	// because JPEG loses text readability at compression levels that save meaningful bytes.
+	// CDP JPEG directly — no PNG→decode→JPEG roundtrip. ~60-70% smaller than PNG.
+	q := screenshotJPEGQuality
 	req := proto.PageCaptureScreenshot{
-		Format:                proto.PageCaptureScreenshotFormatPng,
+		Format:                proto.PageCaptureScreenshotFormatJpeg,
+		Quality:               &q,
 		CaptureBeyondViewport: fullPage,
 	}
 	res, err := req.Call(page)
@@ -60,11 +60,8 @@ func doScreenshot(page *rod.Page, fullPage bool) (string, error) {
 		return "", fmt.Errorf("screenshot: %w", err)
 	}
 
-	// Resize if wider than screenshotMaxWidth.
-	data := res.Data
-	data, err = resizeScreenshot(data, screenshotMaxWidth)
+	data, err := resizeJPEG(res.Data, screenshotMaxWidth)
 	if err != nil {
-		// Non-fatal — return original if resize fails.
 		data = res.Data
 	}
 
