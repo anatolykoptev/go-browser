@@ -148,6 +148,8 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 
 	if req.ReusePage {
 		// Attach to existing page — no TargetCreateTarget CDP call.
+		// Never close a reused page — it belongs to the browser, not this request.
+		closePage = false
 		page, err = chrome.FindPage("")
 		if err != nil {
 			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
