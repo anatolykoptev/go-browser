@@ -110,18 +110,16 @@ func (p *ContextPool) reaper() {
 
 // watchTargetDestroyed listens for CDP target destruction events and removes
 // closed pages from the pool (e.g. when user closes a tab in VNC).
+// Only removes pages whose TargetID exactly matches the destroyed target.
+// Does NOT dispose the BrowserContext — let Chrome handle context lifecycle.
 func (p *ContextPool) watchTargetDestroyed() {
 	go p.browser.EachEvent(func(e *proto.TargetTargetDestroyed) bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		for key, mc := range p.contexts {
+		for _, mc := range p.contexts {
 			for name, mp := range mc.Pages {
 				if mp.Page != nil && mp.Page.TargetID == e.TargetID {
 					delete(mc.Pages, name)
-					if len(mc.Pages) == 0 && key != "default" {
-						p.disposeContext(mc)
-						delete(p.contexts, key)
-					}
 					return false // keep listening
 				}
 			}
