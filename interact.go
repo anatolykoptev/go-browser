@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anatolykoptev/go-browser/humanize"
@@ -158,8 +159,12 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, 
 			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
 		}
 		if req.URL != "" && req.URL != "about:blank" {
-			if err := doNavigate(ctx, page, req.URL); err != nil {
-				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+			// Skip navigation if the page is already on the requested URL.
+			currentURL := page.MustInfo().URL
+			if !strings.HasPrefix(currentURL, req.URL) {
+				if err := doNavigate(ctx, page, req.URL); err != nil {
+					return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+				}
 			}
 		}
 	} else if req.NoStealth {
