@@ -143,6 +143,11 @@ func doSnapshot(page *rod.Page, maxDepth int, format, filter, selector string, r
 		}
 	}
 
+	// Dialog filter shows a scoped subtree — depth limit is meaningless and hides form fields.
+	if filter == "dialog" {
+		maxDepth = 0
+	}
+
 	switch format {
 	case "text":
 		return renderAXTree(allNodes, maxDepth, filter, selector), nil

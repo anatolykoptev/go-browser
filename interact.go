@@ -165,7 +165,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	for _, a := range req.Actions {
 		res := ExecuteAction(ctx, page, a, cursor, logs, req.StealthMode, refMap)
 		results = append(results, res)
-		if !res.Ok {
+		if !res.Ok && !a.SkipOnError {
 			status = "error"
 			actionErr = res.Error
 			break
