@@ -87,9 +87,7 @@ func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
 }
 
 // RunInteract executes a Chrome interaction sequence using the ChromeManager's ContextPool.
-// The pool parameter is kept for backward compatibility with callers; the ChromeManager's
-// internal pool is used for session management.
-func RunInteract(ctx context.Context, chrome *ChromeManager, _ *SessionPool, req InteractRequest) InteractResponse {
+func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest) InteractResponse {
 	pool := chrome.Pool()
 	if pool == nil {
 		return InteractResponse{URL: req.URL, Status: "error", Error: "context pool not available"}
@@ -290,7 +288,7 @@ func runPreActions(ctx context.Context, page *rod.Page, actions []Action) string
 
 func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy string) InteractResponse {
 	req.Proxy = &proxy
-	return RunInteract(ctx, s.chrome, nil, req)
+	return RunInteract(ctx, s.chrome, req)
 }
 
 func (s *Server) handleDestroySession(w http.ResponseWriter, r *http.Request) {

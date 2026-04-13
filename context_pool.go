@@ -1,6 +1,8 @@
 package browser
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -8,6 +10,17 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
+
+const sessionIDBytes = 16
+
+// generateID creates a random hex session ID.
+func generateID() (string, error) {
+	b := make([]byte, sessionIDBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
 
 const (
 	contextPoolReaperInterval = 30 * time.Second
@@ -144,6 +157,17 @@ func (p *ContextPool) ClosePage(session string) error {
 		return nil
 	}
 	return fmt.Errorf("context_pool: session %q not found", session)
+}
+
+// SessionCount returns the total number of active named sessions across all contexts.
+func (p *ContextPool) SessionCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, mc := range p.contexts {
+		n += len(mc.Pages)
+	}
+	return n
 }
 
 // List returns all contexts and their sessions.
