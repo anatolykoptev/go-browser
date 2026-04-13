@@ -15,7 +15,10 @@ import (
 
 const (
 	defaultTimeoutSecs = 30
-	sessionIDNew       = "new"
+	sessionIDNew       = "new"   // backward compat: session_id="new" → ephemeral named session
+	modeDefault        = "default"
+	modePrivate        = "private"
+	modeProxy          = "proxy"
 )
 
 // InteractRequest is the JSON body for POST /chrome/interact.
@@ -25,12 +28,16 @@ type InteractRequest struct {
 	PreActions  []Action `json:"pre_actions,omitempty"` // executed after page creation, before navigation
 	TimeoutSecs int      `json:"timeout_secs,omitempty"`
 	Proxy       *string  `json:"proxy,omitempty"`
-	SessionID   *string  `json:"session_id,omitempty"`
-	Profile     string   `json:"profile,omitempty"`
-	UseProfile  bool     `json:"use_profile,omitempty"` // use default Chrome profile (persistent cookies)
-	ReusePage   bool     `json:"reuse_page,omitempty"`
-	NoStealth   bool     `json:"no_stealth,omitempty"`   // plain page without stealth JS injection
-	StealthMode bool     `json:"stealth_mode,omitempty"` // route actions through cdputil (no Runtime.callFunctionOn)
+	// New session/mode params.
+	Session string `json:"session,omitempty"` // named session; empty = ephemeral
+	Mode    string `json:"mode,omitempty"`    // "default", "private" (default), "proxy"
+	// Backward-compat params (still accepted, mapped to Session/Mode internally).
+	SessionID  *string `json:"session_id,omitempty"`
+	Profile    string  `json:"profile,omitempty"`
+	UseProfile bool    `json:"use_profile,omitempty"` // → mode="default"
+	ReusePage  bool    `json:"reuse_page,omitempty"`  // → session="__reuse__"
+	NoStealth  bool    `json:"no_stealth,omitempty"`  // plain page without stealth JS injection
+	StealthMode bool   `json:"stealth_mode,omitempty"` // route actions through cdputil
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -79,142 +86,70 @@ func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// RunInteract executes a Chrome interaction sequence.
-// It reads req.Proxy to set up the browser context; pool may be nil if session persistence is not needed.
-func RunInteract(ctx context.Context, chrome *ChromeManager, pool *SessionPool, req InteractRequest) InteractResponse {
-	proxy := ""
-	if req.Proxy != nil {
-		proxy = *req.Proxy
+// RunInteract executes a Chrome interaction sequence using the ChromeManager's ContextPool.
+// The pool parameter is kept for backward compatibility with callers; the ChromeManager's
+// internal pool is used for session management.
+func RunInteract(ctx context.Context, chrome *ChromeManager, _ *SessionPool, req InteractRequest) InteractResponse {
+	pool := chrome.Pool()
+	if pool == nil {
+		return InteractResponse{URL: req.URL, Status: "error", Error: "context pool not available"}
 	}
 
-	wantSession := req.SessionID != nil && *req.SessionID == sessionIDNew
+	session, mode, proxy, ephemeral := resolveSessionParams(req)
 
-	var browser *rod.Browser
-	var contextID proto.BrowserBrowserContextID
-	var authCleanup func()
-	var err error
-
-	if req.UseProfile {
-		// Use default Chrome profile — persistent cookies, localStorage, etc.
-		browser, err = chrome.DefaultContext()
-		if err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
-		}
-		// Don't dispose — it's the default context
-	} else {
-		browser, contextID, authCleanup, err = chrome.NewContext(proxy)
-		if err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
-		}
-		if authCleanup != nil {
-			defer authCleanup()
-		}
+	mp, err := pool.GetOrCreatePage(session, mode, proxy, req.URL)
+	if err != nil {
+		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
 	}
 
-	// Dispose context when done, unless using default profile or persisting as a session.
-	disposeCtx := !req.UseProfile
-	defer func() {
-		if disposeCtx && contextID != "" {
-			_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(browser)
-		}
-	}()
+	page := mp.Page
+	isNewPage := page.MustInfo().URL == "about:blank" || page.MustInfo().URL == ""
 
-	var page *rod.Page
-	closePage := true
-	defer func() {
-		if closePage && page != nil {
-			_ = page.Close()
-		}
-	}()
-
-	// Session page reuse: reattach to stored page from a previous call.
-	if req.SessionID != nil && *req.SessionID != sessionIDNew && pool != nil {
-		if storedPage := pool.GetPage(*req.SessionID); storedPage != nil {
-			page = storedPage
-			disposeCtx = false
-			closePage = false
-			if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
-				return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
-			}
-			// Only navigate if URL is provided and ReusePage is false.
-			// ReusePage=true means "stay on current page, don't navigate".
-			if req.URL != "" && req.URL != "about:blank" && !req.ReusePage {
-				if err := doNavigate(ctx, page, req.URL); err != nil {
-					return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
-				}
-			}
-			goto runActions
-		}
-	}
-
-	if req.ReusePage {
-		// Attach to existing page — no TargetCreateTarget CDP call.
-		// Never close a reused page — it belongs to the browser, not this request.
-		closePage = false
-		page, err = chrome.FindPage("")
-		if err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: "find page: " + err.Error()}
-		}
-		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
-			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
-		}
-		if req.URL != "" && req.URL != "about:blank" {
-			// Skip navigation if the page is already on the requested URL.
-			currentURL := page.MustInfo().URL
-			if !strings.HasPrefix(currentURL, req.URL) {
-				if err := doNavigate(ctx, page, req.URL); err != nil {
-					return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
-				}
+	// Set up stealth / proxy auth on freshly created pages only.
+	if isNewPage {
+		if proxy != "" {
+			_, proxyUser, proxyPass := parseProxy(proxy)
+			if proxyUser != "" {
+				cleanup := setupProxyAuth(page.Browser(), proxyUser, proxyPass)
+				defer cleanup()
 			}
 		}
-	} else if req.NoStealth {
-		page, err = browser.Page(proto.TargetCreateTarget{URL: "about:blank"})
-		if err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: "plain page: " + err.Error()}
-		}
 
-		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
-			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
-		}
-		if err := doNavigate(ctx, page, req.URL); err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
-		}
-	} else {
-		profile, err := LoadProfile(req.Profile)
-		if err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err)}
-		}
-		page, err = chrome.NewStealthPage(browser, profile)
-		if err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
-		}
-
-		if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
-			return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
-		}
-		if err := doNavigate(ctx, page, req.URL); err != nil {
-			return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+		if !req.NoStealth {
+			profile, err := LoadProfile(req.Profile)
+			if err != nil {
+				return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err)}
+			}
+			if err := applyStealthToExistingPage(page, profile); err != nil {
+				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+			}
 		}
 	}
 
-runActions:
+	if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
+		return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
+	}
+
+	// Navigate: skip if URL already matches or ReusePage is set.
+	if req.URL != "" && req.URL != "about:blank" {
+		if isNewPage || (!req.ReusePage && !strings.HasPrefix(page.MustInfo().URL, req.URL)) {
+			if err := doNavigate(ctx, page, req.URL); err != nil {
+				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+			}
+		}
+	}
+
 	logs := NewLogCollector()
 	logs.SubscribeCDP(page)
 
 	cursor := humanize.NewCursor(390, 290)
 
-	// Reuse RefMap from existing session so refs survive across calls.
-	var refMap *RefMap
-	if req.SessionID != nil && *req.SessionID != sessionIDNew && pool != nil {
-		if sess, err := pool.Get(*req.SessionID); err == nil {
-			refMap = sess.Refs
-		}
-	}
+	refMap := mp.Refs
 	if refMap == nil {
 		refMap = NewRefMap()
+		mp.Refs = refMap
 	}
 
-	// Start idle drift
 	driftFunc := func(x, y float64) error {
 		return proto.InputDispatchMouseEvent{
 			Type: proto.InputDispatchMouseEventTypeMouseMoved,
@@ -239,33 +174,107 @@ runActions:
 		}
 	}
 
-	info, err := page.Info()
+	info, infoErr := page.Info()
 	finalURL := req.URL
-	if err == nil {
+	if infoErr == nil {
 		finalURL = info.URL
+		mp.URL = finalURL
 	}
+	mp.LastUsed = time.Now()
 
-	var sessionID string
-	if wantSession && pool != nil {
-		id, err := pool.Create(proxy)
-		if err == nil {
-			sessionID = id
-			disposeCtx = false // pool owns the context now
-			closePage = false  // keep page alive for reuse
-			pool.StorePage(id, page)
-			if sess, err := pool.Get(id); err == nil {
-				sess.Refs = refMap
-			}
-		}
+	if ephemeral {
+		_ = pool.ClosePage(session)
 	}
 
 	return InteractResponse{
 		URL:       finalURL,
 		Status:    status,
 		Actions:   results,
-		SessionID: sessionID,
+		SessionID: session,
 		Error:     actionErr,
 	}
+}
+
+// resolveSessionParams maps old params (use_profile, session_id, proxy, reuse_page)
+// to the new session/mode model, and determines if the session is ephemeral.
+//
+// Mapping rules:
+//   - use_profile=true           → mode="default", session="__profile__", persistent
+//   - proxy=<url>                → mode="proxy", session from session_id or auto
+//   - session_id="new"           → mode="private", ephemeral=false (session auto-named)
+//   - session_id=<id>            → mode="private", session=<id>, persistent
+//   - reuse_page=true            → mode="default", session="__reuse__", persistent
+//   - session=<name> (new param) → mode from Mode field, persistent
+//   - nothing                    → mode="private", ephemeral
+func resolveSessionParams(req InteractRequest) (session, mode, proxy string, ephemeral bool) {
+	proxy = ""
+	if req.Proxy != nil {
+		proxy = *req.Proxy
+	}
+
+	// New-style params take priority.
+	if req.Session != "" {
+		session = req.Session
+		mode = req.Mode
+		if mode == "" {
+			if proxy != "" {
+				mode = modeProxy
+			} else {
+				mode = modePrivate
+			}
+		}
+		return session, mode, proxy, false
+	}
+
+	// Backward compat: use_profile → default context.
+	if req.UseProfile {
+		return "__profile__", modeDefault, proxy, false
+	}
+
+	// Backward compat: reuse_page → reuse tab in default context.
+	if req.ReusePage {
+		return "__reuse__", modeDefault, proxy, false
+	}
+
+	// Backward compat: proxy without session → proxy mode, ephemeral.
+	if proxy != "" && req.SessionID == nil {
+		return generateEphemeralID(), modeProxy, proxy, true
+	}
+
+	// Backward compat: session_id="new" → create named session (auto-ID), persistent.
+	if req.SessionID != nil && *req.SessionID == sessionIDNew {
+		id := generateEphemeralID()
+		mode = modePrivate
+		if proxy != "" {
+			mode = modeProxy
+		}
+		return id, mode, proxy, false
+	}
+
+	// Backward compat: session_id=<id> → reuse named session.
+	if req.SessionID != nil && *req.SessionID != "" {
+		mode = modePrivate
+		if proxy != "" {
+			mode = modeProxy
+		}
+		return *req.SessionID, mode, proxy, false
+	}
+
+	// No session — ephemeral.
+	mode = modePrivate
+	if proxy != "" {
+		mode = modeProxy
+	}
+	return generateEphemeralID(), mode, proxy, true
+}
+
+// generateEphemeralID creates a short random ID for ephemeral sessions.
+func generateEphemeralID() string {
+	id, err := generateID()
+	if err != nil {
+		return fmt.Sprintf("eph-%d", time.Now().UnixNano())
+	}
+	return id
 }
 
 // runPreActions executes actions that must run before navigation (e.g. eval_on_new_document, set_cookies).
@@ -280,14 +289,13 @@ func runPreActions(ctx context.Context, page *rod.Page, actions []Action) string
 }
 
 func (s *Server) runInteract(ctx context.Context, req InteractRequest, proxy string) InteractResponse {
-	// Normalize proxy into req.Proxy so RunInteract can read it uniformly.
 	req.Proxy = &proxy
-	return RunInteract(ctx, s.chrome, s.pool, req)
+	return RunInteract(ctx, s.chrome, nil, req)
 }
 
 func (s *Server) handleDestroySession(w http.ResponseWriter, r *http.Request) {
-	if s.pool == nil {
-		writeError(w, http.StatusServiceUnavailable, "session pool not available")
+	if s.chrome == nil {
+		writeError(w, http.StatusServiceUnavailable, "chrome not available")
 		return
 	}
 
@@ -297,8 +305,8 @@ func (s *Server) handleDestroySession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.pool.Destroy(id) {
-		writeError(w, http.StatusNotFound, "session not found")
+	if err := s.chrome.Pool().ClosePage(id); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 

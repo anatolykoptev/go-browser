@@ -75,6 +75,28 @@ func (m *ChromeManager) NewStealthPage(ctx *rod.Browser, profile *StealthProfile
 	return page, nil
 }
 
+// applyStealthToExistingPage injects stealth JS into an already-created page (EvalOnNewDocument
+// + CDP emulation overrides). Used by ContextPool when a page was created without stealth.
+func applyStealthToExistingPage(page *rod.Page, profile *StealthProfile) error {
+	if profile != nil {
+		if _, err := page.EvalOnNewDocument(profile.InjectJS()); err != nil {
+			return fmt.Errorf("chrome: inject profile: %w", err)
+		}
+	}
+	if _, err := page.EvalOnNewDocument(complementJS); err != nil {
+		return fmt.Errorf("chrome: eval complement js: %w", err)
+	}
+	if profile != nil {
+		if err := applyEmulationOverrides(page, profile); err != nil {
+			return err
+		}
+		if err := setAcceptLanguage(page, profile.Langs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // applyEmulationOverrides sets CDP Emulation timezone, locale, and user-agent
 // (with full userAgentMetadata for Sec-CH-UA-* headers) from the profile.
 func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {

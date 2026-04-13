@@ -2,7 +2,6 @@ package browser
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
@@ -38,6 +37,11 @@ func (m *ChromeManager) reconnect() error {
 
 	m.browser = b
 	m.keepaliveCtxID = ""
+	if m.pool != nil {
+		m.pool.UpdateBrowser(b)
+	} else {
+		m.pool = NewContextPool(b)
+	}
 	return nil
 }
 
@@ -121,52 +125,3 @@ func (m *ChromeManager) ListPages() ([]PageInfo, error) {
 	return pages, nil
 }
 
-// FindPage finds an existing page in the default browser context.
-// Avoids creating a new CDP target which Google/Twitter detect.
-// If urlPrefix is empty, returns any page in the default context.
-func (m *ChromeManager) FindPage(urlPrefix string) (*rod.Page, error) {
-	b := m.getBrowser()
-	if b == nil {
-		return nil, ErrUnavailable
-	}
-
-	targets, err := proto.TargetGetTargets{}.Call(b)
-	if err != nil {
-		return nil, fmt.Errorf("list targets: %w", err)
-	}
-
-	// Find page matching URL prefix (prefer non-keepalive pages).
-	for _, t := range targets.TargetInfos {
-		if t.Type != "page" {
-			continue
-		}
-		// Skip keepalive context pages
-		if t.BrowserContextID == m.keepaliveCtxID && m.keepaliveCtxID != "" {
-			continue
-		}
-		if urlPrefix == "" || strings.HasPrefix(t.URL, urlPrefix) {
-			page, err := b.PageFromTarget(t.TargetID)
-			if err != nil {
-				continue
-			}
-			return page, nil
-		}
-	}
-
-	// Fallback: any non-keepalive page.
-	for _, t := range targets.TargetInfos {
-		if t.Type != "page" {
-			continue
-		}
-		if t.BrowserContextID == m.keepaliveCtxID && m.keepaliveCtxID != "" {
-			continue
-		}
-		page, err := b.PageFromTarget(t.TargetID)
-		if err != nil {
-			continue
-		}
-		return page, nil
-	}
-
-	return nil, fmt.Errorf("no existing page found in default context")
-}
