@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"time"
 )
 
 const (
@@ -40,8 +39,7 @@ func ServerConfigFromEnv() ServerConfig {
 type Server struct {
 	cfg    ServerConfig
 	mux    *http.ServeMux
-	pool   *SessionPool   // set in Task 2
-	chrome *ChromeManager // set in Task 3
+	chrome *ChromeManager
 	logger *slog.Logger
 }
 
@@ -52,13 +50,10 @@ func NewServer(cfg ServerConfig, logger *slog.Logger) (*Server, error) {
 		logger.Warn("chrome not available — Chrome endpoints will return 503", "err", err)
 	}
 
-	pool := NewSessionPool(5*time.Minute, 10)
-
 	mux := http.NewServeMux()
 	s := &Server{
 		cfg:    cfg,
 		mux:    mux,
-		pool:   pool,
 		chrome: chrome,
 		logger: logger,
 	}

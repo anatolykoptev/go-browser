@@ -16,6 +16,7 @@ import (
 type ChromeManager struct {
 	mu             sync.RWMutex
 	browser        *rod.Browser
+	pool           *ContextPool
 	wsURL          string                        // original ws URL for discovery
 	keepaliveCtxID proto.BrowserBrowserContextID // unused, kept for lifecycle compat
 }
@@ -35,60 +36,23 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 		return nil, fmt.Errorf("chrome: connect: %w", err)
 	}
 
-	// Clean up orphaned contexts from previous restarts (blank-only incognito windows).
-	cleanOrphanedContexts(b)
-
 	// Don't create any pages — Chrome with Xvfb stays alive on its own.
 	// If user needs a page, chrome_interact will create one on demand.
 
+	pool := NewContextPool(b)
+
 	return &ChromeManager{
 		browser: b,
+		pool:    pool,
 		wsURL:   wsURL,
 	}, nil
 }
 
-// createKeepaliveContext creates a browser context with a blank page that prevents
-// cleanOrphanedContexts removes incognito browser contexts that contain only
-// about:blank pages — leftovers from previous go-wowa keepalive contexts.
-// Contexts with real pages (non-blank URLs) are preserved.
-func cleanOrphanedContexts(b *rod.Browser) {
-	targets, err := proto.TargetGetTargets{}.Call(b)
-	if err != nil {
-		return
-	}
-
-	// Group pages by context. Track which contexts have real (non-blank) pages.
-	type ctxInfo struct {
-		pageIDs []proto.TargetTargetID
-		hasReal bool
-	}
-	contexts := make(map[proto.BrowserBrowserContextID]*ctxInfo)
-
-	for _, t := range targets.TargetInfos {
-		if t.Type != "page" || t.BrowserContextID == "" {
-			continue // skip default context and non-page targets
-		}
-		ci, ok := contexts[t.BrowserContextID]
-		if !ok {
-			ci = &ctxInfo{}
-			contexts[t.BrowserContextID] = ci
-		}
-		ci.pageIDs = append(ci.pageIDs, t.TargetID)
-		if t.URL != "" && t.URL != "about:blank" && t.URL != "chrome://newtab/" {
-			ci.hasReal = true
-		}
-	}
-
-	// Dispose contexts that only have blank pages.
-	for ctxID, ci := range contexts {
-		if ci.hasReal {
-			continue
-		}
-		for _, pid := range ci.pageIDs {
-			_, _ = proto.TargetCloseTarget{TargetID: pid}.Call(b)
-		}
-		_ = proto.TargetDisposeBrowserContext{BrowserContextID: ctxID}.Call(b)
-	}
+// Pool returns the ContextPool owned by this ChromeManager.
+func (m *ChromeManager) Pool() *ContextPool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.pool
 }
 
 // versionURL converts a ws:// or wss:// address to the http:///json/version endpoint.
