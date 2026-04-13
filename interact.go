@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultTimeoutSecs = 30
-	sessionIDNew       = "new"   // backward compat: session_id="new" → ephemeral named session
+	sessionIDNew       = "new" // backward compat: session_id="new" → ephemeral named session
 	modeDefault        = "default"
 	modePrivate        = "private"
 	modeProxy          = "proxy"
@@ -32,12 +32,12 @@ type InteractRequest struct {
 	Session string `json:"session,omitempty"` // named session; empty = ephemeral
 	Mode    string `json:"mode,omitempty"`    // "default", "private" (default), "proxy"
 	// Backward-compat params (still accepted, mapped to Session/Mode internally).
-	SessionID  *string `json:"session_id,omitempty"`
-	Profile    string  `json:"profile,omitempty"`
-	UseProfile bool    `json:"use_profile,omitempty"` // → mode="default"
-	ReusePage  bool    `json:"reuse_page,omitempty"`  // → session="__reuse__"
-	NoStealth  bool    `json:"no_stealth,omitempty"`  // plain page without stealth JS injection
-	StealthMode bool   `json:"stealth_mode,omitempty"` // route actions through cdputil
+	SessionID   *string `json:"session_id,omitempty"`
+	Profile     string  `json:"profile,omitempty"`
+	UseProfile  bool    `json:"use_profile,omitempty"`  // → mode="default"
+	ReusePage   bool    `json:"reuse_page,omitempty"`   // → session="__reuse__"
+	NoStealth   bool    `json:"no_stealth,omitempty"`   // plain page without stealth JS injection
+	StealthMode bool    `json:"stealth_mode,omitempty"` // route actions through cdputil
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
@@ -258,12 +258,12 @@ func resolveSessionParams(req InteractRequest) (session, mode, proxy string, eph
 		return *req.SessionID, mode, proxy, false
 	}
 
-	// No session — ephemeral.
+	// No session — auto-name from URL, ephemeral.
 	mode = modePrivate
 	if proxy != "" {
 		mode = modeProxy
 	}
-	return generateEphemeralID(), mode, proxy, true
+	return sessionNameFromURL(req.URL), mode, proxy, true
 }
 
 // generateEphemeralID creates a short random ID for ephemeral sessions.

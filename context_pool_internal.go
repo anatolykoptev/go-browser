@@ -2,6 +2,8 @@ package browser
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -126,6 +128,38 @@ func (p *ContextPool) watchTargetDestroyed() {
 		}
 		return false // keep listening
 	})()
+}
+
+// sessionNameFromURL derives a human-readable session name from a URL.
+// Example: "https://example.com/page?q=1" → "example.com/page".
+func sessionNameFromURL(rawURL string) string {
+	if rawURL == "" || rawURL == "about:blank" {
+		return generateEphemeralID()
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return generateEphemeralID()
+	}
+	name := u.Host + u.Path
+	name = strings.TrimRight(name, "/")
+	if name == "" {
+		return u.Host
+	}
+	return name
+}
+
+// deduplicateSession appends -2, -3, etc. if the session name already exists in the context.
+func deduplicateSession(mc *ManagedContext, base string) string {
+	if _, exists := mc.Pages[base]; !exists {
+		return base
+	}
+	for i := 2; i < 100; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if _, exists := mc.Pages[candidate]; !exists {
+			return candidate
+		}
+	}
+	return base + "-" + generateEphemeralID()
 }
 
 // formatAge formats the duration since t as a short human-readable string.

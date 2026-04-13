@@ -105,6 +105,9 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		return mp, nil
 	}
 
+	// Deduplicate auto-generated names (e.g. "example.com" → "example.com-2").
+	session = deduplicateSession(mc, session)
+
 	// For default context with no pages yet, adopt Chrome's existing default tab.
 	if key == "default" && len(mc.Pages) == 0 {
 		if adopted, err := p.adoptExistingPage(mc); err == nil && adopted != nil {
