@@ -56,7 +56,7 @@ func TestExecuteAction_WithFrameSelector_NoCursor(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result := ExecuteAction(ctx, nil, a, nil, nil, false, nil)
+	result := ExecuteAction(ctx, nil, a, nil, nil, false, nil, 0)
 
 	// sleep action should succeed even with nil page (it only uses context).
 	if !result.Ok {

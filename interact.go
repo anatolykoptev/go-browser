@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -38,16 +39,19 @@ type InteractRequest struct {
 	ReusePage   bool    `json:"reuse_page,omitempty"`   // → session="__reuse__"
 	NoStealth   bool    `json:"no_stealth,omitempty"`   // plain page without stealth JS injection
 	StealthMode bool    `json:"stealth_mode,omitempty"` // route actions through cdputil
+	DeadlineMs  int64   `json:"deadline_ms,omitempty"`  // absolute unix-millis deadline for the whole interact call
 }
 
 // InteractResponse is the JSON response for POST /chrome/interact.
 type InteractResponse struct {
-	URL       string         `json:"url"`
-	Status    string         `json:"status"` // "ok" or "error"
-	Actions   []ActionResult `json:"actions"`
-	SessionID string         `json:"session_id,omitempty"`
-	Error     string         `json:"error,omitempty"`
-	ElapsedMs int64          `json:"elapsed_ms"`
+	URL            string         `json:"url"`
+	Status         string         `json:"status"` // "ok" or "error"
+	Actions        []ActionResult `json:"actions"`
+	SessionID      string         `json:"session_id,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	ErrorCode      ErrorCode      `json:"error_code,omitempty"` // first failing action's code
+	FailureSnapshot *FailureSnapshot `json:"failure_snapshot,omitempty"`
+	ElapsedMs      int64          `json:"elapsed_ms"`
 }
 
 func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
@@ -90,14 +94,25 @@ func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
 func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest) InteractResponse {
 	pool := chrome.Pool()
 	if pool == nil {
-		return InteractResponse{URL: req.URL, Status: "error", Error: "context pool not available"}
+		return InteractResponse{URL: req.URL, Status: "error", Error: "context pool not available", ErrorCode: ClassifyError(fmt.Errorf("context pool not available"))}
 	}
 
 	session, mode, proxy, ephemeral := resolveSessionParams(req)
 
 	mp, err := pool.GetOrCreatePage(session, mode, proxy, req.URL)
 	if err != nil {
-		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error(), ErrorCode: ClassifyError(err)}
+	}
+
+	// Check if session is detached for human control
+	if !mp.DetachedAt.IsZero() {
+		return InteractResponse{
+			URL:        req.URL,
+			Status:     "error",
+			Error:      fmt.Sprintf("session %q is detached for human control since %s", session, mp.DetachedAt.Format(time.RFC3339)),
+			ErrorCode:  ErrCodeInvalidInput,
+			SessionID:  session,
+		}
 	}
 
 	page := mp.Page
@@ -116,23 +131,23 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		if !req.NoStealth {
 			profile, err := LoadProfile(req.Profile)
 			if err != nil {
-				return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err)}
+				return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("profile: %s", err), ErrorCode: ClassifyError(err)}
 			}
 			if err := applyStealthToExistingPage(page, profile); err != nil {
-				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error(), ErrorCode: ClassifyError(err)}
 			}
 		}
 	}
 
 	if errMsg := runPreActions(ctx, page, req.PreActions); errMsg != "" {
-		return InteractResponse{URL: req.URL, Status: "error", Error: errMsg}
+		return InteractResponse{URL: req.URL, Status: "error", Error: errMsg, ErrorCode: ClassifyError(errors.New(errMsg))}
 	}
 
 	// Navigate: skip if URL already matches or ReusePage is set.
 	if req.URL != "" && req.URL != "about:blank" {
 		if isNewPage || (!req.ReusePage && !strings.HasPrefix(page.MustInfo().URL, req.URL)) {
 			if err := doNavigate(ctx, page, req.URL); err != nil {
-				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error()}
+				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error(), ErrorCode: ClassifyError(err)}
 			}
 		}
 	}
@@ -161,13 +176,15 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	results := make([]ActionResult, 0, len(req.Actions))
 	status := "ok"
 	var actionErr string
+	var actionErrCode ErrorCode
 
 	for _, a := range req.Actions {
-		res := ExecuteAction(ctx, page, a, cursor, logs, req.StealthMode, refMap)
+		res := ExecuteAction(ctx, page, a, cursor, logs, req.StealthMode, refMap, req.DeadlineMs)
 		results = append(results, res)
 		if !res.Ok && !a.SkipOnError {
 			status = "error"
 			actionErr = res.Error
+			actionErrCode = res.ErrorCode
 			break
 		}
 	}
@@ -195,12 +212,20 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		_ = pool.ClosePage(session)
 	}
 
+	// Capture failure snapshot if there was an error
+	var failSnap *FailureSnapshot
+	if actionErr != "" {
+		failSnap = CaptureFailureSnapshot(page)
+	}
+
 	return InteractResponse{
-		URL:       finalURL,
-		Status:    status,
-		Actions:   results,
-		SessionID: session,
-		Error:     actionErr,
+		URL:            finalURL,
+		Status:         status,
+		Actions:        results,
+		SessionID:      session,
+		Error:          actionErr,
+		ErrorCode:      actionErrCode,
+		FailureSnapshot: failSnap,
 	}
 }
 
@@ -294,7 +319,7 @@ func generateEphemeralID() string {
 // runPreActions executes actions that must run before navigation (e.g. eval_on_new_document, set_cookies).
 func runPreActions(ctx context.Context, page *rod.Page, actions []Action) string {
 	for _, a := range actions {
-		result := ExecuteAction(ctx, page, a, nil, nil, false, nil)
+		result := ExecuteAction(ctx, page, a, nil, nil, false, nil, 0)
 		if !result.Ok {
 			return fmt.Sprintf("pre_action %s: %s", a.Type, result.Error)
 		}

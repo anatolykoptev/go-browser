@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/anatolykoptev/go-browser/humanize"
 	"github.com/go-rod/rod"
@@ -44,6 +45,9 @@ type Action struct {
 	Goal          string        `json:"goal,omitempty" jsonschema:"Goal description for plan_actions (what you want to accomplish on this page)"`
 	FrameSelector string        `json:"frame_selector,omitempty" jsonschema:"Target iframe for this action. CSS selector (iframe.payment) or url=pattern (url=payments.audienceview.com). Auto-waits for iframe to load (retries until timeout). type_text auto-uses CDP events. Pattern: snapshot with frame_selector to get ref=eN inside iframe, then type_text/click with same frame_selector and ref=eN."`
 	SkipOnError   bool          `json:"skip_on_error,omitempty" jsonschema:"When true, a failure of this action does not abort the action chain and does not set status=error on the response."`
+	QuietMs       int           `json:"quiet_ms,omitempty" jsonschema:"wait_stable: required network-quiet window"`
+	MaxWaitMs     int           `json:"max_wait_ms,omitempty" jsonschema:"wait_stable: overall timeout"`
+	IgnoreHosts   []string      `json:"ignore_hosts,omitempty" jsonschema:"wait_stable: hosts whose requests don't count"`
 }
 
 // CookieInput holds cookie data for the set_cookies action.
@@ -65,10 +69,11 @@ type FormField struct {
 
 // ActionResult is the outcome of a single executed action.
 type ActionResult struct {
-	Action string `json:"action"`
-	Ok     bool   `json:"ok"`
-	Data   any    `json:"data,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Action    string     `json:"action"`
+	Ok        bool       `json:"ok"`
+	Data      any        `json:"data,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	ErrorCode ErrorCode  `json:"error_code,omitempty"` // structured error classification
 }
 
 // dispatchContext bundles the per-call dependencies passed to every action executor.
@@ -79,6 +84,20 @@ type dispatchContext struct {
 	logs        *LogCollector
 	stealthMode bool
 	refMap      *RefMap
+	deadlineMs  int64 // 0 = no absolute deadline
+}
+
+// remainingMs returns how much wall-clock is left before DeadlineMs.
+// Returns math.MaxInt32 if no deadline is set.
+func (dc *dispatchContext) remainingMs() int {
+	if dc.deadlineMs <= 0 {
+		return 1<<31 - 1
+	}
+	left := dc.deadlineMs - time.Now().UnixMilli()
+	if left < 0 {
+		return 0
+	}
+	return int(left)
 }
 
 // actionExecutor is a function that runs a single action and returns optional data.
@@ -99,7 +118,7 @@ func registerAction(actionType string, exec actionExecutor) {
 // When stealthMode is true, actions that would trigger Runtime.callFunctionOn
 // are routed through cdputil using pure CDP DOM/Input methods instead.
 func ExecuteAction(
-	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool, refMap *RefMap,
+	ctx context.Context, page *rod.Page, a Action, cursor *humanize.Cursor, logs *LogCollector, stealthMode bool, refMap *RefMap, deadlineMs int64,
 ) ActionResult {
 	// type_into_frame handles its own iframe targeting via clickIframeArea.
 	// Do NOT route through resolveFrame: it fails on OOP cross-origin iframes
@@ -107,7 +126,8 @@ func ExecuteAction(
 	if a.Type == "type_into_frame" {
 		exec, ok := actionRegistry[a.Type]
 		if !ok {
-			return ActionResult{Action: a.Type, Ok: false, Error: "type_into_frame not registered"}
+			err := fmt.Errorf("type_into_frame not registered")
+			return ActionResult{Action: a.Type, Ok: false, Error: err.Error(), ErrorCode: ClassifyError(err)}
 		}
 		dc := dispatchContext{
 			ctx:         ctx,
@@ -116,10 +136,11 @@ func ExecuteAction(
 			logs:        logs,
 			stealthMode: stealthMode,
 			refMap:      refMap,
+			deadlineMs:  deadlineMs,
 		}
 		data, err := exec(dc, a)
 		if err != nil {
-			return ActionResult{Action: a.Type, Ok: false, Error: err.Error()}
+			return ActionResult{Action: a.Type, Ok: false, Error: err.Error(), ErrorCode: ClassifyError(err)}
 		}
 		return ActionResult{Action: a.Type, Ok: true, Data: data}
 	}
@@ -133,11 +154,12 @@ func ExecuteAction(
 			// then type via Input.dispatchKeyEvent on the main page.
 			if a.Type == "type_text" {
 				if clickErr := clickIframeArea(ctx, page, a.FrameSelector); clickErr != nil {
-					return ActionResult{Action: a.Type, Ok: false, Error: fmt.Sprintf("frame fallback: %v (original: %v)", clickErr, err)}
+					combinedErr := fmt.Errorf("frame fallback: %v (original: %v)", clickErr, err)
+					return ActionResult{Action: a.Type, Ok: false, Error: combinedErr.Error(), ErrorCode: ClassifyError(combinedErr)}
 				}
 				return execTypeViaKeyboard(ctx, page, a)
 			}
-			return ActionResult{Action: a.Type, Ok: false, Error: err.Error()}
+			return ActionResult{Action: a.Type, Ok: false, Error: err.Error(), ErrorCode: ClassifyError(err)}
 		}
 		targetPage = framePage
 		// Disable cursor humanization inside frames — coordinates are relative
@@ -152,7 +174,8 @@ func ExecuteAction(
 
 	exec, ok := actionRegistry[a.Type]
 	if !ok {
-		return ActionResult{Action: a.Type, Ok: false, Error: fmt.Sprintf("unknown action type: %q", a.Type)}
+		err := fmt.Errorf("unknown action type: %q", a.Type)
+		return ActionResult{Action: a.Type, Ok: false, Error: err.Error(), ErrorCode: ClassifyError(err)}
 	}
 
 	dc := dispatchContext{
@@ -162,11 +185,12 @@ func ExecuteAction(
 		logs:        logs,
 		stealthMode: stealthMode,
 		refMap:      refMap,
+		deadlineMs:  deadlineMs,
 	}
 
 	data, err := exec(dc, a)
 	if err != nil {
-		return ActionResult{Action: a.Type, Ok: false, Error: err.Error()}
+		return ActionResult{Action: a.Type, Ok: false, Error: err.Error(), ErrorCode: ClassifyError(err)}
 	}
 	return ActionResult{Action: a.Type, Ok: true, Data: data}
 }
