@@ -20,7 +20,7 @@ func TestRefWorkflow_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	resp := RunInteract(ctx, chrome, nil, InteractRequest{
+	resp := RunInteract(ctx, chrome, InteractRequest{
 		URL:       "https://example.com",
 		NoStealth: true,
 		Actions: []Action{
