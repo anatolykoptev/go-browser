@@ -55,9 +55,15 @@ type ManagedContext struct {
 }
 
 // ManagedPage is a named tab within a ManagedContext.
+// ready is closed when Page is fully initialised; callers who find a
+// placeholder (Page==nil) must wait on ready before using the page.
+// mu protects LastUsed and URL after the page is ready.
 type ManagedPage struct {
+	mu       sync.Mutex
 	Session  string
 	Page     *rod.Page
+	ready    chan struct{} // closed when Page != nil (or creation failed)
+	readyErr error        // non-nil if page creation failed
 	URL      string
 	LastUsed time.Time
 	TTL      time.Duration // 0 = never expires
@@ -108,11 +114,18 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	// Phase 2: look up existing session under per-context lock.
 	mc.Mu.Lock()
 	if mp, ok := mc.Pages[session]; ok {
+		mc.Mu.Unlock()
+		// Wait for in-flight creation to finish (Page may be nil placeholder).
+		<-mp.ready
+		if mp.readyErr != nil {
+			return nil, mp.readyErr
+		}
+		mp.mu.Lock()
 		mp.LastUsed = time.Now()
 		if url != "" && url != "about:blank" && url != mp.URL {
 			mp.URL = url
 		}
-		mc.Mu.Unlock()
+		mp.mu.Unlock()
 		return mp, nil
 	}
 	session = deduplicateSession(mc, session)
@@ -121,11 +134,17 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if key == "default" && len(mc.Pages) == 0 {
 		mc.Mu.Unlock()
 		if adopted, aerr := p.adoptExistingPage(mc); aerr == nil && adopted != nil {
-			mp := &ManagedPage{Session: session, Page: adopted, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap()}
+			readyCh := make(chan struct{})
+			close(readyCh)
+			mp := &ManagedPage{Session: session, Page: adopted, ready: readyCh, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap()}
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
 				mc.Mu.Unlock()
 				_ = adopted.Close()
+				<-existing.ready
+				if existing.readyErr != nil {
+					return nil, existing.readyErr
+				}
 				return existing, nil
 			}
 			mc.Pages[session] = mp
@@ -136,31 +155,45 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	}
 
 	// Phase 3: reserve placeholder, release lock, do CDP.
-	mc.Pages[session] = &ManagedPage{Session: session, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), URL: url}
+	placeholder := &ManagedPage{
+		Session:  session,
+		ready:    make(chan struct{}),
+		LastUsed: time.Now(),
+		TTL:      contextPoolDefaultTTL,
+		Refs:     NewRefMap(),
+		URL:      url,
+	}
+	mc.Pages[session] = placeholder
 	mc.Mu.Unlock()
 
 	if p.newPageDelay > 0 {
 		time.Sleep(p.newPageDelay) // test injection — simulates slow CDP
 	}
-	page, err := p.newPageInContext(mc)
-	if err != nil {
-		mc.Mu.Lock()
-		delete(mc.Pages, session)
-		mc.Mu.Unlock()
-		return nil, fmt.Errorf("context_pool: create tab in context %q: %w", key, err)
-	}
+	page, cdpErr := p.newPageInContext(mc)
 
-	// Phase 4: patch placeholder with real page.
+	// Phase 4: patch placeholder and signal waiters regardless of outcome.
 	mc.Mu.Lock()
 	mp := mc.Pages[session]
 	if mp == nil {
-		// Reaped while we were in CDP — give up.
+		// Reaped while we were in CDP.
 		mc.Mu.Unlock()
-		_ = page.Close()
-		return nil, fmt.Errorf("context_pool: session %q was reaped during creation", session)
+		if page != nil {
+			_ = page.Close()
+		}
+		close(placeholder.ready) // unblock any waiters with nil page
+		placeholder.readyErr = fmt.Errorf("context_pool: session %q was reaped during creation", session)
+		return nil, placeholder.readyErr
+	}
+	if cdpErr != nil {
+		delete(mc.Pages, session)
+		mc.Mu.Unlock()
+		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", key, cdpErr)
+		close(placeholder.ready)
+		return nil, placeholder.readyErr
 	}
 	mp.Page = page
 	mc.Mu.Unlock()
+	close(placeholder.ready)
 	return mp, nil
 }
 
@@ -181,6 +214,12 @@ func (p *ContextPool) ClosePage(session string) error {
 			c.Mu.Unlock()
 			continue
 		}
+		// If still a placeholder, wait for it so we get a real Page.
+		c.Mu.Unlock()
+		if mp.ready != nil {
+			<-mp.ready
+		}
+		c.Mu.Lock()
 		page = mp.Page
 		delete(c.Pages, session)
 		if len(c.Pages) == 0 && key != "default" {
@@ -247,11 +286,10 @@ func (p *ContextPool) List() []ContextInfo {
 		mc.Mu.Lock()
 		ci := ContextInfo{Mode: mc.Mode, Proxy: mc.Proxy, Sessions: make([]SessionInfo, 0, len(mc.Pages))}
 		for _, mp := range mc.Pages {
-			ci.Sessions = append(ci.Sessions, SessionInfo{
-				Name:     mp.Session,
-				URL:      mp.URL,
-				LastUsed: formatAge(mp.LastUsed),
-			})
+			mp.mu.Lock()
+			si := SessionInfo{Name: mp.Session, URL: mp.URL, LastUsed: formatAge(mp.LastUsed)}
+			mp.mu.Unlock()
+			ci.Sessions = append(ci.Sessions, si)
 		}
 		mc.Mu.Unlock()
 		result = append(result, ci)
@@ -273,7 +311,7 @@ func (p *ContextPool) Reap() {
 	for key, mc := range p.contexts {
 		mc.Mu.Lock()
 		for name, mp := range mc.Pages {
-			if mp.TTL > 0 && time.Since(mp.LastUsed) > mp.TTL {
+			if mp.TTL > 0 && time.Since(mp.LastUsed) > mp.TTL && mp.Page != nil {
 				victims = append(victims, victim{page: mp.Page, key: key, name: name})
 				delete(mc.Pages, name)
 			}

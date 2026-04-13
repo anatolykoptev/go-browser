@@ -183,11 +183,13 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 
 	info, infoErr := page.Info()
 	finalURL := req.URL
+	mp.mu.Lock()
 	if infoErr == nil {
 		finalURL = info.URL
 		mp.URL = finalURL
 	}
 	mp.LastUsed = time.Now()
+	mp.mu.Unlock()
 
 	if ephemeral || destroyRequested {
 		_ = pool.ClosePage(session)

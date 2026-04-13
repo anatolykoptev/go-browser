@@ -92,6 +92,36 @@ func TestContextPool_StressConcurrentOps(t *testing.T) {
 	}
 }
 
+// TestContextPool_ConcurrentSameSession verifies that two goroutines racing to
+// GetOrCreatePage with the same session name never receive a nil Page.
+func TestContextPool_ConcurrentSameSession(t *testing.T) {
+	p := newTestPoolWithSlowTargetCreate(t, 300*time.Millisecond)
+	defer p.Close()
+
+	const session = "shared-session"
+	errs := make(chan error, 4)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			mp, err := p.GetOrCreatePage(session, "private", "", "about:blank")
+			if err != nil {
+				errs <- fmt.Errorf("GetOrCreatePage error: %v", err)
+				return
+			}
+			if mp.Page == nil {
+				errs <- fmt.Errorf("GetOrCreatePage returned mp with nil Page")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+}
+
 // newTestPoolWithSlowTargetCreate returns a ContextPool whose GetOrCreatePage
 // sleeps for `delay` before calling newPageInContext, simulating a slow CDP call.
 // Uses the shared Chromium instance (acquireSharedBrowser), skips if unavailable.
