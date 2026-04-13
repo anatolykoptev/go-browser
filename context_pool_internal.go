@@ -10,6 +10,26 @@ import (
 	"github.com/go-rod/rod/lib/proto"
 )
 
+const pageCloseTimeout = 5 * time.Second
+
+// closePageWithTimeout calls page.Close() under a 5s timeout so a hung target
+// cannot block the reaper or ClosePage caller indefinitely.
+func closePageWithTimeout(page *rod.Page) {
+	if page == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = page.Close()
+	}()
+	select {
+	case <-done:
+	case <-time.After(pageCloseTimeout):
+		// Give up — the target is stuck. Chrome will eventually GC it.
+	}
+}
+
 // contextKey returns the map key for the given mode/proxy combination.
 func contextKey(mode, proxy string) string {
 	switch mode {
@@ -22,33 +42,41 @@ func contextKey(mode, proxy string) string {
 	}
 }
 
-func (p *ContextPool) getOrCreateContext(key, mode, proxy string) (*ManagedContext, error) {
+// getOrCreateContextSafe does the full read→upgrade→write cycle for the
+// contexts map, doing any CDP BrowserContext creation OUTSIDE the lock.
+func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedContext, error) {
+	// Fast path: read lock.
+	p.contextsMu.RLock()
 	if mc, ok := p.contexts[key]; ok {
+		p.contextsMu.RUnlock()
 		return mc, nil
 	}
+	p.contextsMu.RUnlock()
 
-	mc := &ManagedContext{
-		Mode:  mode,
-		Proxy: proxy,
-		Pages: make(map[string]*ManagedPage),
+	// Slow path: build the new context (CDP call happens here, unlocked).
+	mc := &ManagedContext{Mode: mode, Proxy: proxy, Pages: make(map[string]*ManagedPage)}
+
+	if mode != "default" {
+		proxyServer, _, _ := parseProxy(proxy)
+		res, err := proto.TargetCreateBrowserContext{
+			ProxyServer:     proxyServer,
+			DisposeOnDetach: true,
+		}.Call(p.browser)
+		if err != nil {
+			return nil, fmt.Errorf("create browser context: %w", err)
+		}
+		mc.ID = res.BrowserContextID
 	}
 
-	if mode == "default" {
-		// Default context uses empty BrowserContextID — Chrome's persistent profile.
-		p.contexts[key] = mc
-		return mc, nil
+	p.contextsMu.Lock()
+	defer p.contextsMu.Unlock()
+	// Double-check: another goroutine may have created it while we were in CDP.
+	if existing, ok := p.contexts[key]; ok {
+		if mc.ID != "" {
+			_ = proto.TargetDisposeBrowserContext{BrowserContextID: mc.ID}.Call(p.browser)
+		}
+		return existing, nil
 	}
-
-	// Create new incognito/proxy BrowserContext.
-	proxyServer, _, _ := parseProxy(proxy)
-	res, err := proto.TargetCreateBrowserContext{
-		ProxyServer:     proxyServer,
-		DisposeOnDetach: true,
-	}.Call(p.browser)
-	if err != nil {
-		return nil, fmt.Errorf("create browser context: %w", err)
-	}
-	mc.ID = res.BrowserContextID
 	p.contexts[key] = mc
 	return mc, nil
 }
@@ -116,17 +144,24 @@ func (p *ContextPool) reaper() {
 // Does NOT dispose the BrowserContext — let Chrome handle context lifecycle.
 func (p *ContextPool) watchTargetDestroyed() {
 	go p.browser.EachEvent(func(e *proto.TargetTargetDestroyed) bool {
-		p.mu.Lock()
-		defer p.mu.Unlock()
+		p.contextsMu.RLock()
+		ctxs := make([]*ManagedContext, 0, len(p.contexts))
 		for _, mc := range p.contexts {
+			ctxs = append(ctxs, mc)
+		}
+		p.contextsMu.RUnlock()
+		for _, mc := range ctxs {
+			mc.Mu.Lock()
 			for name, mp := range mc.Pages {
 				if mp.Page != nil && mp.Page.TargetID == e.TargetID {
 					delete(mc.Pages, name)
-					return false // keep listening
+					mc.Mu.Unlock()
+					return false
 				}
 			}
+			mc.Mu.Unlock()
 		}
-		return false // keep listening
+		return false
 	})()
 }
 

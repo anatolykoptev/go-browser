@@ -52,11 +52,29 @@ var (
 func acquireSharedBrowser(t *testing.T) *rod.Browser {
 	t.Helper()
 
-	if os.Getenv("INTEGRATION") == "" && !chromiumAvailable() {
-		t.Skip("no Chromium found and INTEGRATION not set; skipping stealth integration tests")
+	wsURL := os.Getenv("CLOAKBROWSER_WS_URL")
+	if wsURL == "" && os.Getenv("INTEGRATION") == "" && !chromiumAvailable() {
+		t.Skip("no Chromium found; set CLOAKBROWSER_WS_URL or INTEGRATION")
 	}
 
 	sharedBrowserOnce.Do(func() {
+		// Prefer remote cloakbrowser if URL is provided.
+		if wsURL != "" {
+			debuggerURL, err := launcher.ResolveURL(wsURL)
+			if err != nil {
+				sharedBrowserErr = err
+				return
+			}
+			b := rod.New().ControlURL(debuggerURL)
+			if err := b.Connect(); err != nil {
+				sharedBrowserErr = err
+				return
+			}
+			sharedBrowserInstance = b
+			return
+		}
+
+		// Fallback: launch local Chromium.
 		l := launcher.New().Headless(true).
 			Set("no-sandbox").
 			Set("disable-dev-shm-usage")
