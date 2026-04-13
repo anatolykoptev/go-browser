@@ -267,12 +267,12 @@ func resolveSessionParams(req InteractRequest) (session, mode, proxy string, eph
 		return *req.SessionID, mode, proxy, false
 	}
 
-	// No session — auto-name from URL, ephemeral.
+	// No session — persistent with auto-name from URL.
 	mode = modePrivate
 	if proxy != "" {
 		mode = modeProxy
 	}
-	return sessionNameFromURL(req.URL), mode, proxy, true
+	return sessionNameFromURL(req.URL), mode, proxy, false
 }
 
 // generateEphemeralID creates a short random ID for ephemeral sessions.
