@@ -84,6 +84,49 @@ func (m *ChromeManager) DefaultContext() (*rod.Browser, error) {
 	return scoped, nil
 }
 
+// PageInfo describes an open browser page/tab.
+type PageInfo struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Title   string `json:"title"`
+	Context string `json:"context"` // "default", "keepalive", or context ID
+}
+
+// ListPages returns all open pages/tabs with their context info.
+func (m *ChromeManager) ListPages() ([]PageInfo, error) {
+	b := m.getBrowser()
+	if b == nil {
+		return nil, ErrUnavailable
+	}
+	targets, err := proto.TargetGetTargets{}.Call(b)
+	if err != nil {
+		return nil, fmt.Errorf("list targets: %w", err)
+	}
+	var pages []PageInfo
+	for _, t := range targets.TargetInfos {
+		if t.Type != "page" {
+			continue
+		}
+		ctx := "default"
+		if t.BrowserContextID != "" {
+			if t.BrowserContextID == m.keepaliveCtxID {
+				ctx = "keepalive"
+			} else {
+				ctx = string(t.BrowserContextID)
+			}
+		}
+		pages = append(pages, PageInfo{
+			ID:      string(t.TargetID),
+			Type:    string(t.Type),
+			URL:     t.URL,
+			Title:   t.Title,
+			Context: ctx,
+		})
+	}
+	return pages, nil
+}
+
 // FindPage finds an existing page in the default browser context.
 // Avoids creating a new CDP target which Google/Twitter detect.
 // If urlPrefix is empty, returns any page in the default context.
