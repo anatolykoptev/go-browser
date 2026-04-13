@@ -233,6 +233,11 @@ func resolveSessionParams(req InteractRequest) (session, mode, proxy string, eph
 		return session, mode, proxy, false
 	}
 
+	// Empty session + explicit Mode → ephemeral tab in the requested context.
+	if req.Mode != "" {
+		return generateEphemeralID(), req.Mode, proxy, true
+	}
+
 	// Backward compat: use_profile → default context.
 	if req.UseProfile {
 		return "__profile__", modeDefault, proxy, false

@@ -29,16 +29,25 @@ const (
 
 // ContextPool manages named browser sessions grouped by context (default/private/proxy).
 // Each context maps to a Chrome BrowserContext; each session is a named tab within it.
+//
+// Locking discipline:
+//   - contextsMu (RWMutex) guards the contexts map itself.
+//   - ManagedContext.Mu (Mutex) guards that context's Pages map.
+//   - CDP I/O (TargetCreateTarget, Page.Close, etc.) runs OUTSIDE any lock.
 type ContextPool struct {
-	mu       sync.Mutex
-	browser  *rod.Browser
-	contexts map[string]*ManagedContext // key: "default" | "private" | "proxy:<url>"
-	stop     chan struct{}
-	done     chan struct{}
+	contextsMu sync.RWMutex
+	browser    *rod.Browser
+	contexts   map[string]*ManagedContext // key: "default" | "private" | "proxy:<url>"
+	stop       chan struct{}
+	done       chan struct{}
+
+	// test-only injection: sleep before newPageInContext to simulate slow CDP.
+	newPageDelay time.Duration
 }
 
 // ManagedContext is a Chrome BrowserContext with a set of named pages.
 type ManagedContext struct {
+	Mu    sync.Mutex
 	ID    proto.BrowserBrowserContextID
 	Mode  string // "default", "private", "proxy"
 	Proxy string // proxy URL (only for mode=proxy)
@@ -85,109 +94,158 @@ func NewContextPool(browser *rod.Browser) *ContextPool {
 
 // GetOrCreatePage returns the existing page for session, or creates a new tab in the
 // appropriate context. If session is empty an ephemeral name is generated.
+//
+// CDP calls run OUTSIDE any lock to avoid blocking List/SessionCount callers.
 func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*ManagedPage, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	key := contextKey(mode, proxy)
 
-	mc, err := p.getOrCreateContext(key, mode, proxy)
+	// Phase 1: get or create context (CDP BrowserContext creation runs unlocked).
+	mc, err := p.getOrCreateContextSafe(key, mode, proxy)
 	if err != nil {
 		return nil, err
 	}
 
-	// Look up existing session.
+	// Phase 2: look up existing session under per-context lock.
+	mc.Mu.Lock()
 	if mp, ok := mc.Pages[session]; ok {
 		mp.LastUsed = time.Now()
 		if url != "" && url != "about:blank" && url != mp.URL {
 			mp.URL = url
 		}
+		mc.Mu.Unlock()
 		return mp, nil
 	}
-
-	// Deduplicate auto-generated names (e.g. "example.com" → "example.com-2").
 	session = deduplicateSession(mc, session)
 
-	// For default context with no pages yet, adopt Chrome's existing default tab.
+	// Adopt-existing-tab fast path for default context (drop lock for CDP call).
 	if key == "default" && len(mc.Pages) == 0 {
-		if adopted, err := p.adoptExistingPage(mc); err == nil && adopted != nil {
-			mp := &ManagedPage{
-				Session:  session,
-				Page:     adopted,
-				URL:      url,
-				LastUsed: time.Now(),
-				TTL:      contextPoolDefaultTTL,
-				Refs:     NewRefMap(),
+		mc.Mu.Unlock()
+		if adopted, aerr := p.adoptExistingPage(mc); aerr == nil && adopted != nil {
+			mp := &ManagedPage{Session: session, Page: adopted, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap()}
+			mc.Mu.Lock()
+			if existing, ok := mc.Pages[session]; ok {
+				mc.Mu.Unlock()
+				_ = adopted.Close()
+				return existing, nil
 			}
 			mc.Pages[session] = mp
+			mc.Mu.Unlock()
 			return mp, nil
 		}
+		mc.Mu.Lock()
 	}
 
-	// Create new tab in this context.
+	// Phase 3: reserve placeholder, release lock, do CDP.
+	mc.Pages[session] = &ManagedPage{Session: session, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), URL: url}
+	mc.Mu.Unlock()
+
+	if p.newPageDelay > 0 {
+		time.Sleep(p.newPageDelay) // test injection — simulates slow CDP
+	}
 	page, err := p.newPageInContext(mc)
 	if err != nil {
+		mc.Mu.Lock()
+		delete(mc.Pages, session)
+		mc.Mu.Unlock()
 		return nil, fmt.Errorf("context_pool: create tab in context %q: %w", key, err)
 	}
 
-	mp := &ManagedPage{
-		Session:  session,
-		Page:     page,
-		URL:      url,
-		LastUsed: time.Now(),
-		TTL:      contextPoolDefaultTTL,
-		Refs:     NewRefMap(),
+	// Phase 4: patch placeholder with real page.
+	mc.Mu.Lock()
+	mp := mc.Pages[session]
+	if mp == nil {
+		// Reaped while we were in CDP — give up.
+		mc.Mu.Unlock()
+		_ = page.Close()
+		return nil, fmt.Errorf("context_pool: session %q was reaped during creation", session)
 	}
-	mc.Pages[session] = mp
+	mp.Page = page
+	mc.Mu.Unlock()
 	return mp, nil
 }
 
 // ClosePage closes a specific session's page. Disposes context if no pages remain.
 // The default context is never disposed.
 func (p *ContextPool) ClosePage(session string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	var (
+		page     *rod.Page
+		mc       *ManagedContext
+		emptyKey string
+	)
 
-	for key, mc := range p.contexts {
-		mp, ok := mc.Pages[session]
+	p.contextsMu.RLock()
+	for key, c := range p.contexts {
+		c.Mu.Lock()
+		mp, ok := c.Pages[session]
 		if !ok {
+			c.Mu.Unlock()
 			continue
 		}
-		if mp.Page != nil {
-			_ = mp.Page.Close()
+		page = mp.Page
+		delete(c.Pages, session)
+		if len(c.Pages) == 0 && key != "default" {
+			emptyKey = key
 		}
-		delete(mc.Pages, session)
-		if len(mc.Pages) == 0 && key != "default" {
-			p.disposeContext(mc)
-			delete(p.contexts, key)
-		}
-		return nil
+		c.Mu.Unlock()
+		mc = c
+		break
 	}
-	return fmt.Errorf("context_pool: session %q not found", session)
+	p.contextsMu.RUnlock()
+
+	if mc == nil {
+		return fmt.Errorf("context_pool: session %q not found", session)
+	}
+
+	// Close page unlocked — may take seconds.
+	closePageWithTimeout(page)
+
+	// Dispose empty non-default context.
+	if emptyKey != "" {
+		p.contextsMu.Lock()
+		if c, ok := p.contexts[emptyKey]; ok {
+			c.Mu.Lock()
+			stillEmpty := len(c.Pages) == 0
+			c.Mu.Unlock()
+			if stillEmpty {
+				p.disposeContext(c)
+				delete(p.contexts, emptyKey)
+			}
+		}
+		p.contextsMu.Unlock()
+	}
+	return nil
 }
 
 // SessionCount returns the total number of active named sessions across all contexts.
 func (p *ContextPool) SessionCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	n := 0
+	p.contextsMu.RLock()
+	ctxs := make([]*ManagedContext, 0, len(p.contexts))
 	for _, mc := range p.contexts {
+		ctxs = append(ctxs, mc)
+	}
+	p.contextsMu.RUnlock()
+	n := 0
+	for _, mc := range ctxs {
+		mc.Mu.Lock()
 		n += len(mc.Pages)
+		mc.Mu.Unlock()
 	}
 	return n
 }
 
 // List returns all contexts and their sessions.
 func (p *ContextPool) List() []ContextInfo {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	result := make([]ContextInfo, 0, len(p.contexts))
+	p.contextsMu.RLock()
+	ctxs := make([]*ManagedContext, 0, len(p.contexts))
 	for _, mc := range p.contexts {
-		ci := ContextInfo{
-			Mode:  mc.Mode,
-			Proxy: mc.Proxy,
-		}
+		ctxs = append(ctxs, mc)
+	}
+	p.contextsMu.RUnlock()
+
+	result := make([]ContextInfo, 0, len(ctxs))
+	for _, mc := range ctxs {
+		mc.Mu.Lock()
+		ci := ContextInfo{Mode: mc.Mode, Proxy: mc.Proxy, Sessions: make([]SessionInfo, 0, len(mc.Pages))}
 		for _, mp := range mc.Pages {
 			ci.Sessions = append(ci.Sessions, SessionInfo{
 				Name:     mp.Session,
@@ -195,30 +253,55 @@ func (p *ContextPool) List() []ContextInfo {
 				LastUsed: formatAge(mp.LastUsed),
 			})
 		}
+		mc.Mu.Unlock()
 		result = append(result, ci)
 	}
 	return result
 }
 
 // Reap closes expired pages and disposes empty non-default contexts.
+// Page closes run unlocked to avoid blocking callers.
 func (p *ContextPool) Reap() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	type victim struct {
+		page *rod.Page
+		key  string
+		name string
+	}
+	var victims []victim
 
+	p.contextsMu.RLock()
 	for key, mc := range p.contexts {
+		mc.Mu.Lock()
 		for name, mp := range mc.Pages {
 			if mp.TTL > 0 && time.Since(mp.LastUsed) > mp.TTL {
-				if mp.Page != nil {
-					_ = mp.Page.Close()
-				}
+				victims = append(victims, victim{page: mp.Page, key: key, name: name})
 				delete(mc.Pages, name)
 			}
 		}
-		if len(mc.Pages) == 0 && key != "default" {
+		mc.Mu.Unlock()
+	}
+	p.contextsMu.RUnlock()
+
+	// Close pages unlocked.
+	for _, v := range victims {
+		closePageWithTimeout(v.page)
+	}
+
+	// Dispose empty non-default contexts.
+	p.contextsMu.Lock()
+	for key, mc := range p.contexts {
+		if key == "default" {
+			continue
+		}
+		mc.Mu.Lock()
+		empty := len(mc.Pages) == 0
+		mc.Mu.Unlock()
+		if empty {
 			p.disposeContext(mc)
 			delete(p.contexts, key)
 		}
 	}
+	p.contextsMu.Unlock()
 }
 
 // Close stops the reaper goroutine. Does not close pages.
@@ -233,7 +316,7 @@ func (p *ContextPool) Close() {
 
 // UpdateBrowser replaces the browser reference (after reconnect).
 func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
-	p.mu.Lock()
+	p.contextsMu.Lock()
 	p.browser = b
-	p.mu.Unlock()
+	p.contextsMu.Unlock()
 }
