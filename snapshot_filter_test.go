@@ -227,3 +227,33 @@ func TestBuildFilteredIndex_IsolatesOriginal(t *testing.T) {
 			origRootChildren, len(index["root"].children))
 	}
 }
+
+func TestFilterAXTree_Dialog(t *testing.T) {
+	nodes := []*proto.AccessibilityAXNode{
+		makeAXNode("root", "RootWebArea", "Page", nil, []string{"nav", "dlg"}),
+		makeAXNode("nav", "navigation", "Nav", nil, []string{"link1"}),
+		makeAXNode("link1", "link", "Home", nil, nil),
+		makeAXNode("dlg", "dialog", "Edit", nil, []string{"form1"}),
+		makeAXNode("form1", "form", "", nil, []string{"input1"}),
+		makeAXNode("input1", "textbox", "First name", nil, nil),
+	}
+	index, roots := buildTestIndex(nodes)
+
+	filtered, filteredRoots := filterAXTree(index, roots, "dialog", "")
+
+	if _, ok := filtered["nav"]; ok {
+		t.Error("dialog filter should exclude nodes outside dialog")
+	}
+	if _, ok := filtered["link1"]; ok {
+		t.Error("dialog filter should exclude nodes outside dialog")
+	}
+	if _, ok := filtered["dlg"]; !ok {
+		t.Error("dialog filter should include the dialog node")
+	}
+	if _, ok := filtered["input1"]; !ok {
+		t.Error("dialog filter should include nodes inside dialog")
+	}
+	if len(filteredRoots) == 0 {
+		t.Error("dialog filter should have at least one root")
+	}
+}

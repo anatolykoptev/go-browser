@@ -21,7 +21,7 @@ var excludeTextRoles = map[string]bool{
 }
 
 // filterAXTree returns a filtered copy of the index and roots according to filter/selector.
-// filter values: "" (no-op), "interactive", "forms", "main", "text".
+// filter values: "" (no-op), "interactive", "forms", "main", "text", "dialog".
 // selector: when non-empty, keep only nodes whose name/role/url contains it (case-insensitive).
 func filterAXTree(
 	index map[string]*nodeInfo,
@@ -43,6 +43,8 @@ func filterAXTree(
 		applySubtreeFilter(index, roots, "main", keep)
 	case "text":
 		applyTextFilter(index, roots, keep)
+	case "dialog":
+		applyDialogFilter(index, roots, keep)
 	default:
 		// Unknown filter — keep everything, apply selector only.
 		for id := range index {
@@ -107,6 +109,16 @@ func applyTextFilter(index map[string]*nodeInfo, roots []string, keep map[string
 		delete(keep, id)
 	}
 	_ = roots
+}
+
+// applyDialogFilter keeps only nodes inside a dialog (modal or non-modal).
+func applyDialogFilter(index map[string]*nodeInfo, roots []string, keep map[string]bool) {
+	_ = roots
+	for id, n := range index {
+		if n.role == "dialog" {
+			markSubtree(id, index, keep)
+		}
+	}
 }
 
 // markWithAncestors marks a node and all of its ancestors.
