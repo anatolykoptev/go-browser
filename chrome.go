@@ -35,8 +35,11 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 		return nil, fmt.Errorf("chrome: connect: %w", err)
 	}
 
+	// Clean up orphaned contexts from previous go-wowa restarts.
+	// These are incognito contexts with only about:blank pages (stale keepalives).
+	cleanOrphanedContexts(b)
+
 	// Ensure at least one default-context page exists; close extras.
-	// Keeps one page in the default context so FindPage can reuse it later.
 	ensureDefaultPage(b)
 
 	// Create a keepalive context so Chrome doesn't exit when user contexts are disposed.
@@ -117,6 +120,49 @@ func createKeepaliveContext(b *rod.Browser) (proto.BrowserBrowserContextID, erro
 	}
 
 	return res.BrowserContextID, nil
+}
+
+// cleanOrphanedContexts removes incognito browser contexts that contain only
+// about:blank pages — leftovers from previous go-wowa keepalive contexts.
+// Contexts with real pages (non-blank URLs) are preserved.
+func cleanOrphanedContexts(b *rod.Browser) {
+	targets, err := proto.TargetGetTargets{}.Call(b)
+	if err != nil {
+		return
+	}
+
+	// Group pages by context. Track which contexts have real (non-blank) pages.
+	type ctxInfo struct {
+		pageIDs []proto.TargetTargetID
+		hasReal bool
+	}
+	contexts := make(map[proto.BrowserBrowserContextID]*ctxInfo)
+
+	for _, t := range targets.TargetInfos {
+		if t.Type != "page" || t.BrowserContextID == "" {
+			continue // skip default context and non-page targets
+		}
+		ci, ok := contexts[t.BrowserContextID]
+		if !ok {
+			ci = &ctxInfo{}
+			contexts[t.BrowserContextID] = ci
+		}
+		ci.pageIDs = append(ci.pageIDs, t.TargetID)
+		if t.URL != "" && t.URL != "about:blank" && t.URL != "chrome://newtab/" {
+			ci.hasReal = true
+		}
+	}
+
+	// Dispose contexts that only have blank pages.
+	for ctxID, ci := range contexts {
+		if ci.hasReal {
+			continue
+		}
+		for _, pid := range ci.pageIDs {
+			_, _ = proto.TargetCloseTarget{TargetID: pid}.Call(b)
+		}
+		_ = proto.TargetDisposeBrowserContext{BrowserContextID: ctxID}.Call(b)
+	}
 }
 
 // versionURL converts a ws:// or wss:// address to the http:///json/version endpoint.
