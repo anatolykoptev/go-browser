@@ -172,6 +172,15 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		}
 	}
 
+	// Check if any action requested session destruction.
+	destroyRequested := false
+	for _, a := range req.Actions {
+		if a.Type == "destroy_session" {
+			destroyRequested = true
+			break
+		}
+	}
+
 	info, infoErr := page.Info()
 	finalURL := req.URL
 	if infoErr == nil {
@@ -180,7 +189,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	}
 	mp.LastUsed = time.Now()
 
-	if ephemeral {
+	if ephemeral || destroyRequested {
 		_ = pool.ClosePage(session)
 	}
 
