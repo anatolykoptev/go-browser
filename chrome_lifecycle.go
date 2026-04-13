@@ -36,14 +36,8 @@ func (m *ChromeManager) reconnect() error {
 		return fmt.Errorf("connect: %w", err)
 	}
 
-	keepaliveCtxID, err := createKeepaliveContext(b)
-	if err != nil {
-		_ = b.Close()
-		return fmt.Errorf("keepalive context: %w", err)
-	}
-
 	m.browser = b
-	m.keepaliveCtxID = keepaliveCtxID
+	m.keepaliveCtxID = ""
 	return nil
 }
 

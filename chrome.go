@@ -17,7 +17,7 @@ type ChromeManager struct {
 	mu             sync.RWMutex
 	browser        *rod.Browser
 	wsURL          string                        // original ws URL for discovery
-	keepaliveCtxID proto.BrowserBrowserContextID // prevents Chrome exit when all user contexts close
+	keepaliveCtxID proto.BrowserBrowserContextID // unused, kept for lifecycle compat
 }
 
 // NewChromeManager connects to a remote Chrome via WebSocket debugger URL.
@@ -35,93 +35,19 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 		return nil, fmt.Errorf("chrome: connect: %w", err)
 	}
 
-	// Clean up orphaned contexts from previous go-wowa restarts.
-	// These are incognito contexts with only about:blank pages (stale keepalives).
+	// Clean up orphaned contexts from previous restarts (blank-only incognito windows).
 	cleanOrphanedContexts(b)
 
-	// Ensure at least one default-context page exists; close extras.
-	ensureDefaultPage(b)
-
-	// Create a keepalive context so Chrome doesn't exit when user contexts are disposed.
-	// Non-fatal: headed Chrome with Xvfb doesn't need keepalive.
-	keepaliveCtxID, err := createKeepaliveContext(b)
-	if err != nil {
-		// Don't fail — headed Chrome survives without keepalive
-		keepaliveCtxID = ""
-	}
+	// Don't create any pages — Chrome with Xvfb stays alive on its own.
+	// If user needs a page, chrome_interact will create one on demand.
 
 	return &ChromeManager{
-		browser:        b,
-		wsURL:          wsURL,
-		keepaliveCtxID: keepaliveCtxID,
+		browser: b,
+		wsURL:   wsURL,
 	}, nil
 }
 
-// closeInitialPages closes any pre-existing pages (e.g. chrome://newtab) created by
-// CloakBrowser on startup. These default pages can interfere with context lifecycle.
-// Retained for callers that need a hard reset; normal startup uses ensureDefaultPage.
-//
-//nolint:unused
-func closeInitialPages(b *rod.Browser) {
-	targets, err := proto.TargetGetTargets{}.Call(b)
-	if err != nil {
-		return
-	}
-	for _, t := range targets.TargetInfos {
-		if t.Type == "page" {
-			_, _ = proto.TargetCloseTarget{TargetID: t.TargetID}.Call(b)
-		}
-	}
-}
-
-// ensureDefaultPage makes sure at least one page exists in the default context.
-// If none exist, creates one at about:blank.
-func ensureDefaultPage(b *rod.Browser) {
-	targets, err := proto.TargetGetTargets{}.Call(b)
-	if err != nil {
-		return
-	}
-
-	var defaultPages []proto.TargetTargetInfo
-	for _, t := range targets.TargetInfos {
-		if t.Type == "page" && t.BrowserContextID == "" {
-			defaultPages = append(defaultPages, *t)
-		}
-	}
-
-	if len(defaultPages) == 0 {
-		// No default pages — create one.
-		_, _ = proto.TargetCreateTarget{URL: "about:blank"}.Call(b)
-		return
-	}
-
-	// Close extra default pages (keep the first one).
-	for i := 1; i < len(defaultPages); i++ {
-		_, _ = proto.TargetCloseTarget{TargetID: defaultPages[i].TargetID}.Call(b)
-	}
-}
-
 // createKeepaliveContext creates a browser context with a blank page that prevents
-// headless Chrome from terminating when all other contexts/pages are closed.
-func createKeepaliveContext(b *rod.Browser) (proto.BrowserBrowserContextID, error) {
-	res, err := proto.TargetCreateBrowserContext{}.Call(b)
-	if err != nil {
-		return "", fmt.Errorf("create keepalive context: %w", err)
-	}
-
-	// Create a page inside the context — Chrome needs at least one target to stay alive.
-	_, err = proto.TargetCreateTarget{
-		URL:              "about:blank",
-		BrowserContextID: res.BrowserContextID,
-	}.Call(b)
-	if err != nil {
-		_ = proto.TargetDisposeBrowserContext{BrowserContextID: res.BrowserContextID}.Call(b)
-		return "", fmt.Errorf("create keepalive page: %w", err)
-	}
-
-	return res.BrowserContextID, nil
-}
-
 // cleanOrphanedContexts removes incognito browser contexts that contain only
 // about:blank pages — leftovers from previous go-wowa keepalive contexts.
 // Contexts with real pages (non-blank URLs) are preserved.
