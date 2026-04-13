@@ -129,6 +129,14 @@ func doScroll(ctx context.Context, page *rod.Page, selector string, dx, dy float
 		if err != nil {
 			return fmt.Errorf("scroll: find %q: %w", selector, err)
 		}
+		// If delta is provided, scroll inside the container element.
+		if dx != 0 || dy != 0 {
+			_, err := el.Eval(`function(dx, dy) { this.scrollBy(dx, dy) }`, dx, dy)
+			if err != nil {
+				return fmt.Errorf("scroll container: %w", err)
+			}
+			return nil
+		}
 		if err := el.ScrollIntoView(); err != nil {
 			return fmt.Errorf("scroll into view: %w", err)
 		}
