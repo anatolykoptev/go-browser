@@ -59,15 +59,17 @@ type ManagedContext struct {
 // placeholder (Page==nil) must wait on ready before using the page.
 // mu protects LastUsed and URL after the page is ready.
 type ManagedPage struct {
-	mu       sync.Mutex
-	Session  string
-	Page     *rod.Page
-	ready    chan struct{} // closed when Page != nil (or creation failed)
-	readyErr error        // non-nil if page creation failed
-	URL      string
-	LastUsed time.Time
-	TTL      time.Duration // 0 = never expires
-	Refs     *RefMap
+	mu           sync.Mutex
+	Session      string
+	Page         *rod.Page
+	ready        chan struct{} // closed when Page != nil (or creation failed)
+	readyErr     error        // non-nil if page creation failed
+	URL          string
+	LastUsed     time.Time
+	TTL          time.Duration // 0 = never expires
+	Refs         *RefMap
+	LogCollector *LogCollector
+	DetachedAt   time.Time // zero = attached (agent-controllable)
 }
 
 // ContextInfo describes a context and its sessions (for chrome_tabs tool).
@@ -136,7 +138,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		if adopted, aerr := p.adoptExistingPage(mc); aerr == nil && adopted != nil {
 			readyCh := make(chan struct{})
 			close(readyCh)
-			mp := &ManagedPage{Session: session, Page: adopted, ready: readyCh, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap()}
+			mp := &ManagedPage{Session: session, Page: adopted, ready: readyCh, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector()}
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
 				mc.Mu.Unlock()
@@ -156,12 +158,13 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 
 	// Phase 3: reserve placeholder, release lock, do CDP.
 	placeholder := &ManagedPage{
-		Session:  session,
-		ready:    make(chan struct{}),
-		LastUsed: time.Now(),
-		TTL:      contextPoolDefaultTTL,
-		Refs:     NewRefMap(),
-		URL:      url,
+		Session:      session,
+		ready:        make(chan struct{}),
+		LastUsed:     time.Now(),
+		TTL:          contextPoolDefaultTTL,
+		Refs:         NewRefMap(),
+		LogCollector: NewLogCollector(),
+		URL:          url,
 	}
 	mc.Pages[session] = placeholder
 	mc.Mu.Unlock()
@@ -311,6 +314,10 @@ func (p *ContextPool) Reap() {
 	for key, mc := range p.contexts {
 		mc.Mu.Lock()
 		for name, mp := range mc.Pages {
+			// Skip detached sessions - they are human-controlled, don't evict
+			if !mp.DetachedAt.IsZero() {
+				continue
+			}
 			if mp.TTL > 0 && time.Since(mp.LastUsed) > mp.TTL && mp.Page != nil {
 				victims = append(victims, victim{page: mp.Page, key: key, name: name})
 				delete(mc.Pages, name)
@@ -357,4 +364,50 @@ func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
 	p.contextsMu.Lock()
 	p.browser = b
 	p.contextsMu.Unlock()
+}
+
+// FindManagedPage finds a managed page by session name across all contexts.
+// Returns the ManagedPage and its containing ManagedContext.
+func (p *ContextPool) FindManagedPage(sessionID string) (*ManagedPage, error) {
+	p.contextsMu.RLock()
+	defer p.contextsMu.RUnlock()
+
+	for _, mc := range p.contexts {
+		mc.Mu.Lock()
+		mp, exists := mc.Pages[sessionID]
+		mc.Mu.Unlock()
+		if exists {
+			return mp, nil
+		}
+	}
+
+	return nil, fmt.Errorf("session not found: %s", sessionID)
+}
+
+// DetachSession marks a session as human-controlled.
+// Agent calls on this session will return an error and the reaper will skip it.
+func (p *ContextPool) DetachSession(session, mode string) error {
+	mp, err := p.FindManagedPage(session)
+	if err != nil {
+		return fmt.Errorf("session %q not found", session)
+	}
+	
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	mp.DetachedAt = time.Now()
+	return nil
+}
+
+// AttachSession returns control of a session to the agent.
+// The session becomes controllable again and will be subject to normal reaping.
+func (p *ContextPool) AttachSession(session, mode string) error {
+	mp, err := p.FindManagedPage(session)
+	if err != nil {
+		return fmt.Errorf("session %q not found", session)
+	}
+	
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	mp.DetachedAt = time.Time{}
+	return nil
 }

@@ -19,9 +19,17 @@ func init() {
 
 func execWaitFor(dc dispatchContext, a Action) (any, error) {
 	waitCtx := dc.ctx
-	if a.TimeoutMs > 0 {
+	timeoutMs := a.TimeoutMs
+	if timeoutMs > 0 {
+		// Use remaining time from deadline if available, otherwise use action timeout
+		remaining := dc.remainingMs()
+		if remaining < timeoutMs {
+			timeoutMs = remaining
+		}
+	}
+	if timeoutMs > 0 {
 		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(dc.ctx, time.Duration(a.TimeoutMs)*time.Millisecond)
+		waitCtx, cancel = context.WithTimeout(dc.ctx, time.Duration(timeoutMs)*time.Millisecond)
 		defer cancel()
 	}
 	if dc.stealthMode && dc.cursor != nil {
@@ -51,24 +59,39 @@ func dispatchWaitFor(waitCtx context.Context, dc dispatchContext, a Action) erro
 }
 
 func execWaitForNavigation(dc dispatchContext, a Action) (any, error) {
-	timeout := 10 * time.Second
+	timeoutMs := 10000 // 10 seconds default
 	if a.TimeoutMs > 0 {
-		timeout = time.Duration(a.TimeoutMs) * time.Millisecond
+		timeoutMs = a.TimeoutMs
 	}
-	waitCtx, cancel := context.WithTimeout(dc.ctx, timeout)
+	// Use remaining time from deadline if available
+	remaining := dc.remainingMs()
+	if remaining < timeoutMs {
+		timeoutMs = remaining
+	}
+	waitCtx, cancel := context.WithTimeout(dc.ctx, time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 	return doWaitForNavigation(waitCtx, dc.page, a.URLContains, a.Selector, dc.refMap)
 }
 
 func execSleep(dc dispatchContext, a Action) (any, error) {
-	if dc.stealthMode && dc.cursor != nil && a.WaitMs > 0 {
-		sleepCtx, cancel := context.WithTimeout(dc.ctx, time.Duration(a.WaitMs)*time.Millisecond)
+	waitMs := a.WaitMs
+	if waitMs > 0 {
+		// Use remaining time from deadline if available
+		remaining := dc.remainingMs()
+		if remaining < waitMs {
+			waitMs = remaining
+		}
+	}
+	if dc.stealthMode && dc.cursor != nil && waitMs > 0 {
+		sleepCtx, cancel := context.WithTimeout(dc.ctx, time.Duration(waitMs)*time.Millisecond)
 		defer cancel()
 		stop := startWaitDrift(sleepCtx, dc)
 		defer stop()
-		return nil, doSleep(sleepCtx, a.WaitMs)
 	}
-	return nil, doSleep(dc.ctx, a.WaitMs)
+	if waitMs > 0 {
+		time.Sleep(time.Duration(waitMs) * time.Millisecond)
+	}
+	return nil, nil
 }
 
 // startWaitDrift starts idle drift for the duration of a wait/sleep action.
