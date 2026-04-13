@@ -69,7 +69,8 @@ type SessionInfo struct {
 	LastUsed string `json:"last_used"`
 }
 
-// NewContextPool creates a ContextPool and starts the background reaper.
+// NewContextPool creates a ContextPool, starts the background reaper,
+// and subscribes to CDP target destruction events.
 func NewContextPool(browser *rod.Browser) *ContextPool {
 	p := &ContextPool{
 		browser:  browser,
@@ -78,19 +79,8 @@ func NewContextPool(browser *rod.Browser) *ContextPool {
 		done:     make(chan struct{}),
 	}
 	go p.reaper()
+	p.watchTargetDestroyed()
 	return p
-}
-
-// contextKey returns the map key for the given mode/proxy combination.
-func contextKey(mode, proxy string) string {
-	switch mode {
-	case "default":
-		return "default"
-	case "proxy":
-		return "proxy:" + proxy
-	default:
-		return "private"
-	}
 }
 
 // GetOrCreatePage returns the existing page for session, or creates a new tab in the
@@ -101,7 +91,6 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 
 	key := contextKey(mode, proxy)
 
-	// Get or create the context.
 	mc, err := p.getOrCreateContext(key, mode, proxy)
 	if err != nil {
 		return nil, err
@@ -110,11 +99,26 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	// Look up existing session.
 	if mp, ok := mc.Pages[session]; ok {
 		mp.LastUsed = time.Now()
-		// Navigate if URL changed and URL is not empty.
 		if url != "" && url != "about:blank" && url != mp.URL {
 			mp.URL = url
 		}
 		return mp, nil
+	}
+
+	// For default context with no pages yet, adopt Chrome's existing default tab.
+	if key == "default" && len(mc.Pages) == 0 {
+		if adopted, err := p.adoptExistingPage(mc); err == nil && adopted != nil {
+			mp := &ManagedPage{
+				Session:  session,
+				Page:     adopted,
+				URL:      url,
+				LastUsed: time.Now(),
+				TTL:      contextPoolDefaultTTL,
+				Refs:     NewRefMap(),
+			}
+			mc.Pages[session] = mp
+			return mp, nil
+		}
 	}
 
 	// Create new tab in this context.
@@ -229,87 +233,4 @@ func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
 	p.mu.Lock()
 	p.browser = b
 	p.mu.Unlock()
-}
-
-// --- internal helpers ---
-
-func (p *ContextPool) getOrCreateContext(key, mode, proxy string) (*ManagedContext, error) {
-	if mc, ok := p.contexts[key]; ok {
-		return mc, nil
-	}
-
-	mc := &ManagedContext{
-		Mode:  mode,
-		Proxy: proxy,
-		Pages: make(map[string]*ManagedPage),
-	}
-
-	if mode == "default" {
-		// Default context uses empty BrowserContextID — Chrome's persistent profile.
-		p.contexts[key] = mc
-		return mc, nil
-	}
-
-	// Create new incognito/proxy BrowserContext.
-	proxyServer, _, _ := parseProxy(proxy)
-	res, err := proto.TargetCreateBrowserContext{
-		ProxyServer:     proxyServer,
-		DisposeOnDetach: true,
-	}.Call(p.browser)
-	if err != nil {
-		return nil, fmt.Errorf("create browser context: %w", err)
-	}
-	mc.ID = res.BrowserContextID
-	p.contexts[key] = mc
-	return mc, nil
-}
-
-func (p *ContextPool) newPageInContext(mc *ManagedContext) (*rod.Page, error) {
-	var targetReq proto.TargetCreateTarget
-	targetReq.URL = "about:blank"
-	if mc.ID != "" {
-		targetReq.BrowserContextID = mc.ID
-	}
-	res, err := targetReq.Call(p.browser)
-	if err != nil {
-		return nil, fmt.Errorf("create target: %w", err)
-	}
-	page, err := p.browser.PageFromTarget(res.TargetID)
-	if err != nil {
-		return nil, fmt.Errorf("page from target: %w", err)
-	}
-	return page, nil
-}
-
-func (p *ContextPool) disposeContext(mc *ManagedContext) {
-	if mc.ID != "" {
-		_ = proto.TargetDisposeBrowserContext{BrowserContextID: mc.ID}.Call(p.browser)
-	}
-}
-
-func (p *ContextPool) reaper() {
-	defer close(p.done)
-	ticker := time.NewTicker(contextPoolReaperInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-p.stop:
-			return
-		case <-ticker.C:
-			p.Reap()
-		}
-	}
-}
-
-// formatAge formats the duration since t as a short human-readable string.
-func formatAge(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	default:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	}
 }
