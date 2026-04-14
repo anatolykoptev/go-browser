@@ -44,14 +44,14 @@ type InteractRequest struct {
 
 // InteractResponse is the JSON response for POST /chrome/interact.
 type InteractResponse struct {
-	URL            string         `json:"url"`
-	Status         string         `json:"status"` // "ok" or "error"
-	Actions        []ActionResult `json:"actions"`
-	SessionID      string         `json:"session_id,omitempty"`
-	Error          string         `json:"error,omitempty"`
-	ErrorCode      ErrorCode      `json:"error_code,omitempty"` // first failing action's code
+	URL             string           `json:"url"`
+	Status          string           `json:"status"` // "ok" or "error"
+	Actions         []ActionResult   `json:"actions"`
+	SessionID       string           `json:"session_id,omitempty"`
+	Error           string           `json:"error,omitempty"`
+	ErrorCode       ErrorCode        `json:"error_code,omitempty"` // first failing action's code
 	FailureSnapshot *FailureSnapshot `json:"failure_snapshot,omitempty"`
-	ElapsedMs      int64          `json:"elapsed_ms"`
+	ElapsedMs       int64            `json:"elapsed_ms"`
 }
 
 func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
@@ -107,11 +107,11 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	// Check if session is detached for human control
 	if !mp.DetachedAt.IsZero() {
 		return InteractResponse{
-			URL:        req.URL,
-			Status:     "error",
-			Error:      fmt.Sprintf("session %q is detached for human control since %s", session, mp.DetachedAt.Format(time.RFC3339)),
-			ErrorCode:  ErrCodeInvalidInput,
-			SessionID:  session,
+			URL:       req.URL,
+			Status:    "error",
+			Error:     fmt.Sprintf("session %q is detached for human control since %s", session, mp.DetachedAt.Format(time.RFC3339)),
+			ErrorCode: ErrCodeInvalidInput,
+			SessionID: session,
 		}
 	}
 
@@ -152,8 +152,26 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		}
 	}
 
-	logs := NewLogCollector()
-	logs.SubscribeCDP(page)
+	// Reuse the managed page's LogCollector (subscribed in context_pool.go when
+	// the page was created/adopted). Creating a second LogCollector per request
+	// leaks an EachEvent goroutine and, on some rod versions, the second
+	// subscription silently stops receiving Runtime events — so `chrome_events`
+	// returns null for console/exceptions while network/page events still flow.
+	//
+	// Re-assert Runtime/Network/Page domains: navigation, setAutoAttach, or a
+	// reconnect can flip rod's internal state cache, causing EnableDomain inside
+	// EachEvent to skip the actual Runtime.enable call. Calling enable directly
+	// here guarantees the domain is active for this interaction's actions.
+	logs := mp.LogCollector
+	if logs == nil {
+		logs = NewLogCollector()
+		mp.LogCollector = logs
+		logs.SubscribeCDP(page)
+	} else {
+		_ = proto.NetworkEnable{}.Call(page)
+		_ = proto.RuntimeEnable{}.Call(page)
+		_ = proto.PageEnable{}.Call(page)
+	}
 
 	cursor := humanize.NewCursor(390, 290)
 
@@ -219,12 +237,12 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	}
 
 	return InteractResponse{
-		URL:            finalURL,
-		Status:         status,
-		Actions:        results,
-		SessionID:      session,
-		Error:          actionErr,
-		ErrorCode:      actionErrCode,
+		URL:             finalURL,
+		Status:          status,
+		Actions:         results,
+		SessionID:       session,
+		Error:           actionErr,
+		ErrorCode:       actionErrCode,
 		FailureSnapshot: failSnap,
 	}
 }
