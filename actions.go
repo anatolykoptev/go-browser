@@ -69,11 +69,11 @@ type FormField struct {
 
 // ActionResult is the outcome of a single executed action.
 type ActionResult struct {
-	Action    string     `json:"action"`
-	Ok        bool       `json:"ok"`
-	Data      any        `json:"data,omitempty"`
-	Error     string     `json:"error,omitempty"`
-	ErrorCode ErrorCode  `json:"error_code,omitempty"` // structured error classification
+	Action    string    `json:"action"`
+	Ok        bool      `json:"ok"`
+	Data      any       `json:"data,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	ErrorCode ErrorCode `json:"error_code,omitempty"` // structured error classification
 }
 
 // dispatchContext bundles the per-call dependencies passed to every action executor.
@@ -98,6 +98,35 @@ func (dc *dispatchContext) remainingMs() int {
 		return 0
 	}
 	return int(left)
+}
+
+// effectiveTimeoutMs returns the min of the action's own timeout_ms and the
+// remaining chain deadline. Either can be zero (unset); the lower non-zero
+// wins. If both are effectively unset, returns 0 (caller should apply a
+// sane default or skip applying a timeout).
+func (dc *dispatchContext) effectiveTimeoutMs(actionTimeoutMs int) int {
+	remaining := dc.remainingMs() // returns math.MaxInt32 if no deadline
+	unbounded := 1<<31 - 1
+	if actionTimeoutMs <= 0 {
+		if remaining == unbounded {
+			return 0
+		}
+		return remaining
+	}
+	if remaining < actionTimeoutMs {
+		return remaining
+	}
+	return actionTimeoutMs
+}
+
+// withActionTimeout derives a sub-context bounded by effectiveTimeoutMs.
+// Returns the original context and a no-op cancel when no bound applies.
+func (dc *dispatchContext) withActionTimeout(actionTimeoutMs int) (context.Context, context.CancelFunc) {
+	eff := dc.effectiveTimeoutMs(actionTimeoutMs)
+	if eff <= 0 {
+		return dc.ctx, func() {}
+	}
+	return context.WithTimeout(dc.ctx, time.Duration(eff)*time.Millisecond)
 }
 
 // actionExecutor is a function that runs a single action and returns optional data.

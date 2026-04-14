@@ -9,29 +9,33 @@ func init() {
 }
 
 func execClick(dc dispatchContext, a Action) (any, error) {
+	ctx, cancel := dc.withActionTimeout(a.TimeoutMs)
+	defer cancel()
 	if dc.stealthMode {
-		return nil, withRetry(dc.ctx, func() error {
-			return doClickStealth(dc.ctx, dc.page, a, dc.refMap)
+		return nil, withRetry(ctx, func() error {
+			return doClickStealth(ctx, dc.page, a, dc.refMap)
 		})
 	}
 	if a.Humanize && dc.cursor != nil {
-		return nil, withRetry(dc.ctx, func() error {
-			return doClickHumanized(dc.ctx, dc.page, a.Selector, dc.cursor)
+		return nil, withRetry(ctx, func() error {
+			return doClickHumanized(ctx, dc.page, a.Selector, dc.cursor)
 		})
 	}
-	return nil, withRetry(dc.ctx, func() error {
-		return doClick(dc.ctx, dc.page, a, dc.refMap)
+	return nil, withRetry(ctx, func() error {
+		return doClick(ctx, dc.page, a, dc.refMap)
 	})
 }
 
 func execHover(dc dispatchContext, a Action) (any, error) {
+	ctx, cancel := dc.withActionTimeout(a.TimeoutMs)
+	defer cancel()
 	if dc.stealthMode {
-		return nil, doHoverStealth(dc.ctx, dc.page, a.Selector, dc.refMap)
+		return nil, doHoverStealth(ctx, dc.page, a.Selector, dc.refMap)
 	}
 	if a.Humanize && dc.cursor != nil {
-		return nil, doHoverHumanized(dc.ctx, dc.page, a.Selector, dc.cursor)
+		return nil, doHoverHumanized(ctx, dc.page, a.Selector, dc.cursor)
 	}
-	return nil, doHover(dc.ctx, dc.page, a.Selector, dc.refMap)
+	return nil, doHover(ctx, dc.page, a.Selector, dc.refMap)
 }
 
 func execGoBack(dc dispatchContext, _ Action) (any, error) {

@@ -18,20 +18,8 @@ func init() {
 }
 
 func execWaitFor(dc dispatchContext, a Action) (any, error) {
-	waitCtx := dc.ctx
-	timeoutMs := a.TimeoutMs
-	if timeoutMs > 0 {
-		// Use remaining time from deadline if available, otherwise use action timeout
-		remaining := dc.remainingMs()
-		if remaining < timeoutMs {
-			timeoutMs = remaining
-		}
-	}
-	if timeoutMs > 0 {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(dc.ctx, time.Duration(timeoutMs)*time.Millisecond)
-		defer cancel()
-	}
+	waitCtx, cancel := dc.withActionTimeout(a.TimeoutMs)
+	defer cancel()
 	if dc.stealthMode && dc.cursor != nil {
 		stop := startWaitDrift(waitCtx, dc)
 		defer stop()
