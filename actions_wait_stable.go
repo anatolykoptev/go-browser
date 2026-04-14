@@ -24,6 +24,33 @@ const (
 	defaultWaitStableMaxWait = 10_000
 )
 
+// defaultWaitStableIgnoreHosts covers analytics/telemetry/ads endpoints that
+// emit steady background traffic on most SPAs. User-provided ignore_hosts
+// is merged with these. Pass ignore_hosts=["*"] to reset (not supported now
+// but reserved for future).
+var defaultWaitStableIgnoreHosts = []string{
+	"google-analytics.com",
+	"googletagmanager.com",
+	"doubleclick.net",
+	"googleadservices.com",
+	"googlesyndication.com",
+	"google.com/pagead",
+	"facebook.com/tr",
+	"connect.facebook.net",
+	"analytics.tiktok.com",
+	"hotjar.com",
+	"segment.com",
+	"segment.io",
+	"mixpanel.com",
+	"amplitude.com",
+	"datadoghq.com",
+	"bugsnag.com",
+	"sentry.io",
+	"newrelic.com",
+	"cdn.linkedin.com/li/track",
+	"licdn.com/li/track",
+}
+
 // doWaitStable returns when the page has had `quiet_ms` of no network requests
 // (excluding ignored hosts) AND no DOM mutations. Fails if `max_wait_ms` elapses.
 func doWaitStable(dc *dispatchContext, a Action) error {
@@ -35,7 +62,10 @@ func doWaitStable(dc *dispatchContext, a Action) error {
 	if maxWait <= 0 {
 		maxWait = defaultWaitStableMaxWait
 	}
-	ignore := make(map[string]bool, len(a.IgnoreHosts))
+	ignore := make(map[string]bool, len(a.IgnoreHosts)+len(defaultWaitStableIgnoreHosts))
+	for _, h := range defaultWaitStableIgnoreHosts {
+		ignore[strings.ToLower(h)] = true
+	}
 	for _, h := range a.IgnoreHosts {
 		ignore[strings.ToLower(h)] = true
 	}

@@ -178,19 +178,21 @@ func (c *LogCollector) SubscribeCDP(page *rod.Page) {
 
 	go page.EachEvent(
 		func(e *proto.NetworkRequestWillBeSent) {
-			// Capture main-frame navigations
-			if e.Type == proto.NetworkResourceTypeDocument && e.FrameID == "" {
-				c.AddNavigation(NavigationEntry{
-					URL: e.Request.URL,
-					TS:  time.Now().UnixMilli(),
-				})
-			}
-			// Also add as network entry
+			// Add as network entry
 			c.AddNetwork(NetworkEntry{
 				Method: e.Request.Method,
 				URL:    e.Request.URL,
 				TS:     time.Now().UnixMilli(),
 			})
+		},
+		func(e *proto.PageFrameNavigated) {
+			// Main frame has no parent. Sub-frames/iframes have ParentID set.
+			if e.Frame != nil && e.Frame.ParentID == "" {
+				c.AddNavigation(NavigationEntry{
+					TS:  time.Now().UnixMilli(),
+					URL: e.Frame.URL,
+				})
+			}
 		},
 		func(e *proto.NetworkResponseReceived) {
 			c.mu.Lock()
@@ -250,6 +252,13 @@ func (c *LogCollector) SubscribeConsole(page *rod.Page) {
 	_ = proto.RuntimeEnable{}.Call(page)
 }
 
+// SinceFilter restricts what Since returns. Zero-value = no filtering.
+type SinceFilter struct {
+	Kinds     []string // "network" | "console" | "exceptions" | "navigations" — if empty, all
+	StatusMin int      // network only: min HTTP status (e.g. 400 for errors only)
+	Limit     int      // max entries per category (0 = no limit)
+}
+
 // SinceResult contains filtered log entries since a given timestamp.
 type SinceResult struct {
 	Network     []NetworkEntry     `json:"network"`
@@ -260,38 +269,47 @@ type SinceResult struct {
 
 // Since returns all entries with timestamp > sinceMs (exclusive).
 func (c *LogCollector) Since(sinceMs int64) SinceResult {
+	return c.SinceFiltered(sinceMs, SinceFilter{})
+}
+
+// SinceFiltered is Since with additional server-side filtering.
+// Reduces payload size when agents only want errors or a narrow slice.
+func (c *LogCollector) SinceFiltered(sinceMs int64, f SinceFilter) SinceResult {
+	kinds := map[string]bool{}
+	for _, k := range f.Kinds { kinds[k] = true }
+	include := func(k string) bool { return len(kinds) == 0 || kinds[k] }
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	var result SinceResult
-
-	// Filter network entries
-	for _, e := range c.network {
-		if e.TS > sinceMs {
-			result.Network = append(result.Network, e)
+	out := SinceResult{}
+	if include("network") {
+		for _, e := range c.network {
+			if e.TS <= sinceMs { continue }
+			if f.StatusMin > 0 && e.Status < f.StatusMin { continue }
+			out.Network = append(out.Network, e)
+			if f.Limit > 0 && len(out.Network) >= f.Limit { break }
 		}
 	}
-
-	// Filter console entries
-	for _, e := range c.console {
-		if e.TS > sinceMs {
-			result.Console = append(result.Console, e)
+	if include("console") {
+		for _, e := range c.console {
+			if e.TS <= sinceMs { continue }
+			out.Console = append(out.Console, e)
+			if f.Limit > 0 && len(out.Console) >= f.Limit { break }
 		}
 	}
-
-	// Filter exception entries
-	for _, e := range c.exceptions {
-		if e.TS > sinceMs {
-			result.Exceptions = append(result.Exceptions, e)
+	if include("exceptions") {
+		for _, e := range c.exceptions {
+			if e.TS <= sinceMs { continue }
+			out.Exceptions = append(out.Exceptions, e)
+			if f.Limit > 0 && len(out.Exceptions) >= f.Limit { break }
 		}
 	}
-
-	// Filter navigation entries
-	for _, e := range c.navigations {
-		if e.TS > sinceMs {
-			result.Navigations = append(result.Navigations, e)
+	if include("navigations") {
+		for _, e := range c.navigations {
+			if e.TS <= sinceMs { continue }
+			out.Navigations = append(out.Navigations, e)
+			if f.Limit > 0 && len(out.Navigations) >= f.Limit { break }
 		}
 	}
-
-	return result
+	return out
 }
