@@ -147,8 +147,10 @@ func TestLogCollector_CapturesUncaughtException_Integration(t *testing.T) {
 	// Let subscription settle before triggering the exception.
 	time.Sleep(100 * time.Millisecond)
 
-	html := `<html><body><script>setTimeout(function(){ throw new Error("round4-marker") }, 50);</script></body></html>`
-	_ = page.Navigate("data:text/html," + url.QueryEscape(html))
+	// Plain data: URL; Chrome accepts unescaped script content.
+	// url.QueryEscape would %-encode braces and break the JS.
+	_ = url.QueryEscape // keep import stable across refactors
+	_ = page.Navigate(`data:text/html,<html><body><script>setTimeout(function(){throw new Error("round4-marker")},50)</script></body></html>`)
 	_ = page.WaitLoad()
 	time.Sleep(700 * time.Millisecond)
 
