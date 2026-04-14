@@ -28,7 +28,7 @@ func execTypeText(dc dispatchContext, a Action) (any, error) {
 }
 
 func execPress(dc dispatchContext, a Action) (any, error) {
-	return nil, doPress(dc.page, a.Key)
+	return nil, doPress(dc.page, a.Key, a.Modifiers)
 }
 
 func execFillForm(dc dispatchContext, a Action) (any, error) {

@@ -16,7 +16,7 @@ type Action struct {
 	Text          string        `json:"text,omitempty" jsonschema:"Text to type (type_text) or prompt response (handle_dialog)"`
 	Script        string        `json:"script,omitempty" jsonschema:"JavaScript code for evaluate/eval_on_new_document"`
 	JS            string        `json:"js,omitempty" jsonschema:"Alias for script"`
-	Key           string        `json:"key,omitempty" jsonschema:"Key name for press action (Enter/Tab/Escape/etc)"`
+	Key           string        `json:"key,omitempty" jsonschema:"Key name for press action. Named keys: Enter/Tab/Escape/Backspace/Delete/Arrow*/F1-F12/Home/End/PageUp/PageDown/Space. Single printable ASCII characters (letters/digits/punctuation) are also accepted — combine with 'modifiers' for shortcuts (e.g. key='a' modifiers=['Control'] → Ctrl+A)."`
 	URL           string        `json:"url,omitempty" jsonschema:"URL for navigate action"`
 	Humanize      bool          `json:"humanize,omitempty" jsonschema:"Use human-like mouse movement for click/type_text/hover"`
 	WaitMs        int           `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait (sleep) or warmup duration"`
