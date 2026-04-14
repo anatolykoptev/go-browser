@@ -81,7 +81,7 @@ func doEvaluate(page *rod.Page, script string) (any, error) {
 		return nil, fmt.Errorf("evaluate: %w", err)
 	}
 	if res.ExceptionDetails != nil {
-		return nil, fmt.Errorf("evaluate: %s", res.ExceptionDetails.Text)
+		return nil, fmt.Errorf("evaluate: %s: %w", res.ExceptionDetails.Text, ErrJsException)
 	}
 	return res.Result.Value.Val(), nil
 }

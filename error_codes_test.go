@@ -27,6 +27,9 @@ func TestClassifyError(t *testing.T) {
 		{"recaptcha challenge detected", ErrCodeCaptchaDetected},
 		{"ERR_NAME_NOT_RESOLVED", ErrCodeNetworkError},
 		{"CDP method unsupported", ErrCodeCdpError},
+		// JS exceptions from evaluate / Uncaught runtime errors.
+		{`evaluate: Uncaught`, ErrCodeJsException},
+		{`evaluate: Uncaught ReferenceError: foo is not defined`, ErrCodeJsException},
 		{"something weird happened", ErrCodeUnknown},
 	}
 	for _, c := range cases {
