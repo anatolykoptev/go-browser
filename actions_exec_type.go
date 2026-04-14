@@ -152,3 +152,55 @@ func doFillFormStealth(ctx context.Context, page *rod.Page, fields []FormField, 
 	}
 	return nil
 }
+
+// doSelectAll selects all text using JavaScript Selection API.
+// This bypasses TipTap/ProseMirror keyboard interceptors that block Ctrl+A.
+// If selector is empty, uses the currently focused element.
+func doSelectAll(page *rod.Page, selector string, refMap *RefMap) error {
+	var script string
+	if selector != "" {
+		// Select all in specific element
+		script = fmt.Sprintf(`
+			(function() {
+				const el = document.querySelector(%q);
+				if (!el) return false;
+				el.focus();
+				const range = document.createRange();
+				range.selectNodeContents(el);
+				const sel = window.getSelection();
+				sel.removeAllRanges();
+				sel.addRange(range);
+				return true;
+			})()
+		`, selector)
+	} else {
+		// Select all in focused element or document
+		script = `
+			(function() {
+				const sel = window.getSelection();
+				const el = document.activeElement || document.body;
+				if (el && el.select) {
+					// Standard input/textarea
+					el.select();
+					return true;
+				}
+				// ContentEditable or complex editors
+				if (el) {
+					const range = document.createRange();
+					range.selectNodeContents(el);
+					sel.removeAllRanges();
+					sel.addRange(range);
+					return true;
+				}
+				// Fallback: select all document
+				document.execCommand('selectAll');
+				return true;
+			})()
+		`
+	}
+	_, err := doEvaluate(page, script)
+	if err != nil {
+		return fmt.Errorf("select_all: %w", err)
+	}
+	return nil
+}

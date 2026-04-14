@@ -7,6 +7,7 @@ func init() {
 	registerAction("press", execPress)
 	registerAction("fill_form", execFillForm)
 	registerAction("select_option", execSelectOption)
+	registerAction("select_all", execSelectAll)
 }
 
 func execTypeText(dc dispatchContext, a Action) (any, error) {
@@ -40,4 +41,10 @@ func execFillForm(dc dispatchContext, a Action) (any, error) {
 
 func execSelectOption(dc dispatchContext, a Action) (any, error) {
 	return nil, doSelectOption(dc.ctx, dc.page, a.Selector, a.Values, dc.refMap)
+}
+
+// execSelectAll selects all text in the focused element or specified selector.
+// Uses JavaScript Selection API to bypass TipTap/ProseMirror interceptors.
+func execSelectAll(dc dispatchContext, a Action) (any, error) {
+	return nil, doSelectAll(dc.page, a.Selector, dc.refMap)
 }
