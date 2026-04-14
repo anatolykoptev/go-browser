@@ -204,6 +204,41 @@ func (c *LogCollector) Resubscribe(page *rod.Page) {
 	c.startSubscription(page)
 }
 
+// exceptionMarker is the prefix used by our JS exception hook to surface
+// uncaught errors via console.error (the only Runtime-domain channel the
+// cloakbrowser fork still emits on flat-mode sessions). dispatch() recognises
+// this prefix and routes such "console" entries to the exception bucket.
+const exceptionMarker = "__GOBROWSER_EXCEPTION__:"
+
+// jsExceptionHook installs window error/unhandledrejection handlers that
+// forward uncaught errors to console.error with exceptionMarker. Required
+// because cloakbrowser's fingerprint-patched Chromium 145 does not emit
+// Runtime.exceptionThrown to flat-mode CDP sessions attached via the
+// browser WS endpoint, even with Runtime.enable + Log.enable.
+var jsExceptionHook = strings.Replace(jsExceptionHookTpl, "__MARKER__", exceptionMarker, 1)
+
+const jsExceptionHookTpl = `
+(function(){
+  if (window.__goBrowserExceptionHook) return;
+  window.__goBrowserExceptionHook = true;
+  var MARK = '__MARKER__';
+  window.addEventListener('error', function(ev){
+    try {
+      var e = ev.error || ev.message || 'error';
+      var msg = (e && e.stack) ? e.stack : String(e);
+      console.error(MARK + msg + '|' + (ev.filename||'') + ':' + (ev.lineno||0) + ':' + (ev.colno||0));
+    } catch (_) {}
+  }, true);
+  window.addEventListener('unhandledrejection', function(ev){
+    try {
+      var r = ev.reason;
+      var msg = (r && r.stack) ? r.stack : ((r && r.message) ? r.message : String(r));
+      console.error(MARK + 'unhandledrejection: ' + msg);
+    } catch (_) {}
+  }, true);
+})();
+`
+
 func (c *LogCollector) startSubscription(page *rod.Page) {
 	// Serialize subscription swaps so two concurrent callers don't race the
 	// cancel/start sequence.
@@ -225,17 +260,23 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 	if err := (proto.PageEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Page.enable err=%v\n", err)
 	}
-	// Also enable the (deprecated but still supported) Console and Log domains.
-	// On flat-mode sessions attached through the browser WS endpoint, some Chrome
-	// builds (including cloakbrowser's fingerprint-patched Chromium 145) only
-	// emit Runtime.consoleAPICalled to the session when Console.enable has been
-	// called; Log.enable covers browser-emitted warnings that Runtime doesn't.
+	// Console and Log domains are required: cloakbrowser's fingerprint-patched
+	// Chromium 145 strips Runtime.consoleAPICalled / Runtime.exceptionThrown
+	// from flat-mode browser-WS sessions, but still emits Console.messageAdded
+	// when Console.enable is on.
 	if err := (proto.ConsoleEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Console.enable err=%v\n", err)
 	}
 	if err := (proto.LogEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Log.enable err=%v\n", err)
 	}
+	// Install exception-forwarding JS. EvalOnNewDocument applies on every
+	// subsequent navigation; evaluate-immediately to cover the current
+	// document as well.
+	if _, err := page.EvalOnNewDocument(jsExceptionHook); err != nil {
+		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: EvalOnNewDocument(hook) err=%v\n", err)
+	}
+	_, _ = page.Eval(jsExceptionHook)
 
 	ctx, cancel := context.WithCancel(page.GetContext())
 	c.subCtx = ctx
@@ -248,27 +289,6 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 	// next call. Manual Load/dispatch doesn't touch that cache at all.
 	msgs := page.Context(ctx).Event()
 	go c.runLoop(ctx, msgs)
-
-	// DIAG: also tap the browser-level event bus to confirm whether Runtime
-	// events are being emitted at all for this session.
-	bmsgs := page.Browser().Context(ctx).Event()
-	pageSid := page.SessionID
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case m, ok := <-bmsgs:
-				if !ok {
-					return
-				}
-				if strings.HasPrefix(m.Method, "Runtime.") || strings.HasPrefix(m.Method, "Log.") {
-					matchPage := m.SessionID == pageSid
-					fmt.Fprintf(os.Stderr, "BROWSER-EVT method=%s sid=%s matchPageSid=%v\n", m.Method, m.SessionID, matchPage)
-				}
-			}
-		}
-	}()
 }
 
 func (c *LogCollector) runLoop(ctx context.Context, msgs <-chan *rod.Message) {
@@ -286,7 +306,6 @@ func (c *LogCollector) runLoop(ctx context.Context, msgs <-chan *rod.Message) {
 }
 
 func (c *LogCollector) dispatch(msg *rod.Message) {
-	fmt.Fprintf(os.Stderr, "CDP-DISPATCH method=%s sessionID=%s\n", msg.Method, msg.SessionID)
 	switch msg.Method {
 	case (&proto.NetworkRequestWillBeSent{}).ProtoEvent():
 		var e proto.NetworkRequestWillBeSent
@@ -340,9 +359,17 @@ func (c *LogCollector) dispatch(msg *rod.Message) {
 					parts = append(parts, arg.Value.Str())
 				}
 			}
+			text := strings.Join(parts, " ")
+			if strings.HasPrefix(text, exceptionMarker) {
+				c.AddException(ExceptionEntry{
+					TS:   time.Now().UnixMilli(),
+					Text: strings.TrimPrefix(text, exceptionMarker),
+				})
+				return
+			}
 			c.AddConsole(ConsoleEntry{
 				Level: string(e.Type),
-				Text:  strings.Join(parts, " "),
+				Text:  text,
 				TS:    time.Now().UnixMilli(),
 			})
 		}
@@ -351,9 +378,24 @@ func (c *LogCollector) dispatch(msg *rod.Message) {
 		// channel on flat-mode sessions.
 		var e proto.ConsoleMessageAdded
 		if msg.Load(&e) && e.Message != nil {
+			text := e.Message.Text
+			if strings.HasPrefix(text, exceptionMarker) {
+				c.AddException(ExceptionEntry{
+					TS:   time.Now().UnixMilli(),
+					Text: strings.TrimPrefix(text, exceptionMarker),
+					URL:  e.Message.URL,
+					LineNumber: func() int {
+						if e.Message.Line != nil {
+							return *e.Message.Line
+						}
+						return 0
+					}(),
+				})
+				return
+			}
 			c.AddConsole(ConsoleEntry{
 				Level: string(e.Message.Level),
-				Text:  e.Message.Text,
+				Text:  text,
 				TS:    time.Now().UnixMilli(),
 			})
 		}
