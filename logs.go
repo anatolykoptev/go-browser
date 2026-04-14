@@ -221,11 +221,20 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 	}
 	if err := (proto.RuntimeEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Runtime.enable err=%v\n", err)
-	} else {
-		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Runtime.enable OK sessionID=%s\n", page.SessionID)
 	}
 	if err := (proto.PageEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Page.enable err=%v\n", err)
+	}
+	// Also enable the (deprecated but still supported) Console and Log domains.
+	// On flat-mode sessions attached through the browser WS endpoint, some Chrome
+	// builds (including cloakbrowser's fingerprint-patched Chromium 145) only
+	// emit Runtime.consoleAPICalled to the session when Console.enable has been
+	// called; Log.enable covers browser-emitted warnings that Runtime doesn't.
+	if err := (proto.ConsoleEnable{}).Call(page); err != nil {
+		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Console.enable err=%v\n", err)
+	}
+	if err := (proto.LogEnable{}).Call(page); err != nil {
+		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Log.enable err=%v\n", err)
 	}
 
 	ctx, cancel := context.WithCancel(page.GetContext())
@@ -336,6 +345,42 @@ func (c *LogCollector) dispatch(msg *rod.Message) {
 				Text:  strings.Join(parts, " "),
 				TS:    time.Now().UnixMilli(),
 			})
+		}
+	case (&proto.ConsoleMessageAdded{}).ProtoEvent():
+		// Legacy Console domain — some Chrome forks only emit via this
+		// channel on flat-mode sessions.
+		var e proto.ConsoleMessageAdded
+		if msg.Load(&e) && e.Message != nil {
+			c.AddConsole(ConsoleEntry{
+				Level: string(e.Message.Level),
+				Text:  e.Message.Text,
+				TS:    time.Now().UnixMilli(),
+			})
+		}
+	case (&proto.LogEntryAdded{}).ProtoEvent():
+		var e proto.LogEntryAdded
+		if msg.Load(&e) && e.Entry != nil {
+			entry := e.Entry
+			level := string(entry.Level)
+			text := entry.Text
+			if entry.Source != "" {
+				text = "[" + string(entry.Source) + "] " + text
+			}
+			// Network/security/deprecation warnings show up here; route
+			// actual JS errors to exceptions, others to console.
+			if entry.Level == proto.LogLogEntryLevelError {
+				c.AddException(ExceptionEntry{
+					TS:   time.Now().UnixMilli(),
+					Text: text,
+					URL:  entry.URL,
+				})
+			} else {
+				c.AddConsole(ConsoleEntry{
+					Level: level,
+					Text:  text,
+					TS:    time.Now().UnixMilli(),
+				})
+			}
 		}
 	case (&proto.RuntimeExceptionThrown{}).ProtoEvent():
 		var e proto.RuntimeExceptionThrown
