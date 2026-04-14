@@ -19,6 +19,7 @@ var (
 	ErrCaptchaDetected   = errors.New("captcha_detected")
 	ErrNetworkError      = errors.New("network_error")
 	ErrCdpError          = errors.New("cdp_error")
+	ErrJsException       = errors.New("js_exception")
 )
 
 var sentinelTable = []struct {
@@ -36,6 +37,7 @@ var sentinelTable = []struct {
 	{ErrCaptchaDetected, ErrCodeCaptchaDetected},
 	{ErrNetworkError, ErrCodeNetworkError},
 	{ErrCdpError, ErrCodeCdpError},
+	{ErrJsException, ErrCodeJsException},
 }
 
 // ErrorCode is a stable machine-readable classification for action failures.
@@ -67,6 +69,8 @@ const (
 	ErrCodeNetworkError ErrorCode = "network_error"
 	// ErrCodeCdpError represents Chrome DevTools Protocol errors
 	ErrCodeCdpError ErrorCode = "cdp_error"
+	// ErrCodeJsException represents a JS script throwing during evaluate/script execution
+	ErrCodeJsException ErrorCode = "js_exception"
 )
 
 // ClassifyError maps a raw Go error to an ErrorCode based on its string.
@@ -80,8 +84,8 @@ func ClassifyError(err error) ErrorCode {
 	}
 	// 1. Typed sentinel lookup — bulletproof.
 	for _, s := range sentinelTable {
-		if errors.Is(err, s.err) { 
-			return s.code 
+		if errors.Is(err, s.err) {
+			return s.code
 		}
 	}
 	// 2. String fallback — covers paths that haven't been wrapped yet.
@@ -98,6 +102,11 @@ func classifyByString(s string) ErrorCode {
 
 	switch {
 	// --- 1. Strong domain signals — these win over generic context cancel ---
+	// evaluate: throws and "Uncaught" runtime errors — JS code threw.
+	case strings.Contains(s, "evaluate:") ||
+		strings.Contains(s, "Uncaught") ||
+		strings.Contains(s, "uncaught"):
+		return ErrCodeJsException
 	case strings.Contains(s, "captcha") ||
 		strings.Contains(s, "recaptcha") ||
 		strings.Contains(s, "cloudflare challenge"):
