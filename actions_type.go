@@ -8,6 +8,7 @@ func init() {
 	registerAction("fill_form", execFillForm)
 	registerAction("select_option", execSelectOption)
 	registerAction("select_all", execSelectAll)
+	registerAction("insert_text_input_event", execInsertTextInputEvent)
 }
 
 func execTypeText(dc dispatchContext, a Action) (any, error) {
@@ -47,4 +48,12 @@ func execSelectOption(dc dispatchContext, a Action) (any, error) {
 // Uses JavaScript Selection API to bypass TipTap/ProseMirror interceptors.
 func execSelectAll(dc dispatchContext, a Action) (any, error) {
 	return nil, doSelectAll(dc.page, a.Selector, dc.refMap)
+}
+
+// execInsertTextInputEvent dispatches synthetic beforeinput+input events with
+// inputType="insertReplacementText" — the spec-blessed way to drive TipTap /
+// ProseMirror contenteditable editors. Returns the diagnostic string so the
+// caller can see "cancelled=?" and a live readout of the field contents.
+func execInsertTextInputEvent(dc dispatchContext, a Action) (any, error) {
+	return doInsertTextInputEvent(dc.page, a.Selector, a.Text)
 }
