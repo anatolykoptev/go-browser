@@ -166,6 +166,16 @@ func (c *LogCollector) FilterNetwork(urlSubstr string) []NetworkEntry {
 	return filtered
 }
 
+// Stats returns the current count of captured entries per category. Non-blocking,
+// lock held briefly. Intended for periodic Prometheus scraping. Note: because the
+// underlying buffers are ring buffers, these counts can decrease when the oldest
+// entry is evicted after reaching maxLogEntries.
+func (c *LogCollector) Stats() (network, console, exceptions, navigations int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.network), len(c.console), len(c.exceptions), len(c.navigations)
+}
+
 // Collect returns all accumulated entries.
 func (c *LogCollector) Collect() ([]NetworkEntry, []ConsoleEntry) {
 	c.mu.Lock()
