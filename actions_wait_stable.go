@@ -41,8 +41,8 @@ func doWaitStable(dc *dispatchContext, a Action) error {
 	}
 
 	var (
-		mu            sync.Mutex
-		lastActivity  = time.Now()
+		mu           sync.Mutex
+		lastActivity = time.Now()
 	)
 	bump := func() {
 		mu.Lock()
@@ -54,7 +54,11 @@ func doWaitStable(dc *dispatchContext, a Action) error {
 	ctx, cancel := context.WithTimeout(dc.ctx, time.Duration(maxWait)*time.Millisecond)
 	defer cancel()
 
-	stop := dc.page.EachEvent(
+	// Run EachEvent in a goroutine: the returned wait func blocks until all
+	// handlers return true — void handlers never do, so calling it directly
+	// (or via defer) would hang forever. Goroutine is abandoned; handlers
+	// clean up when the page is closed. See logs.go:179 for the same idiom.
+	go dc.page.EachEvent(
 		func(e *proto.NetworkRequestWillBeSent) {
 			if hostIgnored(e.Request.URL, ignore) {
 				return
@@ -62,10 +66,9 @@ func doWaitStable(dc *dispatchContext, a Action) error {
 			bump()
 		},
 		func(e *proto.NetworkLoadingFinished) { bump() },
-		func(e *proto.NetworkLoadingFailed)   { bump() },
-		func(e *proto.DOMDocumentUpdated)     { bump() },
-	)
-	defer stop()
+		func(e *proto.NetworkLoadingFailed) { bump() },
+		func(e *proto.DOMDocumentUpdated) { bump() },
+	)()
 
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()

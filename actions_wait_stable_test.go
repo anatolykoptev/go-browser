@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 	"time"
+
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -36,7 +37,9 @@ func TestDoWaitStable_TimesOutOnBusyPage(t *testing.T) {
 	}
 	br := acquireSharedBrowser(t)
 	// Page with a setInterval that fires XHR every 100ms — never settles.
-	page, _ := br.Page(proto.TargetCreateTarget{URL: "data:text/html,<script>setInterval(()=>fetch('/x'),100)</script>"})
+	// Use absolute URL so the request is actually dispatched (relative paths
+	// on data: URLs fail before producing NetworkRequestWillBeSent).
+	page, _ := br.Page(proto.TargetCreateTarget{URL: "data:text/html,<script>setInterval(()=>fetch('https://example.invalid/x').catch(()=>{}),100)</script>"})
 	defer func() { _ = page.Close() }()
 
 	dc := &dispatchContext{ctx: context.Background(), page: page}
