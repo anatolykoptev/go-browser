@@ -204,41 +204,68 @@ func (c *LogCollector) Resubscribe(page *rod.Page) {
 }
 
 func (c *LogCollector) startSubscription(page *rod.Page) {
+	// Serialize subscription swaps so two concurrent callers don't race the
+	// cancel/start sequence.
 	c.subMu.Lock()
+	defer c.subMu.Unlock()
 	if c.subCancel != nil {
 		c.subCancel()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	c.subCtx = ctx
-	c.subCancel = cancel
-	c.subMu.Unlock()
 
+	// Enable domains directly (bypass rod's state cache — it can be stale
+	// after a prior subscription was cancelled, which restores "disabled"
+	// lazily inside the defunct goroutine).
 	_ = proto.NetworkEnable{}.Call(page)
 	_ = proto.RuntimeEnable{}.Call(page)
 	_ = proto.PageEnable{}.Call(page)
 
-	bound := page.Context(ctx)
-	go bound.EachEvent(
-		func(e *proto.NetworkRequestWillBeSent) {
-			// Add as network entry
+	ctx, cancel := context.WithCancel(page.GetContext())
+	c.subCtx = ctx
+	c.subCancel = cancel
+
+	// Subscribe directly to the page's CDP message stream instead of rod's
+	// EachEvent: EachEvent owns the per-session EnableDomain state machine,
+	// and when its wait-goroutine exits it "restores" (i.e. disables) the
+	// domains it enabled. That caused Runtime events to stop arriving on the
+	// next call. Manual Load/dispatch doesn't touch that cache at all.
+	msgs := page.Context(ctx).Event()
+	go c.runLoop(ctx, msgs)
+}
+
+func (c *LogCollector) runLoop(ctx context.Context, msgs <-chan *rod.Message) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-msgs:
+			if !ok {
+				return
+			}
+			c.dispatch(msg)
+		}
+	}
+}
+
+func (c *LogCollector) dispatch(msg *rod.Message) {
+	switch msg.Method {
+	case (&proto.NetworkRequestWillBeSent{}).ProtoEvent():
+		var e proto.NetworkRequestWillBeSent
+		if msg.Load(&e) {
 			c.AddNetwork(NetworkEntry{
 				Method: e.Request.Method,
 				URL:    e.Request.URL,
 				TS:     time.Now().UnixMilli(),
 			})
-		},
-		func(e *proto.PageFrameNavigated) {
-			// Main frame has no parent. Sub-frames/iframes have ParentID set.
-			if e.Frame != nil && e.Frame.ParentID == "" {
-				c.AddNavigation(NavigationEntry{
-					TS:  time.Now().UnixMilli(),
-					URL: e.Frame.URL,
-				})
-			}
-		},
-		func(e *proto.NetworkResponseReceived) {
+		}
+	case (&proto.PageFrameNavigated{}).ProtoEvent():
+		var e proto.PageFrameNavigated
+		if msg.Load(&e) && e.Frame != nil && e.Frame.ParentID == "" {
+			c.AddNavigation(NavigationEntry{TS: time.Now().UnixMilli(), URL: e.Frame.URL})
+		}
+	case (&proto.NetworkResponseReceived{}).ProtoEvent():
+		var e proto.NetworkResponseReceived
+		if msg.Load(&e) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			for i := len(c.network) - 1; i >= 0; i-- {
 				if c.network[i].URL == e.Response.URL && c.network[i].Status == 0 {
 					c.network[i].Status = e.Response.Status
@@ -249,10 +276,12 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 					break
 				}
 			}
-		},
-		func(e *proto.NetworkLoadingFailed) {
+			c.mu.Unlock()
+		}
+	case (&proto.NetworkLoadingFailed{}).ProtoEvent():
+		var e proto.NetworkLoadingFailed
+		if msg.Load(&e) {
 			c.mu.Lock()
-			defer c.mu.Unlock()
 			for i := len(c.network) - 1; i >= 0; i-- {
 				if c.network[i].Status == 0 {
 					c.network[i].Error = e.ErrorText
@@ -260,8 +289,11 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 					break
 				}
 			}
-		},
-		func(e *proto.RuntimeConsoleAPICalled) {
+			c.mu.Unlock()
+		}
+	case (&proto.RuntimeConsoleAPICalled{}).ProtoEvent():
+		var e proto.RuntimeConsoleAPICalled
+		if msg.Load(&e) {
 			var parts []string
 			for _, arg := range e.Args {
 				if arg.Value.Val() != nil {
@@ -273,15 +305,11 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 				Text:  strings.Join(parts, " "),
 				TS:    time.Now().UnixMilli(),
 			})
-		},
-		func(e *proto.RuntimeExceptionThrown) {
-			if e.ExceptionDetails == nil {
-				return
-			}
+		}
+	case (&proto.RuntimeExceptionThrown{}).ProtoEvent():
+		var e proto.RuntimeExceptionThrown
+		if msg.Load(&e) && e.ExceptionDetails != nil {
 			ed := e.ExceptionDetails
-			// Build best-available description. ed.Text (e.g. "Uncaught") is
-			// always set. Exception.Description has the full stack for Error
-			// objects; Exception.Value is set when a primitive is thrown.
 			text := ed.Text
 			if ed.Exception != nil {
 				if desc := ed.Exception.Description; desc != "" {
@@ -308,8 +336,8 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 				entry.StackTrace = b.String()
 			}
 			c.AddException(entry)
-		},
-	)()
+		}
+	}
 }
 
 // SubscribeConsole enables the Runtime domain for console log capture.
