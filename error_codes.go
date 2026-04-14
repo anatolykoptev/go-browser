@@ -1,6 +1,42 @@
 package browser
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
+
+// Sentinel errors — actions wrap these at error sites so ClassifyError
+// can use errors.Is instead of fragile string matching.
+var (
+	ErrSelectorNotFound  = errors.New("selector_not_found")
+	ErrElementNotVisible = errors.New("element_not_visible")
+	ErrNavigationTimeout = errors.New("navigation_timeout")
+	ErrActionTimeout     = errors.New("action_timeout")
+	ErrContextCanceled   = errors.New("context_canceled")
+	ErrTargetCrashed     = errors.New("target_crashed")
+	ErrInvalidInput      = errors.New("invalid_input")
+	ErrFrameNotFound     = errors.New("frame_not_found")
+	ErrCaptchaDetected   = errors.New("captcha_detected")
+	ErrNetworkError      = errors.New("network_error")
+	ErrCdpError          = errors.New("cdp_error")
+)
+
+var sentinelTable = []struct {
+	err  error
+	code ErrorCode
+}{
+	{ErrSelectorNotFound, ErrCodeSelectorNotFound},
+	{ErrElementNotVisible, ErrCodeElementNotVisible},
+	{ErrNavigationTimeout, ErrCodeNavigationTimeout},
+	{ErrActionTimeout, ErrCodeActionTimeout},
+	{ErrContextCanceled, ErrCodeContextCanceled},
+	{ErrTargetCrashed, ErrCodeTargetCrashed},
+	{ErrInvalidInput, ErrCodeInvalidInput},
+	{ErrFrameNotFound, ErrCodeFrameNotFound},
+	{ErrCaptchaDetected, ErrCodeCaptchaDetected},
+	{ErrNetworkError, ErrCodeNetworkError},
+	{ErrCdpError, ErrCodeCdpError},
+}
 
 // ErrorCode is a stable machine-readable classification for action failures.
 // Keep values snake_case and append-only — agents branch on these values.
@@ -42,7 +78,20 @@ func ClassifyError(err error) ErrorCode {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
+	// 1. Typed sentinel lookup — bulletproof.
+	for _, s := range sentinelTable {
+		if errors.Is(err, s.err) { 
+			return s.code 
+		}
+	}
+	// 2. String fallback — covers paths that haven't been wrapped yet.
+	return classifyByString(err.Error())
+}
+
+// classifyByString is the legacy string-matching path, kept as fallback
+// for error sources that haven't been wrapped with sentinels. New code
+// should wrap with sentinels instead.
+func classifyByString(s string) ErrorCode {
 	isTimeout := strings.Contains(s, "timeout") ||
 		strings.Contains(s, "timed out") ||
 		strings.Contains(s, "context deadline exceeded")

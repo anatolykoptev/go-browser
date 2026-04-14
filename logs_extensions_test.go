@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"strings"
 	"testing"
 	"time"
 	"github.com/go-rod/rod/lib/proto"
@@ -68,5 +69,50 @@ func TestLogCollector_CapturesExceptionsAndNavigations_Integration(t *testing.T)
 	}
 	if len(s.Navigations) == 0 {
 		t.Error("expected navigation event to be captured")
+	}
+}
+
+func TestLogCollector_CapturesMainFrameNavigation_Integration(t *testing.T) {
+	if testing.Short() { t.Skip("integration") }
+	br := acquireSharedBrowser(t)
+	page, _ := br.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	defer func() { _ = page.Close() }()
+
+	c := NewLogCollector()
+	c.SubscribeCDP(page)
+
+	if err := page.Navigate("https://example.com"); err != nil { t.Fatal(err) }
+	_ = page.WaitLoad()
+	time.Sleep(500 * time.Millisecond)
+
+	res := c.Since(0)
+	if len(res.Navigations) == 0 {
+		t.Error("expected main-frame navigation event, got none")
+	}
+	foundExample := false
+	for _, n := range res.Navigations {
+		if strings.Contains(n.URL, "example.com") { foundExample = true; break }
+	}
+	if !foundExample {
+		t.Errorf("expected example.com navigation, got %+v", res.Navigations)
+	}
+}
+
+func TestLogCollector_SinceFiltered(t *testing.T) {
+	c := NewLogCollector()
+	c.AddNetwork(NetworkEntry{URL: "a", Status: 200, TS: 100})
+	c.AddNetwork(NetworkEntry{URL: "b", Status: 404, TS: 200})
+	c.AddNetwork(NetworkEntry{URL: "c", Status: 500, TS: 300})
+	c.AddConsole(ConsoleEntry{Text: "log", TS: 150})
+
+	// Only errors
+	r := c.SinceFiltered(0, SinceFilter{Kinds: []string{"network"}, StatusMin: 400})
+	if len(r.Network) != 2 { t.Errorf("want 2 error rows, got %d", len(r.Network)) }
+	if len(r.Console) != 0 { t.Errorf("console should be filtered out, got %d", len(r.Console)) }
+
+	// Limit
+	r = c.SinceFiltered(0, SinceFilter{Limit: 1})
+	if len(r.Network) != 1 || len(r.Console) != 1 {
+		t.Errorf("limit=1 per category, got net=%d con=%d", len(r.Network), len(r.Console))
 	}
 }

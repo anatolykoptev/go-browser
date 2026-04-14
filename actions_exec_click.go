@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -139,7 +140,7 @@ func resolveRefNodeID(page *rod.Page, selector string, refMap *RefMap) (cdputil.
 func doClick(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) error {
 	el, err := resolveElement(ctx, page, a.Selector, refMap)
 	if err != nil {
-		return fmt.Errorf("click: find %q: %w", a.Selector, err)
+		return fmt.Errorf("click: find %q: %w", a.Selector, errors.Join(err, ErrSelectorNotFound))
 	}
 
 	release := holdModifiers(page, a.Modifiers)
@@ -167,7 +168,7 @@ func doClick(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) erro
 func doClickStealth(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) error {
 	nodeID, err := resolveRefNodeID(page, a.Selector, refMap)
 	if err != nil {
-		return fmt.Errorf("click: %w", err)
+		return fmt.Errorf("click: %w", errors.Join(err, ErrSelectorNotFound))
 	}
 	_ = cdputil.ScrollIntoView(page, nodeID) // best-effort
 
