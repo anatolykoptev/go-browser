@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -67,8 +68,12 @@ type ConsoleEntry struct {
 
 // ExceptionEntry is a captured JavaScript exception or promise rejection.
 type ExceptionEntry struct {
-	Text string `json:"text"`
-	TS   int64  `json:"ts"` // Unix ms timestamp when entry was recorded
+	TS           int64  `json:"ts"` // Unix ms timestamp when entry was recorded
+	Text         string `json:"text"`
+	URL          string `json:"url,omitempty"`
+	LineNumber   int    `json:"line_number,omitempty"`
+	ColumnNumber int    `json:"column_number,omitempty"`
+	StackTrace   string `json:"stack_trace,omitempty"`
 }
 
 // NavigationEntry is a captured main-frame navigation event.
@@ -233,14 +238,39 @@ func (c *LogCollector) SubscribeCDP(page *rod.Page) {
 			})
 		},
 		func(e *proto.RuntimeExceptionThrown) {
-			text := ""
-			if e.ExceptionDetails != nil && e.ExceptionDetails.Exception != nil {
-				text = e.ExceptionDetails.Exception.Description
+			if e.ExceptionDetails == nil {
+				return
 			}
-			c.AddException(ExceptionEntry{
-				Text: text,
-				TS:   time.Now().UnixMilli(),
-			})
+			ed := e.ExceptionDetails
+			// Build best-available description. ed.Text (e.g. "Uncaught") is
+			// always set. Exception.Description has the full stack for Error
+			// objects; Exception.Value is set when a primitive is thrown.
+			text := ed.Text
+			if ed.Exception != nil {
+				if desc := ed.Exception.Description; desc != "" {
+					text = desc
+				} else if s := ed.Exception.Value.Str(); s != "" {
+					text = ed.Text + ": " + s
+				}
+			}
+			if text == "" {
+				text = "unknown exception"
+			}
+			entry := ExceptionEntry{
+				TS:           time.Now().UnixMilli(),
+				Text:         text,
+				URL:          ed.URL,
+				LineNumber:   int(ed.LineNumber),
+				ColumnNumber: int(ed.ColumnNumber),
+			}
+			if ed.StackTrace != nil {
+				var b strings.Builder
+				for _, f := range ed.StackTrace.CallFrames {
+					fmt.Fprintf(&b, "  at %s (%s:%d:%d)\n", f.FunctionName, f.URL, f.LineNumber, f.ColumnNumber)
+				}
+				entry.StackTrace = b.String()
+			}
+			c.AddException(entry)
 		},
 	)()
 }
@@ -261,8 +291,8 @@ type SinceFilter struct {
 
 // SinceResult contains filtered log entries since a given timestamp.
 type SinceResult struct {
-	Network     []NetworkEntry     `json:"network"`
-	Console     []ConsoleEntry     `json:"console"`
+	Network     []NetworkEntry    `json:"network"`
+	Console     []ConsoleEntry    `json:"console"`
 	Exceptions  []ExceptionEntry  `json:"exceptions"`
 	Navigations []NavigationEntry `json:"navigations"`
 }
@@ -276,7 +306,9 @@ func (c *LogCollector) Since(sinceMs int64) SinceResult {
 // Reduces payload size when agents only want errors or a narrow slice.
 func (c *LogCollector) SinceFiltered(sinceMs int64, f SinceFilter) SinceResult {
 	kinds := map[string]bool{}
-	for _, k := range f.Kinds { kinds[k] = true }
+	for _, k := range f.Kinds {
+		kinds[k] = true
+	}
 	include := func(k string) bool { return len(kinds) == 0 || kinds[k] }
 
 	c.mu.Lock()
@@ -284,31 +316,49 @@ func (c *LogCollector) SinceFiltered(sinceMs int64, f SinceFilter) SinceResult {
 	out := SinceResult{}
 	if include("network") {
 		for _, e := range c.network {
-			if e.TS <= sinceMs { continue }
-			if f.StatusMin > 0 && e.Status < f.StatusMin { continue }
+			if e.TS <= sinceMs {
+				continue
+			}
+			if f.StatusMin > 0 && e.Status < f.StatusMin {
+				continue
+			}
 			out.Network = append(out.Network, e)
-			if f.Limit > 0 && len(out.Network) >= f.Limit { break }
+			if f.Limit > 0 && len(out.Network) >= f.Limit {
+				break
+			}
 		}
 	}
 	if include("console") {
 		for _, e := range c.console {
-			if e.TS <= sinceMs { continue }
+			if e.TS <= sinceMs {
+				continue
+			}
 			out.Console = append(out.Console, e)
-			if f.Limit > 0 && len(out.Console) >= f.Limit { break }
+			if f.Limit > 0 && len(out.Console) >= f.Limit {
+				break
+			}
 		}
 	}
 	if include("exceptions") {
 		for _, e := range c.exceptions {
-			if e.TS <= sinceMs { continue }
+			if e.TS <= sinceMs {
+				continue
+			}
 			out.Exceptions = append(out.Exceptions, e)
-			if f.Limit > 0 && len(out.Exceptions) >= f.Limit { break }
+			if f.Limit > 0 && len(out.Exceptions) >= f.Limit {
+				break
+			}
 		}
 	}
 	if include("navigations") {
 		for _, e := range c.navigations {
-			if e.TS <= sinceMs { continue }
+			if e.TS <= sinceMs {
+				continue
+			}
 			out.Navigations = append(out.Navigations, e)
-			if f.Limit > 0 && len(out.Navigations) >= f.Limit { break }
+			if f.Limit > 0 && len(out.Navigations) >= f.Limit {
+				break
+			}
 		}
 	}
 	return out

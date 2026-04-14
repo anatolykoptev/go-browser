@@ -1,9 +1,11 @@
 package browser
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -73,7 +75,9 @@ func TestLogCollector_CapturesExceptionsAndNavigations_Integration(t *testing.T)
 }
 
 func TestLogCollector_CapturesMainFrameNavigation_Integration(t *testing.T) {
-	if testing.Short() { t.Skip("integration") }
+	if testing.Short() {
+		t.Skip("integration")
+	}
 	br := acquireSharedBrowser(t)
 	page, _ := br.Page(proto.TargetCreateTarget{URL: "about:blank"})
 	defer func() { _ = page.Close() }()
@@ -81,7 +85,9 @@ func TestLogCollector_CapturesMainFrameNavigation_Integration(t *testing.T) {
 	c := NewLogCollector()
 	c.SubscribeCDP(page)
 
-	if err := page.Navigate("https://example.com"); err != nil { t.Fatal(err) }
+	if err := page.Navigate("https://example.com"); err != nil {
+		t.Fatal(err)
+	}
 	_ = page.WaitLoad()
 	time.Sleep(500 * time.Millisecond)
 
@@ -91,7 +97,10 @@ func TestLogCollector_CapturesMainFrameNavigation_Integration(t *testing.T) {
 	}
 	foundExample := false
 	for _, n := range res.Navigations {
-		if strings.Contains(n.URL, "example.com") { foundExample = true; break }
+		if strings.Contains(n.URL, "example.com") {
+			foundExample = true
+			break
+		}
 	}
 	if !foundExample {
 		t.Errorf("expected example.com navigation, got %+v", res.Navigations)
@@ -107,12 +116,54 @@ func TestLogCollector_SinceFiltered(t *testing.T) {
 
 	// Only errors
 	r := c.SinceFiltered(0, SinceFilter{Kinds: []string{"network"}, StatusMin: 400})
-	if len(r.Network) != 2 { t.Errorf("want 2 error rows, got %d", len(r.Network)) }
-	if len(r.Console) != 0 { t.Errorf("console should be filtered out, got %d", len(r.Console)) }
+	if len(r.Network) != 2 {
+		t.Errorf("want 2 error rows, got %d", len(r.Network))
+	}
+	if len(r.Console) != 0 {
+		t.Errorf("console should be filtered out, got %d", len(r.Console))
+	}
 
 	// Limit
 	r = c.SinceFiltered(0, SinceFilter{Limit: 1})
 	if len(r.Network) != 1 || len(r.Console) != 1 {
 		t.Errorf("limit=1 per category, got net=%d con=%d", len(r.Network), len(r.Console))
+	}
+}
+
+// TestLogCollector_CapturesUncaughtException_Integration verifies that runtime
+// exceptions thrown asynchronously (setTimeout) are captured with a non-empty
+// Text field containing the error marker — the Round 4 fix.
+func TestLogCollector_CapturesUncaughtException_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	br := acquireSharedBrowser(t)
+	page, _ := br.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	defer func() { _ = page.Close() }()
+
+	c := NewLogCollector()
+	c.SubscribeCDP(page)
+
+	// Let subscription settle before triggering the exception.
+	time.Sleep(100 * time.Millisecond)
+
+	html := `<html><body><script>setTimeout(function(){ throw new Error("round4-marker") }, 50);</script></body></html>`
+	_ = page.Navigate("data:text/html," + url.QueryEscape(html))
+	_ = page.WaitLoad()
+	time.Sleep(700 * time.Millisecond)
+
+	res := c.Since(0)
+	if len(res.Exceptions) == 0 {
+		t.Fatal("expected at least one exception entry, got none")
+	}
+	found := false
+	for _, e := range res.Exceptions {
+		if strings.Contains(e.Text, "round4-marker") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("marker not found in exceptions: %+v", res.Exceptions)
 	}
 }
