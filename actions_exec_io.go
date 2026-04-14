@@ -12,6 +12,7 @@ import (
 	"golang.org/x/image/draw"
 
 	"github.com/anatolykoptev/go-browser/cdputil"
+	"github.com/anatolykoptev/go-browser/humanize"
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
@@ -86,13 +87,92 @@ func doEvaluate(page *rod.Page, script string) (any, error) {
 	return res.Result.Value.Val(), nil
 }
 
-func doPress(page *rod.Page, key string) error {
-	k, ok := keyMap[key]
-	if !ok {
+// modifierBitmask converts a list of modifier names into the CDP
+// Input.dispatchKeyEvent modifiers bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
+// Unknown names are ignored.
+func modifierBitmask(modifiers []string) int {
+	var m int
+	for _, mod := range modifiers {
+		switch mod {
+		case "Alt":
+			m |= 1
+		case "Control":
+			m |= 2
+		case "Meta":
+			m |= 4
+		case "Shift":
+			m |= 8
+		}
+	}
+	return m
+}
+
+// doPress sends a keystroke to the focused element.
+// Named keys (Enter/Tab/F1-F12/arrows/etc) go through rod's keyboard with
+// optional modifier hold. Single printable ASCII characters (letters/digits/
+// punctuation) are sent via raw CDP Input.dispatchKeyEvent so modifier combos
+// like Ctrl+A, Cmd+V, Shift+A work — CDP supports arbitrary keys even though
+// rod's named-key registry doesn't.
+func doPress(page *rod.Page, key string, modifiers []string) error {
+	if key == "" {
+		return fmt.Errorf("press: empty key")
+	}
+	if k, ok := keyMap[key]; ok {
+		release := holdModifiers(page, modifiers)
+		defer release()
+		if err := page.Keyboard.Press(k); err != nil {
+			return fmt.Errorf("press %q: %w", key, err)
+		}
+		return nil
+	}
+	// Single-character path: CDP dispatchKeyEvent with modifier bitmask.
+	runes := []rune(key)
+	if len(runes) != 1 {
 		return fmt.Errorf("press: unknown key %q", key)
 	}
-	if err := page.Keyboard.Press(k); err != nil {
-		return fmt.Errorf("press %q: %w", key, err)
+	ch := runes[0]
+	if ch > 0x7E || ch < 0x20 {
+		return fmt.Errorf("press: unsupported key %q", key)
+	}
+	ci := humanize.LookupChar(ch)
+	if ci.VK == 0 {
+		return fmt.Errorf("press: unsupported key %q", key)
+	}
+	mods := modifierBitmask(modifiers)
+	// If the character itself is shifted (e.g. "A", "!") implicitly add Shift.
+	if ci.Shift {
+		mods |= 8
+	}
+	if err := (proto.InputDispatchKeyEvent{
+		Type:                  proto.InputDispatchKeyEventTypeRawKeyDown,
+		Key:                   key,
+		Code:                  ci.Code,
+		WindowsVirtualKeyCode: ci.VK,
+		Modifiers:             mods,
+	}).Call(page); err != nil {
+		return fmt.Errorf("press %q: keydown: %w", key, err)
+	}
+	// Only emit the Char event when no non-shift modifier is held — otherwise
+	// Ctrl+A would insert the literal "a" on some pages.
+	if mods&^8 == 0 {
+		if err := (proto.InputDispatchKeyEvent{
+			Type:                  proto.InputDispatchKeyEventTypeChar,
+			Text:                  key,
+			UnmodifiedText:        key,
+			WindowsVirtualKeyCode: ci.VK,
+			Modifiers:             mods,
+		}).Call(page); err != nil {
+			return fmt.Errorf("press %q: char: %w", key, err)
+		}
+	}
+	if err := (proto.InputDispatchKeyEvent{
+		Type:                  proto.InputDispatchKeyEventTypeKeyUp,
+		Key:                   key,
+		Code:                  ci.Code,
+		WindowsVirtualKeyCode: ci.VK,
+		Modifiers:             mods,
+	}).Call(page); err != nil {
+		return fmt.Errorf("press %q: keyup: %w", key, err)
 	}
 	return nil
 }
