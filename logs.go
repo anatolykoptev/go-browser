@@ -239,6 +239,27 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 	// next call. Manual Load/dispatch doesn't touch that cache at all.
 	msgs := page.Context(ctx).Event()
 	go c.runLoop(ctx, msgs)
+
+	// DIAG: also tap the browser-level event bus to confirm whether Runtime
+	// events are being emitted at all for this session.
+	bmsgs := page.Browser().Context(ctx).Event()
+	pageSid := page.SessionID
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case m, ok := <-bmsgs:
+				if !ok {
+					return
+				}
+				if strings.HasPrefix(m.Method, "Runtime.") || strings.HasPrefix(m.Method, "Log.") {
+					matchPage := m.SessionID == pageSid
+					fmt.Fprintf(os.Stderr, "BROWSER-EVT method=%s sid=%s matchPageSid=%v\n", m.Method, m.SessionID, matchPage)
+				}
+			}
+		}
+	}()
 }
 
 func (c *LogCollector) runLoop(ctx context.Context, msgs <-chan *rod.Message) {
@@ -256,9 +277,7 @@ func (c *LogCollector) runLoop(ctx context.Context, msgs <-chan *rod.Message) {
 }
 
 func (c *LogCollector) dispatch(msg *rod.Message) {
-	if strings.HasPrefix(msg.Method, "Runtime.") || strings.HasPrefix(msg.Method, "Log.") {
-		fmt.Fprintf(os.Stderr, "CDP-DISPATCH method=%s sessionID=%s\n", msg.Method, msg.SessionID)
-	}
+	fmt.Fprintf(os.Stderr, "CDP-DISPATCH method=%s sessionID=%s\n", msg.Method, msg.SessionID)
 	switch msg.Method {
 	case (&proto.NetworkRequestWillBeSent{}).ProtoEvent():
 		var e proto.NetworkRequestWillBeSent
