@@ -10,18 +10,20 @@ func init() {
 }
 
 func execTypeText(dc dispatchContext, a Action) (any, error) {
+	ctx, cancel := dc.withActionTimeout(a.TimeoutMs)
+	defer cancel()
 	if dc.stealthMode || a.Slowly {
-		return nil, withRetry(dc.ctx, func() error {
-			return doTypeTextCDP(dc.ctx, dc.page, a.Selector, a.Text, a.Submit, dc.refMap)
+		return nil, withRetry(ctx, func() error {
+			return doTypeTextCDP(ctx, dc.page, a.Selector, a.Text, a.Submit, dc.refMap)
 		})
 	}
 	if a.Humanize && dc.cursor != nil {
-		return nil, withRetry(dc.ctx, func() error {
-			return doTypeTextHumanized(dc.ctx, dc.page, a.Selector, a.Text, dc.cursor)
+		return nil, withRetry(ctx, func() error {
+			return doTypeTextHumanized(ctx, dc.page, a.Selector, a.Text, dc.cursor)
 		})
 	}
-	return nil, withRetry(dc.ctx, func() error {
-		return doTypeText(dc.ctx, dc.page, a.Selector, a.Text, a.Slowly, a.Submit, dc.refMap)
+	return nil, withRetry(ctx, func() error {
+		return doTypeText(ctx, dc.page, a.Selector, a.Text, a.Slowly, a.Submit, dc.refMap)
 	})
 }
 
