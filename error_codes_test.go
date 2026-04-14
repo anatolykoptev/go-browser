@@ -14,6 +14,13 @@ func TestClassifyError(t *testing.T) {
 		{"navigation timeout after 30s", ErrCodeNavigationTimeout},
 		{"action timed out", ErrCodeActionTimeout},
 		{"element not found: #foo", ErrCodeSelectorNotFound},
+		// Selector hunt that hit a deadline — domain signal wins over context.
+		{`click: find "#missing": context deadline exceeded`, ErrCodeSelectorNotFound},
+		{`wait_for: find ".thing": timed out`, ErrCodeSelectorNotFound},
+		// Plain deadline without selector context still reads as timeout.
+		{"context deadline exceeded", ErrCodeActionTimeout},
+		// Navigation deadline — still nav timeout even with new ordering.
+		{"navigation: context deadline exceeded", ErrCodeNavigationTimeout},
 		{"element not visible", ErrCodeElementNotVisible},
 		{"target has crashed", ErrCodeTargetCrashed},
 		{"frame iframe#pay not found", ErrCodeFrameNotFound},
