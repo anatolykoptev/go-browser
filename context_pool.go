@@ -63,7 +63,7 @@ type ManagedPage struct {
 	Session      string
 	Page         *rod.Page
 	ready        chan struct{} // closed when Page != nil (or creation failed)
-	readyErr     error        // non-nil if page creation failed
+	readyErr     error         // non-nil if page creation failed
 	URL          string
 	LastUsed     time.Time
 	TTL          time.Duration // 0 = never expires
@@ -151,6 +151,8 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 			}
 			mc.Pages[session] = mp
 			mc.Mu.Unlock()
+			// Adopted page is already live — subscribe LogCollector immediately.
+			mp.LogCollector.SubscribeCDP(adopted)
 			return mp, nil
 		}
 		mc.Mu.Lock()
@@ -196,6 +198,11 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	}
 	mp.Page = page
 	mc.Mu.Unlock()
+	// Wire LogCollector to the real page. SubscribeCDP starts a listener goroutine
+	// that runs until the page is closed.
+	if mp.LogCollector != nil {
+		mp.LogCollector.SubscribeCDP(page)
+	}
 	close(placeholder.ready)
 	return mp, nil
 }
@@ -391,7 +398,7 @@ func (p *ContextPool) DetachSession(session, mode string) error {
 	if err != nil {
 		return fmt.Errorf("session %q not found", session)
 	}
-	
+
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 	mp.DetachedAt = time.Now()
@@ -405,7 +412,7 @@ func (p *ContextPool) AttachSession(session, mode string) error {
 	if err != nil {
 		return fmt.Errorf("session %q not found", session)
 	}
-	
+
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 	mp.DetachedAt = time.Time{}
