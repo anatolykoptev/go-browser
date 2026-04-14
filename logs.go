@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -215,9 +216,17 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 	// Enable domains directly (bypass rod's state cache — it can be stale
 	// after a prior subscription was cancelled, which restores "disabled"
 	// lazily inside the defunct goroutine).
-	_ = proto.NetworkEnable{}.Call(page)
-	_ = proto.RuntimeEnable{}.Call(page)
-	_ = proto.PageEnable{}.Call(page)
+	if err := (proto.NetworkEnable{}).Call(page); err != nil {
+		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Network.enable err=%v\n", err)
+	}
+	if err := (proto.RuntimeEnable{}).Call(page); err != nil {
+		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Runtime.enable err=%v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Runtime.enable OK sessionID=%s\n", page.SessionID)
+	}
+	if err := (proto.PageEnable{}).Call(page); err != nil {
+		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Page.enable err=%v\n", err)
+	}
 
 	ctx, cancel := context.WithCancel(page.GetContext())
 	c.subCtx = ctx
@@ -247,6 +256,9 @@ func (c *LogCollector) runLoop(ctx context.Context, msgs <-chan *rod.Message) {
 }
 
 func (c *LogCollector) dispatch(msg *rod.Message) {
+	if strings.HasPrefix(msg.Method, "Runtime.") || strings.HasPrefix(msg.Method, "Log.") {
+		fmt.Fprintf(os.Stderr, "CDP-DISPATCH method=%s sessionID=%s\n", msg.Method, msg.SessionID)
+	}
 	switch msg.Method {
 	case (&proto.NetworkRequestWillBeSent{}).ProtoEvent():
 		var e proto.NetworkRequestWillBeSent
