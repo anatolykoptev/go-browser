@@ -168,9 +168,13 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		mp.LogCollector = logs
 		logs.SubscribeCDP(page)
 	} else {
-		_ = proto.NetworkEnable{}.Call(page)
-		_ = proto.RuntimeEnable{}.Call(page)
-		_ = proto.PageEnable{}.Call(page)
+		// Navigation invalidates the renderer-side Runtime execution context;
+		// rod's EachEvent goroutine keeps running but no longer delivers
+		// Runtime.consoleAPICalled / exceptionThrown because its cached
+		// session state is stale. Resubscribe tears down the old goroutine,
+		// re-enables Network/Runtime/Page on the current session, and starts
+		// a fresh EachEvent bound to a new context.
+		logs.Resubscribe(page)
 	}
 
 	cursor := humanize.NewCursor(390, 290)

@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -89,6 +90,9 @@ type LogCollector struct {
 	console     []ConsoleEntry
 	exceptions  []ExceptionEntry
 	navigations []NavigationEntry
+	subMu       sync.Mutex
+	subCancel   context.CancelFunc
+	subCtx      context.Context
 }
 
 // NewLogCollector creates an empty log collector.
@@ -185,13 +189,36 @@ func (c *LogCollector) Collect() ([]NetworkEntry, []ConsoleEntry) {
 
 // SubscribeCDP enables the Network, Runtime, and Page domains and starts collecting all events.
 // Call this after page creation and before navigation.
-// The event listener runs in a background goroutine until the page is closed.
+// The event listener runs in a background goroutine until the page is closed or Resubscribe is called.
 func (c *LogCollector) SubscribeCDP(page *rod.Page) {
+	c.startSubscription(page)
+}
+
+// Resubscribe cancels any existing EachEvent goroutine and starts a fresh one on the given page.
+// Use this after navigation: Chrome emits Runtime.executionContextsCleared which invalidates
+// cached Runtime-domain state inside rod; the old goroutine keeps running but receives no
+// consoleAPICalled/exceptionThrown events. Network/Page events continue unaffected because they
+// are emitted at the page/target layer.
+func (c *LogCollector) Resubscribe(page *rod.Page) {
+	c.startSubscription(page)
+}
+
+func (c *LogCollector) startSubscription(page *rod.Page) {
+	c.subMu.Lock()
+	if c.subCancel != nil {
+		c.subCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.subCtx = ctx
+	c.subCancel = cancel
+	c.subMu.Unlock()
+
 	_ = proto.NetworkEnable{}.Call(page)
 	_ = proto.RuntimeEnable{}.Call(page)
 	_ = proto.PageEnable{}.Call(page)
 
-	go page.EachEvent(
+	bound := page.Context(ctx)
+	go bound.EachEvent(
 		func(e *proto.NetworkRequestWillBeSent) {
 			// Add as network entry
 			c.AddNetwork(NetworkEntry{
