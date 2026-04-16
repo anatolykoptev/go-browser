@@ -56,6 +56,20 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 	// Slow path: build the new context (CDP call happens here, unlocked).
 	mc := &ManagedContext{Mode: mode, Proxy: proxy, Pages: make(map[string]*ManagedPage)}
 
+	// For default mode, discover the default BrowserContextID from existing tabs
+	// so that TargetCreateTarget creates a tab in the same window instead of a new one.
+	if mode == "default" {
+		targets, terr := proto.TargetGetTargets{}.Call(p.browser)
+		if terr == nil {
+			for _, t := range targets.TargetInfos {
+				if t.Type == "page" {
+					mc.ID = t.BrowserContextID
+					break
+				}
+			}
+		}
+	}
+
 	if mode != "default" {
 		proxyServer, _, _ := parseProxy(proxy)
 		res, err := proto.TargetCreateBrowserContext{
@@ -72,7 +86,7 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 	defer p.contextsMu.Unlock()
 	// Double-check: another goroutine may have created it while we were in CDP.
 	if existing, ok := p.contexts[key]; ok {
-		if mc.ID != "" {
+		if mc.ID != "" && mode != "default" {
 			_ = proto.TargetDisposeBrowserContext{BrowserContextID: mc.ID}.Call(p.browser)
 		}
 		return existing, nil
