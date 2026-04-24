@@ -34,6 +34,7 @@ func TestSentinel_AllSentinelsClassifyCorrectly(t *testing.T) {
 	}{
 		{ErrSelectorNotFound, ErrCodeSelectorNotFound},
 		{ErrElementNotVisible, ErrCodeElementNotVisible},
+		{ErrElementCovered, ErrCodeElementCovered},
 		{ErrNavigationTimeout, ErrCodeNavigationTimeout},
 		{ErrActionTimeout, ErrCodeActionTimeout},
 		{ErrContextCanceled, ErrCodeContextCanceled},

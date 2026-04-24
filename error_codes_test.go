@@ -30,6 +30,9 @@ func TestClassifyError(t *testing.T) {
 		// JS exceptions from evaluate / Uncaught runtime errors.
 		{`evaluate: Uncaught`, ErrCodeJsException},
 		{`evaluate: Uncaught ReferenceError: foo is not defined`, ErrCodeJsException},
+		// Click covered-by-overlay — typed path uses sentinel; string fallback
+		// handles rod's raw `element covered by: <div.modal>` text.
+		{"click: element covered by: <div class=modal>", ErrCodeElementCovered},
 		{"something weird happened", ErrCodeUnknown},
 	}
 	for _, c := range cases {
