@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -72,9 +73,39 @@ func doScreenshot(page *rod.Page, fullPage bool) (string, error) {
 // doEvaluate runs JS as a raw expression via CDP RuntimeEvaluate.
 // Unlike rod's page.Eval (which wraps in function(){}.apply()), this accepts
 // any JS expression: "document.title", "1+1", "JSON.stringify({a:1})", etc.
+//
+// The raw expression is wrapped in an async IIFE that JSON.stringify's the
+// result in the renderer. CDP then returns a plain string we unmarshal in Go.
+// Why: ReturnByValue + DOM-adjacent values (Element refs, live NodeList, window)
+// trip CDP's "Object reference chain is too long" (-32000), which the naive
+// path surfaces as ErrJsException even though JS never threw. Stringifying
+// inside the renderer sidesteps that — JSON.stringify naturally serializes
+// primitives / plain objects and yields null for DOM nodes / functions.
+//
+// Caveats:
+//   - Scripts that rely on `Runtime.evaluate`'s last-completion-value from a
+//     top-level statement (e.g. `var x=1; x+1` without `return`) are no longer
+//     supported — callers must write an expression or an IIFE returning a value.
+//   - Unserializable results (functions, circular refs) now return nil instead
+//     of the previous garbled value; callers relying on the old garbage should
+//     stringify themselves.
 func doEvaluate(page *rod.Page, script string) (any, error) {
+	// Renderer-side wrap: evaluate the caller's script in an inner arrow so bare
+	// expressions (`document.title`) and IIFEs (`(()=>{...})()`) both work via
+	// `return (SCRIPT)`. The outer async IIFE awaits Promises and stringifies
+	// the final value; catch covers both user-thrown errors and JSON.stringify
+	// failures (circular refs, BigInt), distinguishing them with __evalError.
+	wrapped := `(async function(){
+  try {
+    const __v = await ((function(){ return (` + script + `); })());
+    return JSON.stringify(__v === undefined ? null : __v);
+  } catch (__e) {
+    return JSON.stringify({__evalError: true, __message: (__e && __e.stack) ? String(__e.stack) : String(__e)});
+  }
+})()`
+
 	res, err := proto.RuntimeEvaluate{
-		Expression:    script,
+		Expression:    wrapped,
 		ReturnByValue: true,
 		AwaitPromise:  true,
 	}.Call(page)
@@ -82,9 +113,39 @@ func doEvaluate(page *rod.Page, script string) (any, error) {
 		return nil, fmt.Errorf("evaluate: %w", err)
 	}
 	if res.ExceptionDetails != nil {
+		// Our wrapper catches user exceptions, so any ExceptionDetails here
+		// is either a syntax error in the wrapped script or a CDP-side failure.
 		return nil, fmt.Errorf("evaluate: %s: %w", res.ExceptionDetails.Text, ErrJsException)
 	}
-	return res.Result.Value.Val(), nil
+
+	raw, ok := res.Result.Value.Val().(string)
+	if !ok {
+		// Wrapper always returns a string; if CDP gave us something else the
+		// page may have overridden JSON.stringify. Surface the raw value.
+		return res.Result.Value.Val(), nil
+	}
+	if raw == "" {
+		return nil, nil
+	}
+
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		// Wrapper should always produce valid JSON; if not, return raw string.
+		return raw, nil
+	}
+
+	// User script threw inside the inner IIFE — surface as js_exception with
+	// the original JS error message.
+	if m, ok := decoded.(map[string]any); ok {
+		if flag, _ := m["__evalError"].(bool); flag {
+			msg, _ := m["__message"].(string)
+			if msg == "" {
+				msg = "unknown"
+			}
+			return nil, fmt.Errorf("evaluate: %s: %w", msg, ErrJsException)
+		}
+	}
+	return decoded, nil
 }
 
 // modifierBitmask converts a list of modifier names into the CDP

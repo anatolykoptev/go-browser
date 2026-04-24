@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anatolykoptev/go-browser/cdputil"
 	"github.com/go-rod/rod"
@@ -137,6 +138,14 @@ func resolveRefNodeID(page *rod.Page, selector string, refMap *RefMap) (cdputil.
 	return cdputil.QuerySelector(page, selector)
 }
 
+// clickDeadline caps a click when the caller supplied neither action.TimeoutMs
+// nor an overall chain deadline short enough to bite. rod's WaitInteractable
+// retries on CoveredError until ctx cancels; without this cap a covered
+// element silently consumes the full interact budget (default 30s). 5s is
+// long enough for a normal scroll-into-view + overlay dismissal animation
+// but short enough to fail-fast on genuinely stuck overlays.
+const clickDeadline = 5 * time.Second
+
 func doClick(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) error {
 	el, err := resolveElement(ctx, page, a.Selector, refMap)
 	if err != nil {
@@ -159,10 +168,47 @@ func doClick(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) erro
 		clicks = 2
 	}
 
-	if err := el.Click(btn, clicks); err != nil {
-		return fmt.Errorf("click: %w", err)
+	// Bound the click — see clickDeadline docstring.
+	clickCtx, cancel := context.WithTimeout(ctx, clickDeadline)
+	defer cancel()
+	el = el.Context(clickCtx)
+
+	// Probe interactability up-front so we can surface a typed CoveredError
+	// instead of the opaque "deadline exceeded" rod returns when retry spins.
+	// A single Interactable() call does not retry/scroll; it just reports the
+	// current state. rod's Click → Hover still handles scroll + retry, we just
+	// capture the last covered state for the relabel step below.
+	var lastCovered *rod.CoveredError
+	if _, interactErr := el.Interactable(); interactErr != nil {
+		var covered *rod.CoveredError
+		if errors.As(interactErr, &covered) {
+			lastCovered = covered
+		}
 	}
-	return nil
+
+	clickErr := el.Click(btn, clicks)
+	if clickErr == nil {
+		return nil
+	}
+
+	// Relabel CoveredError / deadline-hit-while-covered as element_covered
+	// so agents can distinguish "someone is covering this" from "element
+	// doesn't exist / is off-screen". Before this, both paths came out as
+	// InvisibleShapeError + naked deadline text.
+	var covered *rod.CoveredError
+	if errors.As(clickErr, &covered) {
+		return fmt.Errorf("click: %s: %w", covered.Error(), ErrElementCovered)
+	}
+	// Deadline while retrying on CoveredError: rod returns ctx.Err() directly,
+	// losing the covered-element identity. Use the up-front probe result.
+	if errors.Is(clickErr, context.DeadlineExceeded) && lastCovered != nil {
+		return fmt.Errorf("click: %s (timed out waiting for overlay to clear after %s): %w",
+			lastCovered.Error(), clickDeadline, ErrElementCovered)
+	}
+	if errors.Is(clickErr, context.DeadlineExceeded) {
+		return fmt.Errorf("click: timed out after %s: %w", clickDeadline, ErrActionTimeout)
+	}
+	return fmt.Errorf("click: %w", clickErr)
 }
 
 func doClickStealth(ctx context.Context, page *rod.Page, a Action, refMap *RefMap) error {

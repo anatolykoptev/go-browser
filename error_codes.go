@@ -10,6 +10,7 @@ import (
 var (
 	ErrSelectorNotFound  = errors.New("selector_not_found")
 	ErrElementNotVisible = errors.New("element_not_visible")
+	ErrElementCovered    = errors.New("element_covered")
 	ErrNavigationTimeout = errors.New("navigation_timeout")
 	ErrActionTimeout     = errors.New("action_timeout")
 	ErrContextCanceled   = errors.New("context_canceled")
@@ -28,6 +29,7 @@ var sentinelTable = []struct {
 }{
 	{ErrSelectorNotFound, ErrCodeSelectorNotFound},
 	{ErrElementNotVisible, ErrCodeElementNotVisible},
+	{ErrElementCovered, ErrCodeElementCovered},
 	{ErrNavigationTimeout, ErrCodeNavigationTimeout},
 	{ErrActionTimeout, ErrCodeActionTimeout},
 	{ErrContextCanceled, ErrCodeContextCanceled},
@@ -51,6 +53,8 @@ const (
 	ErrCodeSelectorNotFound ErrorCode = "selector_not_found"
 	// ErrCodeElementNotVisible represents element found but not visible/interactive
 	ErrCodeElementNotVisible ErrorCode = "element_not_visible"
+	// ErrCodeElementCovered represents element obstructed by an overlay / fixed element
+	ErrCodeElementCovered ErrorCode = "element_covered"
 	// ErrCodeNavigationTimeout represents navigation timeout
 	ErrCodeNavigationTimeout ErrorCode = "navigation_timeout"
 	// ErrCodeActionTimeout represents action timeout
@@ -121,6 +125,8 @@ func classifyByString(s string) ErrorCode {
 		(strings.Contains(s, "element") || strings.Contains(s, "selector"))) ||
 		(strings.Contains(s, "find ") && isTimeout):
 		return ErrCodeSelectorNotFound
+	case strings.Contains(s, "covered by"):
+		return ErrCodeElementCovered
 	case strings.Contains(s, "not visible") || strings.Contains(s, "hidden"):
 		return ErrCodeElementNotVisible
 	case strings.Contains(s, "navigation") && isTimeout:
