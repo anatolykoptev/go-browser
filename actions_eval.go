@@ -27,13 +27,25 @@ func execEvalOnNewDocument(dc dispatchContext, a Action) (any, error) {
 }
 
 func execScreenshot(dc dispatchContext, a Action) (any, error) {
-	// format="image" or "full" → actual JPEG screenshot.
-	// Default (no format) → return snapshot text instead — saves ~150K tokens.
+	// Format selectors:
+	//   "image"    → JPEG, viewport only (default token-friendly output)
+	//   "full"     → JPEG, full scrollable height
+	//   "png"      → PNG, viewport only (lossless, larger)
+	//   "full_png" → PNG, full scrollable height
+	//   ""         → snapshot text (NOT a screenshot — saves ~150K LLM tokens)
+	//
+	// When OutputPath is set, bytes are written to disk and the action returns
+	// a {path, bytes_size, width, height, format} struct. Otherwise returns
+	// base64-encoded bytes as a string (back-compat with token-streaming flows).
+	opts := screenshotOptions{
+		fullPage:   a.Format == "full" || a.Format == "full_png",
+		pngFormat:  a.Format == "png" || a.Format == "full_png",
+		outputPath: a.OutputPath,
+		quality:    a.Quality,
+	}
 	switch a.Format {
-	case "image":
-		return doScreenshot(dc.page, false)
-	case "full":
-		return doScreenshot(dc.page, true)
+	case "image", "full", "png", "full_png":
+		return doScreenshotEx(dc.page, opts)
 	default:
 		return doSnapshot(dc.page, a.Depth, "", a.Filter, a.Selector, dc.refMap)
 	}
