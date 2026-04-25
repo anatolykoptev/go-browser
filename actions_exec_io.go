@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	_ "image/png" // register PNG decoder for decodeImageDimensions
+	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -49,25 +52,116 @@ func resizeJPEG(data []byte, maxWidth int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func doScreenshot(page *rod.Page, fullPage bool) (string, error) {
-	// CDP JPEG directly — no PNG→decode→JPEG roundtrip. ~60-70% smaller than PNG.
-	q := screenshotJPEGQuality
+// screenshotOptions configures doScreenshotEx — full surface for the screenshot
+// action's pluggable behavior (PNG vs JPEG, full-page, persistence to disk).
+type screenshotOptions struct {
+	fullPage   bool   // CDP CaptureBeyondViewport
+	pngFormat  bool   // PNG when true, JPEG otherwise
+	outputPath string // when set, write file + return struct; else return base64 string
+	quality    int    // JPEG quality 1-100; ignored for PNG; 0 → default
+}
+
+// ScreenshotResult is returned by the screenshot action when OutputPath is set.
+// JSON-tagged so tool consumers (workflow Step references like
+// $steps.X.output.path, MCP clients) get stable field names.
+type ScreenshotResult struct {
+	Path      string `json:"path"`
+	BytesSize int64  `json:"bytes_size"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	Format    string `json:"format"` // "png" or "jpeg"
+}
+
+// doScreenshotEx is the full screenshot path supporting PNG, JPEG, and on-disk
+// persistence. When opts.outputPath is empty, it returns a base64 string for
+// backward compatibility with existing token-streaming flows. When set, bytes
+// are written atomically (temp + rename) and a ScreenshotResult is returned.
+func doScreenshotEx(page *rod.Page, opts screenshotOptions) (any, error) {
+	q := opts.quality
+	if q == 0 {
+		q = screenshotJPEGQuality
+	}
 	req := proto.PageCaptureScreenshot{
-		Format:                proto.PageCaptureScreenshotFormatJpeg,
-		Quality:               &q,
-		CaptureBeyondViewport: fullPage,
+		CaptureBeyondViewport: opts.fullPage,
+	}
+	if opts.pngFormat {
+		req.Format = proto.PageCaptureScreenshotFormatPng
+	} else {
+		req.Format = proto.PageCaptureScreenshotFormatJpeg
+		req.Quality = &q
 	}
 	res, err := req.Call(page)
 	if err != nil {
-		return "", fmt.Errorf("screenshot: %w", err)
+		return nil, fmt.Errorf("screenshot: %w", err)
 	}
 
-	data, err := resizeJPEG(res.Data, screenshotMaxWidth)
+	data := res.Data
+	width, height := decodeImageDimensions(data)
+
+	// JPEG output gets resized when it exceeds screenshotMaxWidth (token-budget
+	// guard for downstream LLMs). PNG output is left at native size — callers
+	// who chose PNG explicitly want lossless and full resolution.
+	if !opts.pngFormat {
+		if resized, rerr := resizeJPEG(data, screenshotMaxWidth); rerr == nil {
+			data = resized
+			width, height = decodeImageDimensions(data)
+		}
+	}
+
+	if opts.outputPath == "" {
+		return base64.StdEncoding.EncodeToString(data), nil
+	}
+
+	// Persist atomically: write to <path>.tmp then rename. Surfaces a clear
+	// error if the directory is missing or unwritable rather than silently
+	// returning empty bytes.
+	if err := writeFileAtomic(opts.outputPath, data); err != nil {
+		return nil, fmt.Errorf("screenshot: persist to %q: %w", opts.outputPath, err)
+	}
+
+	format := "jpeg"
+	if opts.pngFormat {
+		format = "png"
+	}
+	return ScreenshotResult{
+		Path:      opts.outputPath,
+		BytesSize: int64(len(data)),
+		Width:     width,
+		Height:    height,
+		Format:    format,
+	}, nil
+}
+
+// decodeImageDimensions returns (width, height) for any image format
+// supported by the registered decoders (PNG, JPEG via stdlib imports).
+// Returns (0,0) on decode failure — callers treat zero as "unknown".
+func decodeImageDimensions(data []byte) (int, int) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		data = res.Data
+		return 0, 0
 	}
+	return cfg.Width, cfg.Height
+}
 
-	return base64.StdEncoding.EncodeToString(data), nil
+// writeFileAtomic writes bytes to dst via a sibling temp file + rename, so a
+// crash mid-write never leaves a partial file at dst. The temp file is created
+// in the same directory as dst to guarantee the rename is on the same FS
+// (cross-FS rename returns EXDEV).
+func writeFileAtomic(dst string, data []byte) error {
+	if dir := filepath.Dir(dst); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // doEvaluate runs JS as a raw expression via CDP RuntimeEvaluate.

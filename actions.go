@@ -36,6 +36,8 @@ type Action struct {
 	URLContains   string        `json:"url_contains,omitempty" jsonschema:"Keep only nodes whose URL contains this substring (links/iframes)"`
 	Width         int           `json:"width,omitempty" jsonschema:"Viewport width for resize action"`
 	Height        int           `json:"height,omitempty" jsonschema:"Viewport height for resize action"`
+	OutputPath    string        `json:"output_path,omitempty" jsonschema:"For screenshot action: absolute file path to write PNG/JPEG bytes to. When set, the action returns {path, bytes_size, width, height, format} instead of a base64 string. Combine with format='png' or format='full_png' for lossless PNG output."`
+	Quality       int           `json:"quality,omitempty" jsonschema:"For screenshot action with format=image/full: JPEG quality 1-100 (default 80). Ignored for PNG output."`
 	Slowly        bool          `json:"slowly,omitempty" jsonschema:"Type one character at a time (type_text)"`
 	Submit        bool          `json:"submit,omitempty" jsonschema:"Press Enter after typing (type_text)"`
 	Fields        []FormField   `json:"fields,omitempty" jsonschema:"Fields for fill_form batch action"`
