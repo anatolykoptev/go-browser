@@ -1,12 +1,14 @@
 package browser
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/cdp"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -98,8 +100,14 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 func (p *ContextPool) newPageInContext(mc *ManagedContext) (*rod.Page, error) {
 	var targetReq proto.TargetCreateTarget
 	targetReq.URL = "about:blank"
-	if mc.ID != "" {
-		targetReq.BrowserContextID = mc.ID
+	// Snapshot mc.ID under mc.Mu: rediscoverDefaultContext may rewrite it
+	// concurrently during stale-context recovery, and post-publication mc.ID
+	// mutations are mc.Mu-guarded.
+	mc.Mu.Lock()
+	ctxID := mc.ID
+	mc.Mu.Unlock()
+	if ctxID != "" {
+		targetReq.BrowserContextID = ctxID
 	}
 	res, err := targetReq.Call(p.browser)
 	if err != nil {
@@ -119,8 +127,13 @@ func (p *ContextPool) adoptExistingPage(mc *ManagedContext) (*rod.Page, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Snapshot mc.ID under mc.Mu — rediscoverDefaultContext may rewrite it
+	// concurrently during stale-context recovery (mc.ID is mc.Mu-guarded).
+	mc.Mu.Lock()
+	ctxID := mc.ID
+	mc.Mu.Unlock()
 	for _, t := range targets.TargetInfos {
-		if t.Type != "page" || t.BrowserContextID != mc.ID {
+		if t.Type != "page" || t.BrowserContextID != ctxID {
 			continue
 		}
 		page, err := p.browser.PageFromTarget(t.TargetID)
@@ -222,4 +235,94 @@ func formatAge(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
+}
+
+// isStaleBrowserContextErr reports whether err is the CDP signal that a
+// BrowserContextID no longer exists — i.e. the context was disposed/recreated
+// out from under the pool. CDP returns error -32000 with the message
+// "Failed to find browser context with id <ID>" (a Chromium-emitted string;
+// go-rod has no typed sentinel for this class). This is the stale-default-
+// context class that latched the pool forever until a process restart.
+//
+// It matches on the typed *cdp.Error (code -32000 + message) when available and
+// falls back to a substring scan of the wrapped error chain so a future extra
+// wrap layer cannot defeat detection.
+func isStaleBrowserContextErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	const marker = "Failed to find browser context"
+	var cdpErr *cdp.Error
+	if errors.As(err, &cdpErr) {
+		return cdpErr.Code == -32000 && strings.Contains(cdpErr.Message, marker)
+	}
+	return strings.Contains(err.Error(), marker)
+}
+
+// rediscoverDefaultContext re-reads the live default BrowserContextID from the
+// browser's current page targets and updates mc.ID in place. It is only
+// meaningful for the default context, whose ID the pool discovers (rather than
+// creates) and which Chrome may dispose/recreate independently.
+//
+// If a live page target is found, mc.ID is set to its live BrowserContextID.
+// If none is found, mc.ID is reset to empty so the subsequent TargetCreateTarget
+// omits BrowserContextID and lands in Chrome's current default context. Either
+// way the stale handle is cleared.
+//
+// "First page target wins" is intentional: ambient/default tabs live in the
+// default context, and the empty-ID fallback is the documented "land in current
+// default" path. The write holds mc.Mu — post-publication mc.ID mutations must,
+// because newPageInContext reads mc.ID under the same lock (see ctxID snapshot).
+// Returns true if mc.ID changed.
+func (p *ContextPool) rediscoverDefaultContext(mc *ManagedContext) bool {
+	var liveID proto.BrowserBrowserContextID
+	if targets, err := (proto.TargetGetTargets{}).Call(p.browser); err == nil {
+		for _, t := range targets.TargetInfos {
+			if t.Type == "page" {
+				liveID = t.BrowserContextID
+				break
+			}
+		}
+	}
+	mc.Mu.Lock()
+	changed := mc.ID != liveID
+	mc.ID = liveID
+	mc.Mu.Unlock()
+	return changed
+}
+
+// createPageWithStaleRecovery creates a page in mc, recovering once from a stale
+// default BrowserContextID. The default context's ID is DISCOVERED (not created)
+// and Chrome may dispose/recreate it independently; when that happens the cached
+// mc.ID goes stale and TargetCreateTarget fails with "Failed to find browser
+// context with id ...", which previously latched the pool until a restart.
+//
+// Recovery is scoped to the default context only (key == "default"). This gate is
+// a context-ISOLATION invariant, not merely an optimization: a private/proxy
+// context owns a BrowserContext the pool created itself, and re-discovering the
+// "live default" for it would silently rebind an isolated/proxied context onto
+// the shared default context — a context-isolation / proxy-bypass leak. Gating on
+// default keeps the change a no-op on the happy path and for non-default callers,
+// AND preserves isolation.
+func (p *ContextPool) createPageWithStaleRecovery(mc *ManagedContext, key string) (*rod.Page, error) {
+	page, err := p.newPageInContext(mc)
+	if err == nil || key != "default" || !isStaleBrowserContextErr(err) {
+		return page, err
+	}
+
+	// Stale default-context handle observed — re-discover the live default context
+	// and retry once. If re-discovery yields the same (still-stale) ID, the retry
+	// would fail identically, so short-circuit to a failed outcome.
+	recordStaleCtxRecovery(StaleCtxOutcomeDetected)
+	if !p.rediscoverDefaultContext(mc) {
+		recordStaleCtxRecovery(StaleCtxOutcomeFailed)
+		return nil, err
+	}
+	page, err = p.newPageInContext(mc)
+	if err != nil {
+		recordStaleCtxRecovery(StaleCtxOutcomeFailed)
+		return nil, err
+	}
+	recordStaleCtxRecovery(StaleCtxOutcomeRecovered)
+	return page, nil
 }
