@@ -174,7 +174,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if p.newPageDelay > 0 {
 		time.Sleep(p.newPageDelay) // test injection — simulates slow CDP
 	}
-	page, cdpErr := p.newPageInContext(mc)
+	page, cdpErr := p.createPageWithStaleRecovery(mc, key)
 
 	// Phase 4: patch placeholder and signal waiters regardless of outcome.
 	mc.Mu.Lock()
