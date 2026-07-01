@@ -35,6 +35,14 @@ func (m *ChromeManager) reconnect() error {
 		return fmt.Errorf("connect: %w", err)
 	}
 
+	// Re-install the egress guard on the fresh connection — it does NOT
+	// carry over from the closed browser (see egress_guard.go). Fail the
+	// reconnect rather than resume operation unguarded.
+	if err := installEgressGuard(b); err != nil {
+		_ = b.Close()
+		return fmt.Errorf("%w", err)
+	}
+
 	m.browser = b
 	m.keepaliveCtxID = ""
 	if m.pool != nil {
@@ -124,4 +132,3 @@ func (m *ChromeManager) ListPages() ([]PageInfo, error) {
 	}
 	return pages, nil
 }
-
