@@ -3,6 +3,7 @@ module github.com/anatolykoptev/go-browser
 go 1.26
 
 require (
+	github.com/anatolykoptev/go-kit v0.95.0
 	github.com/anatolykoptev/go-stealth v1.12.0
 	github.com/chromedp/chromedp v0.15.1
 	github.com/go-rod/rod v0.116.2
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/anatolykoptev/go-kit v0.95.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect

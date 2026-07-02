@@ -14,6 +14,16 @@ func (m *ChromeManager) getBrowser() *rod.Browser {
 	return m.browser
 }
 
+// getGuard returns the current connection's egress guard under a read lock
+// — reconnect() replaces both m.browser and m.guard together, so this must
+// use the same locking discipline as getBrowser to avoid handing a caller a
+// guard from a since-replaced connection.
+func (m *ChromeManager) getGuard() *egressGuard {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.guard
+}
+
 // reconnect closes the old connection and establishes a new one.
 func (m *ChromeManager) reconnect() error {
 	m.mu.Lock()
@@ -38,12 +48,14 @@ func (m *ChromeManager) reconnect() error {
 	// Re-install the egress guard on the fresh connection — it does NOT
 	// carry over from the closed browser (see egress_guard.go). Fail the
 	// reconnect rather than resume operation unguarded.
-	if err := installEgressGuard(b); err != nil {
+	guard, err := installEgressGuard(b)
+	if err != nil {
 		_ = b.Close()
 		return fmt.Errorf("%w", err)
 	}
 
 	m.browser = b
+	m.guard = guard
 	m.keepaliveCtxID = ""
 	if m.pool != nil {
 		m.pool.UpdateBrowser(b)

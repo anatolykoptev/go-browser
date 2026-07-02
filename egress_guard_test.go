@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,14 +68,38 @@ func listenOn(t *testing.T, ip string) net.Listener {
 	return ln
 }
 
+// sharedGuard mirrors acquireSharedBrowser's sync.Once pattern: installing
+// the egress guard is meant to happen exactly ONCE per Chrome connection
+// (see installEgressGuard's doc comment — a second independent install
+// would itself reintroduce the double-listener race this file exists to
+// prevent), so every test in this file installs onto the SAME shared test
+// browser exactly once and reuses the resulting *egressGuard handle.
+var (
+	sharedGuardOnce     sync.Once
+	sharedGuardInstance *egressGuard
+	sharedGuardErr      error
+)
+
+// acquireGuard installs the egress guard on the shared test browser (once)
+// and returns the guard handle, so a test can also drive registerProxyAuth
+// directly (see TestEgressGuard_CoexistsWithActiveProxyAuth_StillBlocks).
+func acquireGuard(t *testing.T, b *rod.Browser) *egressGuard {
+	t.Helper()
+	sharedGuardOnce.Do(func() {
+		sharedGuardInstance, sharedGuardErr = installEgressGuard(b)
+	})
+	if sharedGuardErr != nil {
+		t.Fatalf("installEgressGuard: %v", sharedGuardErr)
+	}
+	return sharedGuardInstance
+}
+
 // newGuardedPage installs the egress guard on b (the same install path
 // NewChromeManager/reconnect use — see egress_guard.go) and returns a fresh
 // blank page for the test to navigate.
 func newGuardedPage(t *testing.T, b *rod.Browser) *rod.Page {
 	t.Helper()
-	if err := installEgressGuard(b); err != nil {
-		t.Fatalf("installEgressGuard: %v", err)
-	}
+	acquireGuard(t, b)
 	page, err := b.Page(proto.TargetCreateTarget{URL: "about:blank"})
 	if err != nil {
 		t.Fatalf("create page: %v", err)
@@ -199,5 +224,52 @@ func TestEgressGuard_MetadataAddress_Blocked(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "BLOCKED_BY_CLIENT") {
 		t.Errorf("navigate error = %q, want it to mention BLOCKED_BY_CLIENT (guard-originated, not a connect failure)", err.Error())
+	}
+}
+
+// TestEgressGuard_CoexistsWithActiveProxyAuth_StillBlocks is the missing
+// coexistence test the crypto-security review flagged: prove that a page
+// created while upstream-proxy-auth credentials are ACTIVE on the shared
+// egress guard (registerProxyAuth — what NewContext/RunInteract call for an
+// authenticated `http://user:pass@host:port` proxy, reachable today via the
+// `proxy` field on render/chrome_interact/solve_cf/screenshot_url/snapshot)
+// is STILL refused for an internal target. Before this file's fix, proxy
+// auth was a SEPARATE Fetch listener that (a) answered FetchRequestPaused
+// immediately with no SSRF check at all, racing the guard's check, and (b)
+// disabled the whole Fetch domain on cleanup, killing the guard
+// connection-wide. Both defects are now structurally impossible — there is
+// exactly one Fetch.enable and one FetchRequestPaused handler for the whole
+// connection (see egress_guard.go) — this test exercises that end to end
+// rather than trusting the architecture argument alone.
+func TestEgressGuard_CoexistsWithActiveProxyAuth_StillBlocks(t *testing.T) {
+	b := acquireSharedBrowser(t)
+	guard := acquireGuard(t, b)
+
+	// Simulate what NewContext/RunInteract do for an authenticated-proxy
+	// call: activate credentials on the shared guard. No real upstream
+	// proxy is needed for this assertion — it targets respondPaused's
+	// gating behavior while active/username/password are non-zero, not the
+	// FetchAuthRequired challenge-response flow itself (a separate concern,
+	// unaffected by this test).
+	unregister := guard.registerProxyAuth("coexist-test-user", "coexist-test-pass")
+	defer unregister()
+
+	page, err := b.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	if err != nil {
+		t.Fatalf("create page: %v", err)
+	}
+	defer func() { _ = page.Close() }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("should never be served"))
+	}))
+	defer srv.Close()
+
+	navErr := page.Timeout(navigateTimeout).Navigate(srv.URL)
+	if navErr == nil {
+		t.Fatalf("navigate to internal target %q while proxy-auth active: want error, got nil", srv.URL)
+	}
+	if !strings.Contains(navErr.Error(), "BLOCKED_BY_CLIENT") {
+		t.Errorf("navigate error = %q, want it to mention BLOCKED_BY_CLIENT (guard-originated, not some other failure)", navErr.Error())
 	}
 }
