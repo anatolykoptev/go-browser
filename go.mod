@@ -3,8 +3,9 @@ module github.com/anatolykoptev/go-browser
 go 1.26
 
 require (
+	github.com/anatolykoptev/go-kit v0.95.0
 	github.com/anatolykoptev/go-stealth v1.12.0
-	github.com/chromedp/chromedp v0.14.2
+	github.com/chromedp/chromedp v0.15.1
 	github.com/go-rod/rod v0.116.2
 	github.com/ysmood/gson v0.7.3
 	golang.org/x/image v0.39.0
@@ -19,9 +20,9 @@ require (
 	github.com/bogdanfinn/tls-client v1.14.0 // indirect
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
 	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
-	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327 // indirect
+	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
-	github.com/go-json-experiment/json v0.0.0-20250725192818-e39067aee2d2 // indirect
+	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
@@ -32,8 +33,8 @@ require (
 	github.com/ysmood/goob v0.4.0 // indirect
 	github.com/ysmood/got v0.40.0 // indirect
 	github.com/ysmood/leakless v0.9.0 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/crypto v0.49.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.36.0 // indirect

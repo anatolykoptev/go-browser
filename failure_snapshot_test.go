@@ -22,6 +22,17 @@ func TestCaptureFailureSnapshot_Integration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = page.Close() }()
+	// Wait for the target to finish attaching/loading before asserting on
+	// its state — TargetCreateTarget returns as soon as the target exists,
+	// not once navigation completes, so reading page.Info() immediately is
+	// a race (this test shares acquireSharedBrowser's browser with every
+	// other integration test in the package, including the egress guard's
+	// own tests, which install a Fetch-domain listener that adds a little
+	// CDP round-trip latency to every target's lifecycle — enough to flip
+	// this previously-racy assertion depending on test order).
+	if err := page.WaitLoad(); err != nil {
+		t.Fatalf("WaitLoad: %v", err)
+	}
 
 	fs := CaptureFailureSnapshot(page)
 	if fs == nil {

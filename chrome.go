@@ -17,6 +17,7 @@ type ChromeManager struct {
 	mu             sync.RWMutex
 	browser        *rod.Browser
 	pool           *ContextPool
+	guard          *egressGuard                  // connection-wide SSRF egress guard; see egress_guard.go
 	wsURL          string                        // original ws URL for discovery
 	keepaliveCtxID proto.BrowserBrowserContextID // unused, kept for lifecycle compat
 }
@@ -36,6 +37,15 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 		return nil, fmt.Errorf("chrome: connect: %w", err)
 	}
 
+	// Egress SSRF guard MUST be installed before any page can navigate —
+	// fail closed (refuse the connection) rather than let a caller-supplied
+	// URL reach Chrome's own outbound dial unchecked. See egress_guard.go.
+	guard, err := installEgressGuard(b)
+	if err != nil {
+		_ = b.Close()
+		return nil, fmt.Errorf("chrome: %w", err)
+	}
+
 	// Don't create any pages — Chrome with Xvfb stays alive on its own.
 	// If user needs a page, chrome_interact will create one on demand.
 
@@ -44,6 +54,7 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 	return &ChromeManager{
 		browser: b,
 		pool:    pool,
+		guard:   guard,
 		wsURL:   wsURL,
 	}, nil
 }
