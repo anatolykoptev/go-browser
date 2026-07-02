@@ -123,8 +123,14 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		if proxy != "" {
 			_, proxyUser, proxyPass := parseProxy(proxy)
 			if proxyUser != "" {
-				cleanup := setupProxyAuth(page.Browser(), proxyUser, proxyPass)
-				defer cleanup()
+				// Register on the connection-wide egress guard (see
+				// egress_guard.go) rather than a separate Fetch.enable/
+				// disable cycle — the latter used to race with, and could
+				// disable, the SSRF guard sharing this same CDP session.
+				if guard := chrome.getGuard(); guard != nil {
+					cleanup := guard.registerProxyAuth(proxyUser, proxyPass)
+					defer cleanup()
+				}
 			}
 		}
 

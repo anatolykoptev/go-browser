@@ -45,10 +45,16 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 	scoped := b.NoDefaultDevice()
 	scoped.BrowserContextID = res.BrowserContextID
 
-	// Set up continuous proxy auth handler if credentials provided.
+	// Register proxy-auth credentials on the connection-wide egress guard
+	// (see egress_guard.go) if provided — NEVER a separate Fetch.enable/
+	// disable cycle, which would race with and could kill the SSRF guard.
+	// Read the guard AFTER any reconnect above, since reconnect installs a
+	// fresh one on the new connection.
 	var cleanup func()
 	if proxyUser != "" {
-		cleanup = setupProxyAuth(scoped, proxyUser, proxyPass)
+		if guard := m.getGuard(); guard != nil {
+			cleanup = guard.registerProxyAuth(proxyUser, proxyPass)
+		}
 	}
 
 	return scoped, res.BrowserContextID, cleanup, nil
