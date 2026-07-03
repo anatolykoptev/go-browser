@@ -67,6 +67,13 @@ func (p *ContextPool) knownIncognitoCtxIDs() map[proto.BrowserBrowserContextID]s
 		mc.Mu.Lock()
 		id := mc.ID
 		mc.Mu.Unlock()
+		// Invariant: a non-"default" context is only ever published into p.contexts
+		// with a non-empty ID — getOrCreateContextSafe errors out if
+		// TargetCreateBrowserContext fails and otherwise sets mc.ID to the returned
+		// (non-empty) BrowserContextID before inserting, and only the default
+		// context's ID is ever reset to "". So this guard never drops a real
+		// incognito context; it only keeps "" out of the exclusion set (which would
+		// otherwise wrongly exclude the empty-ID persistent-default target).
 		if id != "" {
 			ids[id] = struct{}{}
 		}
@@ -87,15 +94,31 @@ func (p *ContextPool) knownIncognitoCtxIDs() map[proto.BrowserBrowserContextID]s
 // guarantees the discovered ID is the persistent default (e.g. the operator's
 // ambient login tab).
 //
+// ORDER MATTERS — read the targets BEFORE snapshotting the incognito set. The
+// pool inserts a private/proxy context into p.contexts (getOrCreateContextSafe)
+// strictly BEFORE creating its first page target (GetOrCreatePage Phase 3,
+// newPageInContext). So if TargetGetTargets observed a private page target, that
+// context was already registered, and a snapshot taken AFTER the CDP call is
+// guaranteed to include its ID → it is correctly excluded. Snapshotting FIRST
+// would reopen the leak as a race window: a concurrent mode=private/proxy create
+// running on go-wowa's scraping tabs could register its context and surface its
+// page BETWEEN an earlier snapshot and this call, and that page would be misread
+// as the persistent default. The only residual race under this order is a
+// context disposed between the two calls — a dead id that fails the subsequent
+// TargetCreateTarget with the stale-context error and self-heals to the empty-ID
+// fallback (no live-jar leak; strictly safer).
+//
 // Returns "" when no non-incognito page target exists (or the CDP call fails):
 // the caller then omits BrowserContextID on TargetCreateTarget and lands in
 // Chrome's current default context — the documented empty-ID fallback.
 func (p *ContextPool) discoverPersistentDefaultCtxID() proto.BrowserBrowserContextID {
-	incognito := p.knownIncognitoCtxIDs()
 	targets, err := proto.TargetGetTargets{}.Call(p.browser)
 	if err != nil {
 		return ""
 	}
+	// Snapshot AFTER the CDP read so any context whose page target we just
+	// observed is guaranteed to be in the exclusion set (see ORDER MATTERS above).
+	incognito := p.knownIncognitoCtxIDs()
 	for _, t := range targets.TargetInfos {
 		if t.Type != "page" {
 			continue
