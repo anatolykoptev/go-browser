@@ -44,6 +44,70 @@ func contextKey(mode, proxy string) string {
 	}
 }
 
+// knownIncognitoCtxIDs snapshots the BrowserContextIDs of every pool-created
+// (non-"default") context — the private/proxy incognito contexts created via
+// TargetCreateBrowserContext. The default context's ID is DISCOVERED (not
+// created), so its key is deliberately excluded. Follows the pool's two-phase
+// lock discipline: snapshot the context pointers under contextsMu, release it,
+// then read each mc.ID under mc.Mu — never holding contextsMu across a mc.Mu
+// acquisition, and never holding either across a CDP call.
+func (p *ContextPool) knownIncognitoCtxIDs() map[proto.BrowserBrowserContextID]struct{} {
+	p.contextsMu.RLock()
+	ctxs := make([]*ManagedContext, 0, len(p.contexts))
+	for key, mc := range p.contexts {
+		if key == "default" {
+			continue
+		}
+		ctxs = append(ctxs, mc)
+	}
+	p.contextsMu.RUnlock()
+
+	ids := make(map[proto.BrowserBrowserContextID]struct{}, len(ctxs))
+	for _, mc := range ctxs {
+		mc.Mu.Lock()
+		id := mc.ID
+		mc.Mu.Unlock()
+		if id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+// discoverPersistentDefaultCtxID reads the live page targets and returns the
+// BrowserContextID of the persistent default context — the first page target
+// that does NOT belong to a pool-created incognito (private/proxy) context.
+//
+// The pool creates private/proxy contexts (TargetCreateBrowserContext) that also
+// carry live page targets, and TargetGetTargets returns targets in arbitrary
+// order. A naive "first page target wins" scan could therefore bind the default
+// context to an incognito BrowserContextID — landing every subsequent
+// mode=default page in an anonymous incognito cookie jar instead of the
+// persistent authenticated profile. Excluding the pool's own incognito contexts
+// guarantees the discovered ID is the persistent default (e.g. the operator's
+// ambient login tab).
+//
+// Returns "" when no non-incognito page target exists (or the CDP call fails):
+// the caller then omits BrowserContextID on TargetCreateTarget and lands in
+// Chrome's current default context — the documented empty-ID fallback.
+func (p *ContextPool) discoverPersistentDefaultCtxID() proto.BrowserBrowserContextID {
+	incognito := p.knownIncognitoCtxIDs()
+	targets, err := proto.TargetGetTargets{}.Call(p.browser)
+	if err != nil {
+		return ""
+	}
+	for _, t := range targets.TargetInfos {
+		if t.Type != "page" {
+			continue
+		}
+		if _, isIncognito := incognito[t.BrowserContextID]; isIncognito {
+			continue
+		}
+		return t.BrowserContextID
+	}
+	return ""
+}
+
 // getOrCreateContextSafe does the full read→upgrade→write cycle for the
 // contexts map, doing any CDP BrowserContext creation OUTSIDE the lock.
 func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedContext, error) {
@@ -59,17 +123,12 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 	mc := &ManagedContext{Mode: mode, Proxy: proxy, Pages: make(map[string]*ManagedPage)}
 
 	// For default mode, discover the default BrowserContextID from existing tabs
-	// so that TargetCreateTarget creates a tab in the same window instead of a new one.
+	// so that TargetCreateTarget creates a tab in the same window instead of a new
+	// one. Pool-created private/proxy incognito contexts are excluded so a
+	// mode=default page never binds to an incognito jar (see
+	// discoverPersistentDefaultCtxID).
 	if mode == "default" {
-		targets, terr := proto.TargetGetTargets{}.Call(p.browser)
-		if terr == nil {
-			for _, t := range targets.TargetInfos {
-				if t.Type == "page" {
-					mc.ID = t.BrowserContextID
-					break
-				}
-			}
-		}
+		mc.ID = p.discoverPersistentDefaultCtxID()
 	}
 
 	if mode != "default" {
@@ -264,26 +323,21 @@ func isStaleBrowserContextErr(err error) bool {
 // meaningful for the default context, whose ID the pool discovers (rather than
 // creates) and which Chrome may dispose/recreate independently.
 //
-// If a live page target is found, mc.ID is set to its live BrowserContextID.
+// If a live persistent-default page target is found (pool-created private/proxy
+// incognito contexts are excluded), mc.ID is set to its live BrowserContextID.
 // If none is found, mc.ID is reset to empty so the subsequent TargetCreateTarget
 // omits BrowserContextID and lands in Chrome's current default context. Either
 // way the stale handle is cleared.
 //
-// "First page target wins" is intentional: ambient/default tabs live in the
-// default context, and the empty-ID fallback is the documented "land in current
-// default" path. The write holds mc.Mu — post-publication mc.ID mutations must,
-// because newPageInContext reads mc.ID under the same lock (see ctxID snapshot).
+// Discovery skips page targets that belong to the pool's own incognito contexts
+// (see discoverPersistentDefaultCtxID): binding the default context to an
+// incognito BrowserContextID would land mode=default pages in an anonymous jar.
+// The empty-ID result is the documented "land in current default" fallback. The
+// write holds mc.Mu — post-publication mc.ID mutations must, because
+// newPageInContext reads mc.ID under the same lock (see ctxID snapshot).
 // Returns true if mc.ID changed.
 func (p *ContextPool) rediscoverDefaultContext(mc *ManagedContext) bool {
-	var liveID proto.BrowserBrowserContextID
-	if targets, err := (proto.TargetGetTargets{}).Call(p.browser); err == nil {
-		for _, t := range targets.TargetInfos {
-			if t.Type == "page" {
-				liveID = t.BrowserContextID
-				break
-			}
-		}
-	}
+	liveID := p.discoverPersistentDefaultCtxID()
 	mc.Mu.Lock()
 	changed := mc.ID != liveID
 	mc.ID = liveID
