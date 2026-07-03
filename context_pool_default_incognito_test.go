@@ -69,17 +69,7 @@ func TestContextPool_DefaultDiscovery_ExcludesIncognitoContext(t *testing.T) {
 
 	// Create a REAL incognito (private) BrowserContext with a live page target —
 	// exactly what the pool does for mode=private / mode=proxy scraping tabs.
-	res, err := proto.TargetCreateBrowserContext{DisposeOnDetach: true}.Call(br)
-	if err != nil {
-		t.Fatalf("create incognito browser context: %v", err)
-	}
-	incognitoID := res.BrowserContextID
-	if incognitoID == "" {
-		t.Fatal("incognito BrowserContextID is empty; cannot distinguish from default")
-	}
-	if _, err := (proto.TargetCreateTarget{URL: "about:blank", BrowserContextID: incognitoID}).Call(br); err != nil {
-		t.Fatalf("create incognito page target: %v", err)
-	}
+	incognitoID := newContextWithPage(t, br)
 
 	// Register the incognito context in the pool so it is part of the known,
 	// pool-created set the fix must exclude — mirrors getOrCreateContextSafe's
@@ -121,18 +111,106 @@ func TestContextPool_DefaultDiscovery_ExcludesIncognitoContext(t *testing.T) {
 	}
 }
 
-// closeForeignPageTargets closes every page target whose BrowserContextID differs
-// from keepID, leaving only keepID's page(s). Because the incognito page is
-// created first, at least one target always remains, so Chrome stays alive.
-func closeForeignPageTargets(t *testing.T, br *rod.Browser, keepID proto.BrowserBrowserContextID) {
+// closeForeignPageTargets closes every page target whose BrowserContextID is not
+// in keepIDs, leaving only those contexts' page(s). Callers create the kept
+// page(s) first, so at least one target always remains and Chrome stays alive.
+func closeForeignPageTargets(t *testing.T, br *rod.Browser, keepIDs ...proto.BrowserBrowserContextID) {
 	t.Helper()
+	keep := make(map[proto.BrowserBrowserContextID]struct{}, len(keepIDs))
+	for _, id := range keepIDs {
+		keep[id] = struct{}{}
+	}
 	targets, err := proto.TargetGetTargets{}.Call(br)
 	if err != nil {
 		t.Fatalf("TargetGetTargets: %v", err)
 	}
 	for _, tinfo := range targets.TargetInfos {
-		if tinfo.Type == "page" && tinfo.BrowserContextID != keepID {
-			_, _ = proto.TargetCloseTarget{TargetID: tinfo.TargetID}.Call(br)
+		if tinfo.Type != "page" {
+			continue
 		}
+		if _, kept := keep[tinfo.BrowserContextID]; kept {
+			continue
+		}
+		_, _ = proto.TargetCloseTarget{TargetID: tinfo.TargetID}.Call(br)
+	}
+}
+
+// newContextWithPage creates a real BrowserContext with one live page target and
+// returns its ID — a stand-in for either a pool-created incognito context or an
+// unmanaged "persistent default"-like context, depending on whether the caller
+// registers it in the pool.
+func newContextWithPage(t *testing.T, br *rod.Browser) proto.BrowserBrowserContextID {
+	t.Helper()
+	res, err := proto.TargetCreateBrowserContext{DisposeOnDetach: true}.Call(br)
+	if err != nil {
+		t.Fatalf("create browser context: %v", err)
+	}
+	if res.BrowserContextID == "" {
+		t.Fatal("created BrowserContextID is empty")
+	}
+	if _, err := (proto.TargetCreateTarget{URL: "about:blank", BrowserContextID: res.BrowserContextID}).Call(br); err != nil {
+		t.Fatalf("create page target in %q: %v", res.BrowserContextID, err)
+	}
+	return res.BrowserContextID
+}
+
+// TestContextPool_DefaultDiscovery_PicksPersistentDefault asserts the POSITIVE
+// contract: when a persistent-default-like page target (a context the pool did
+// NOT create) coexists with a pool-created incognito page target, discovery must
+// return the PERSISTENT default's ID — not the incognito one, and not the empty
+// fallback. This guards against an impl that "passes" the exclusion test merely
+// by always returning "" (which would never reach the authenticated profile),
+// and pins the MEDIUM GetTargets-before-snapshot reorder against silently
+// regressing to that empty fallback. Verified for BOTH discovery paths.
+func TestContextPool_DefaultDiscovery_PicksPersistentDefault(t *testing.T) {
+	br, cleanup := launchDedicatedBrowser(t)
+	defer cleanup()
+
+	p := NewContextPool(br)
+	defer p.Close()
+
+	// An unmanaged context with a live page — the pool never created it, so from
+	// the pool's view it is the ambient/persistent default (mirrors the operator's
+	// login tab, which lives in a context NOT in the managed pool).
+	persistentID := newContextWithPage(t, br)
+
+	// A pool-created incognito context, registered exactly as getOrCreateContextSafe
+	// would (p.contexts["private"] = mc for mode != "default").
+	incognitoID := newContextWithPage(t, br)
+	if persistentID == incognitoID {
+		t.Fatal("persistent and incognito contexts collided")
+	}
+	p.contextsMu.Lock()
+	p.contexts["private"] = &ManagedContext{Mode: "private", ID: incognitoID, Pages: map[string]*ManagedPage{}}
+	p.contextsMu.Unlock()
+
+	// Leave only the persistent + incognito page targets; the persistent one is the
+	// sole non-incognito page, so discovery must select it regardless of order.
+	closeForeignPageTargets(t, br, persistentID, incognitoID)
+
+	// Path 1: getOrCreateContextSafe.
+	mc, err := p.getOrCreateContextSafe("default", "default", "")
+	if err != nil {
+		t.Fatalf("getOrCreateContextSafe(default): %v", err)
+	}
+	mc.Mu.Lock()
+	gotCreate := mc.ID
+	mc.Mu.Unlock()
+	if gotCreate != persistentID {
+		t.Errorf("getOrCreateContextSafe bound default to %q; want persistent default %q (incognito was %q)",
+			gotCreate, persistentID, incognitoID)
+	}
+
+	// Path 2: rediscoverDefaultContext.
+	mc.Mu.Lock()
+	mc.ID = "STALE-DEFAULT-CTX-ID"
+	mc.Mu.Unlock()
+	p.rediscoverDefaultContext(mc)
+	mc.Mu.Lock()
+	gotRedisc := mc.ID
+	mc.Mu.Unlock()
+	if gotRedisc != persistentID {
+		t.Errorf("rediscoverDefaultContext bound default to %q; want persistent default %q (incognito was %q)",
+			gotRedisc, persistentID, incognitoID)
 	}
 }
