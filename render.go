@@ -106,7 +106,7 @@ func RenderURL(chrome *ChromeManager, req RenderRequest, timeout time.Duration) 
 		return nil, fmt.Errorf("%w: %s", ErrNavigate, err)
 	}
 
-	if err := waitPageReady(page, req.Wait); err != nil {
+	if err := waitPageReady(page, req.Wait, timeout, start); err != nil {
 		return nil, err
 	}
 
@@ -131,7 +131,14 @@ func RenderURL(chrome *ChromeManager, req RenderRequest, timeout time.Duration) 
 
 // waitPageReady blocks until the page reaches the requested readiness state.
 // Unknown or empty wait defaults to "load" (historical behavior).
-func waitPageReady(page *rod.Page, wait string) error {
+//
+// For "networkidle", the idle wait is bounded to 80% of the total timeout
+// (measured from start) so that HTML extraction always has at least 20% of
+// the budget left. If the network doesn't go idle within that window, we
+// proceed with whatever has loaded so far — a partial render is better than
+// a timeout. The idle wait runs on a child context (page.Timeout) so its
+// cancellation does not affect the parent page's ability to extract HTML.
+func waitPageReady(page *rod.Page, wait string, totalTimeout time.Duration, start time.Time) error {
 	switch strings.ToLower(strings.TrimSpace(wait)) {
 	case "domcontentloaded":
 		waitFn := page.WaitNavigation(proto.PageLifecycleEventNameDOMContentLoaded)
@@ -143,8 +150,16 @@ func waitPageReady(page *rod.Page, wait string) error {
 		if err := page.WaitLoad(); err != nil {
 			return fmt.Errorf("wait load: %w", err)
 		}
-		waitFn := page.WaitRequestIdle(networkIdleQuiet, nil, nil, nil)
-		waitFn()
+		// Bound the idle wait to 80% of the total timeout from start, leaving
+		// at least 20% for HTML extraction. The child page.Timeout context
+		// isolates the idle wait — if it expires, the parent page is unaffected
+		// and HTML() can still run.
+		idleBudget := totalTimeout*4/5 - time.Since(start)
+		if idleBudget > networkIdleQuiet {
+			idlePage := page.Timeout(idleBudget)
+			waitFn := idlePage.WaitRequestIdle(networkIdleQuiet, nil, nil, nil)
+			waitFn()
+		}
 		return nil
 	default: // "load" or empty
 		if err := page.WaitLoad(); err != nil {
