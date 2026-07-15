@@ -4,18 +4,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
 )
 
 const defaultRenderTimeoutSecs = 20
+
+// networkIdleQuiet is the duration with zero in-flight requests before
+// WaitRequestIdle declares the page "idle". 500ms matches Puppeteer's
+// networkidle0/2 semantics and is enough for Google CSE / analytics
+// scripts to finish without waiting indefinitely on long-poll connections.
+const networkIdleQuiet = 500 * time.Millisecond
 
 // RenderRequest is the JSON body for POST /render.
 type RenderRequest struct {
 	URL         string `json:"url"`
 	TimeoutSecs int    `json:"timeout_secs,omitempty"`
 	Proxy       string `json:"proxy,omitempty"`
+	Wait        string `json:"wait,omitempty"` // wait strategy: "load" (default), "domcontentloaded", "networkidle"
 }
 
 // RenderResponse is the JSON body returned by POST /render.
@@ -63,6 +72,14 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 }
 
 // RenderURL renders a URL in a stealth Chrome page and returns HTML.
+//
+// The wait strategy is controlled by req.Wait:
+//   - "load" (default): waits for window.onload — matches historical behavior.
+//   - "domcontentloaded": waits for DOMContentLoaded only — faster, but JS
+//     may not have finished mutating the DOM.
+//   - "networkidle": waits for onload AND then for network to go idle
+//     (no in-flight requests for networkIdleQuiet). Use for JS-heavy pages
+//     that render content asynchronously (Google CSE, React/Vue apps).
 func RenderURL(chrome *ChromeManager, req RenderRequest, timeout time.Duration) (*RenderResponse, error) {
 	browser, contextID, authCleanup, err := chrome.NewContext(req.Proxy)
 	if err != nil {
@@ -89,8 +106,8 @@ func RenderURL(chrome *ChromeManager, req RenderRequest, timeout time.Duration) 
 		return nil, fmt.Errorf("%w: %s", ErrNavigate, err)
 	}
 
-	if err := page.WaitLoad(); err != nil {
-		return nil, fmt.Errorf("wait load: %w", err)
+	if err := waitPageReady(page, req.Wait); err != nil {
+		return nil, err
 	}
 
 	html, err := page.HTML()
@@ -110,6 +127,31 @@ func RenderURL(chrome *ChromeManager, req RenderRequest, timeout time.Duration) 
 		Status:    http.StatusOK,
 		ElapsedMs: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+// waitPageReady blocks until the page reaches the requested readiness state.
+// Unknown or empty wait defaults to "load" (historical behavior).
+func waitPageReady(page *rod.Page, wait string) error {
+	switch strings.ToLower(strings.TrimSpace(wait)) {
+	case "domcontentloaded":
+		waitFn := page.WaitNavigation(proto.PageLifecycleEventNameDOMContentLoaded)
+		waitFn()
+		return nil
+	case "networkidle":
+		// WaitLoad first — networkidle without onload can fire prematurely
+		// on pages with deferred scripts that haven't started yet.
+		if err := page.WaitLoad(); err != nil {
+			return fmt.Errorf("wait load: %w", err)
+		}
+		waitFn := page.WaitRequestIdle(networkIdleQuiet, nil, nil, nil)
+		waitFn()
+		return nil
+	default: // "load" or empty
+		if err := page.WaitLoad(); err != nil {
+			return fmt.Errorf("wait load: %w", err)
+		}
+		return nil
+	}
 }
 
 // renderURL performs the actual Chrome navigation and HTML extraction.

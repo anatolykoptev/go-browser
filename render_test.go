@@ -43,6 +43,30 @@ func TestRenderRequest_Parse_Defaults(t *testing.T) {
 	}
 }
 
+func TestRenderRequest_Parse_Wait(t *testing.T) {
+	tests := []struct {
+		name  string
+		raw   string
+		wantW string
+	}{
+		{"networkidle", `{"url":"https://example.com","wait":"networkidle"}`, "networkidle"},
+		{"domcontentloaded", `{"url":"https://example.com","wait":"domcontentloaded"}`, "domcontentloaded"},
+		{"load", `{"url":"https://example.com","wait":"load"}`, "load"},
+		{"empty_omitted", `{"url":"https://example.com"}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req RenderRequest
+			if err := json.Unmarshal([]byte(tt.raw), &req); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if req.Wait != tt.wantW {
+				t.Errorf("Wait = %q, want %q", req.Wait, tt.wantW)
+			}
+		})
+	}
+}
+
 func TestRenderResponse_JSON(t *testing.T) {
 	resp := RenderResponse{
 		URL:       "https://example.com",
@@ -95,7 +119,7 @@ func TestRenderResponse_JSON_ErrorField(t *testing.T) {
 
 	var got RenderResponse
 	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+		t.Fatalf("unmarshal round-trip: %v", err)
 	}
 
 	if got.Error != resp.Error {
