@@ -77,6 +77,7 @@ type ExceptionEntry struct {
 	LineNumber   int    `json:"line_number,omitempty"`
 	ColumnNumber int    `json:"column_number,omitempty"`
 	StackTrace   string `json:"stack_trace,omitempty"`
+	Reviewed     bool   `json:"reviewed,omitempty"` // #25: marks an exception as reviewed/resolved
 }
 
 // NavigationEntry is a captured main-frame navigation event.
@@ -151,6 +152,16 @@ func (c *LogCollector) AddException(e ExceptionEntry) {
 		c.droppedExceptions.Add(1)
 		copy(c.exceptions[0:], c.exceptions[1:])
 		c.exceptions[len(c.exceptions)-1] = e
+	}
+}
+
+// MarkExceptionReviewed marks the exception at the given index as reviewed/resolved.
+// #25: Allows operators to track which exceptions have been triaged.
+func (c *LogCollector) MarkExceptionReviewed(index int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if index >= 0 && index < len(c.exceptions) {
+		c.exceptions[index].Reviewed = true
 	}
 }
 

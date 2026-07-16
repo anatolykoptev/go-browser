@@ -349,6 +349,9 @@ func resolveSessionParams(req InteractRequest) (session, mode, proxy string, eph
 func generateEphemeralID() string {
 	id, err := generateID()
 	if err != nil {
+		// #39: Log the crypto/rand failure before falling back — a silent
+		// fallback masks a systemic entropy source problem.
+		slog.Warn("interact: generateID failed, falling back to timestamp-based ephemeral ID", "err", err)
 		return fmt.Sprintf("eph-%d", time.Now().UnixNano())
 	}
 	return id
