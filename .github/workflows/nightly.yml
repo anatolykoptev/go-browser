@@ -1,0 +1,64 @@
+name: nightly
+
+# Full test suite — the Chrome integration tests (stealth, egress guard,
+# context pool, actions, metrics) that the per-PR `preflight` gate skips
+# via `go test -short`. They run IN FULL here every night with a real
+# Chromium, so the -short split in preflight is a cadence change, NOT
+# skip-to-green: nothing is dropped, just moved off the hot PR path.
+#
+# Runs on GitHub-hosted `ubuntu-24.04-arm` (free for public repos, arm64
+# parity with prod). Chromium is NOT pre-installed on this image (unlike
+# x64 ubuntu-latest) — installed via apt below.
+
+on:
+  schedule:
+    - cron: "0 11 * * *"   # 11:00 UTC ≈ 03:00-04:00 America/Los_Angeles (off-peak)
+  workflow_dispatch: {}    # manual trigger (e.g. right after merging this)
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  full-test:
+    runs-on: ubuntu-24.04-arm
+    # Integration tests with Chrome were ~55s warm on a 4-core ARM box;
+    # hosted runners may be slower + need to install Chromium, so give
+    # generous headroom without letting a real hang run for 6h.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          # Latest patched toolchain, not go.mod's pin — see preflight.yml.
+          go-version: stable
+
+      # ubuntu-24.04-arm does NOT ship Chrome/Chromium (unlike x64).
+      # Install via apt — the snap shim works for headless rod tests.
+      # See https://github.com/actions/partner-runner-images: "Chrome
+      # browser" is listed under "omitted from the current image".
+      - name: Install Chromium
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq chromium-browser
+          chromium-browser --version || chromium --version
+
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+
+      - name: go test (full suite, no -short)
+        env:
+          # Tell acquireSharedBrowser to use the locally installed Chromium
+          # (it auto-detects /usr/bin/chromium-browser, but BROWSER_BIN
+          # makes it explicit and deterministic).
+          BROWSER_BIN: /usr/bin/chromium-browser
+          # INTEGRATION=1 overrides the testing.Short() gate so all
+          # Chrome-dependent tests run (not skipped).
+          INTEGRATION: "1"
+        run: go test ./... -v -count=1 -timeout 120s
