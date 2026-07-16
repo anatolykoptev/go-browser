@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.3](https://github.com/anatolykoptev/go-browser/compare/v0.20.2...v0.20.3) (2026-07-16)
+
+
+### Added
+
+* [#62](https://github.com/anatolykoptev/go-browser/issues/62) + [#63](https://github.com/anatolykoptev/go-browser/issues/63) — stealth LogCollector + token-lean a11y extraction levels ([041df8b](https://github.com/anatolykoptev/go-browser/commit/041df8ba3b9b1f661f04217dea70e83e68d41d4a))
+
 ## [0.20.2](https://github.com/anatolykoptev/go-browser/compare/v0.20.1...v0.20.2) (2026-07-16)
 
 
