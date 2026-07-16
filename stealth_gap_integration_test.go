@@ -7,6 +7,11 @@ import (
 
 // TestStealth_SecChUaPlatform verifies that Emulation.setUserAgentOverride
 // with userAgentMetadata causes navigator.userAgentData.platform to report "macOS".
+//
+// navigator.userAgentData is only available in a secure context (https://).
+// about:blank is NOT a secure context — UAD is undefined there. This test
+// navigates to https://example.com (a stable, lightweight HTTPS page) so the
+// API is accessible. See Chrome privacy-sandbox-dev-support issue #27.
 func TestStealth_SecChUaPlatform(t *testing.T) {
 	b := acquireSharedBrowser(t)
 
@@ -27,7 +32,8 @@ func TestStealth_SecChUaPlatform(t *testing.T) {
 	}
 	defer func() { _ = page.Close() }()
 
-	if err := page.Navigate("about:blank"); err != nil {
+	// navigator.userAgentData requires a secure context — about:blank won't work.
+	if err := page.Navigate("https://example.com"); err != nil {
 		t.Fatalf("navigate: %v", err)
 	}
 	_ = page.WaitLoad()
