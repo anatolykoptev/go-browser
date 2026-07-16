@@ -22,26 +22,6 @@ func DefaultOptions() Options {
 // Option configures browser behavior.
 type Option func(*Options)
 
-// WithConcurrency sets maximum concurrent renders.
-func WithConcurrency(n int) Option {
-	return func(o *Options) { o.Concurrency = n }
-}
-
-// WithRenderTimeout sets per-page render deadline.
-func WithRenderTimeout(d time.Duration) Option {
-	return func(o *Options) { o.RenderTimeout = d }
-}
-
-// WithHydrationWait sets the delay after body ready before capturing HTML.
-func WithHydrationWait(d time.Duration) Option {
-	return func(o *Options) { o.HydrationWait = d }
-}
-
-// WithUserAgent overrides the browser User-Agent header.
-func WithUserAgent(ua string) Option {
-	return func(o *Options) { o.UserAgent = ua }
-}
-
 // Apply applies options over defaults.
 func Apply(opts ...Option) Options {
 	o := DefaultOptions()
