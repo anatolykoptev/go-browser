@@ -41,3 +41,16 @@ func recordStaleCtxRecovery(outcome string) {
 		staleCtxFailed.Add(1)
 	}
 }
+
+// StaleContextRecoveryStats returns a process-lifetime snapshot of stale-default-context
+// recovery events by outcome. Embedders (go-wowa, ox-browser) surface these through their
+// own Prometheus metrics layer as chrome_stale_context_recovery_total {outcome=...}.
+//
+// The map is freshly allocated on each call to avoid race conditions on the returned slice.
+func StaleContextRecoveryStats() map[string]uint64 {
+	return map[string]uint64{
+		StaleCtxOutcomeDetected:  staleCtxDetected.Load(),
+		StaleCtxOutcomeRecovered: staleCtxRecovered.Load(),
+		StaleCtxOutcomeFailed:    staleCtxFailed.Load(),
+	}
+}
