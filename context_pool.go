@@ -49,6 +49,12 @@ type ContextPool struct {
 	stop       chan struct{}
 	done       chan struct{}
 
+	// generation is incremented on each UpdateBrowser (reconnect). ManagedPage
+	// records the generation at creation time; IsValid() checks it matches.
+	// This detects stale page references after reconnect (Playwright _browserClosed
+	// pattern + Vercel agent-browser generation counter).
+	generation atomic.Uint64
+
 	// test-only injection: sleep before newPageInContext to simulate slow CDP.
 	newPageDelay time.Duration
 }
@@ -84,6 +90,14 @@ type ManagedPage struct {
 	Refs         *RefMap
 	LogCollector *LogCollector
 	DetachedAt   time.Time // zero = attached (agent-controllable)
+	generation   uint64    // pool generation at creation; mismatch = stale after reconnect
+}
+
+// IsValid reports whether this page belongs to the current browser generation.
+// After reconnect, all pages from the previous generation are invalid (their
+// rod.Page references point to a closed CDP connection).
+func (mp *ManagedPage) IsValid(pool *ContextPool) bool {
+	return mp != nil && mp.generation == pool.generation.Load()
 }
 
 // ContextInfo describes a context and its sessions (for chrome_tabs tool).
@@ -152,7 +166,8 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		if adopted, aerr := p.adoptExistingPage(mc); aerr == nil && adopted != nil {
 			readyCh := make(chan struct{})
 			close(readyCh)
-			mp := &ManagedPage{Session: session, Page: adopted, ready: readyCh, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector()}
+			curGen := p.generation.Load()
+			mp := &ManagedPage{Session: session, Page: adopted, ready: readyCh, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector(), generation: curGen}
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
 				mc.Mu.Unlock()
@@ -173,6 +188,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	}
 
 	// Phase 3: reserve placeholder, release lock, do CDP.
+	curGen := p.generation.Load()
 	placeholder := &ManagedPage{
 		Session:      session,
 		ready:        make(chan struct{}),
@@ -181,6 +197,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		Refs:         NewRefMap(),
 		LogCollector: NewLogCollector(),
 		URL:          url,
+		generation:   curGen,
 	}
 	mc.Pages[session] = placeholder
 	mc.Mu.Unlock()
@@ -194,7 +211,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	mc.Mu.Lock()
 	mp := mc.Pages[session]
 	if mp == nil {
-		// Reaped while we were in CDP.
+		// Reaped while we were in CDP, or invalidated by reconnect (generation changed).
 		mc.Mu.Unlock()
 		if page != nil {
 			_ = page.Close()
@@ -207,6 +224,15 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		delete(mc.Pages, session)
 		mc.Mu.Unlock()
 		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", key, cdpErr)
+		close(placeholder.ready)
+		return nil, placeholder.readyErr
+	}
+	// If reconnect happened during CDP, the page belongs to the old browser — discard it.
+	if mp.generation != p.generation.Load() {
+		delete(mc.Pages, session)
+		mc.Mu.Unlock()
+		_ = page.Close()
+		placeholder.readyErr = fmt.Errorf("context_pool: session %q invalidated by reconnect during creation", session)
 		close(placeholder.ready)
 		return nil, placeholder.readyErr
 	}
@@ -380,11 +406,28 @@ func (p *ContextPool) Close() {
 	<-p.done
 }
 
-// UpdateBrowser replaces the browser reference atomically (after reconnect).
+// UpdateBrowser replaces the browser reference atomically (after reconnect),
+// increments the generation counter, and invalidates all existing pages.
 // All readers using getBrowser() / p.browser.Load() will see the new browser
-// immediately without any lock contention.
+// immediately without any lock contention. Existing ManagedPage objects from
+// the previous generation are cleared — their rod.Page references point to the
+// closed CDP connection and must not be reused (Playwright _browserClosed
+// cascading invalidation pattern).
 func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
 	p.browser.Store(b)
+	p.generation.Add(1)
+
+	// Invalidate all existing pages — they belong to the old browser generation.
+	// Their rod.Page references are dead (CDP connection closed). Callers that
+	// hold a ManagedPage reference can check IsValid() for an explicit error;
+	// the pool's map is cleared so new GetOrCreatePage calls create fresh pages.
+	p.contextsMu.Lock()
+	for _, mc := range p.contexts {
+		mc.Mu.Lock()
+		mc.Pages = make(map[string]*ManagedPage)
+		mc.Mu.Unlock()
+	}
+	p.contextsMu.Unlock()
 }
 
 // FindManagedPage finds a managed page by session name across all contexts.

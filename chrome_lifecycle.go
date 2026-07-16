@@ -2,6 +2,7 @@ package browser
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
@@ -22,6 +23,65 @@ func (m *ChromeManager) getGuard() *egressGuard {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.guard
+}
+
+// startDisconnectWatcher monitors the CDP connection for unexpected disconnects.
+// When the browser's WebSocket closes (Chrome crash, network drop), rod's
+// EachEvent goroutine exits. We detect this and close LostConnection unless
+// Close() has already closed closingGracefully. chromedp pattern.
+func (m *ChromeManager) startDisconnectWatcher() {
+	go func() {
+		b := m.getBrowser()
+		if b == nil {
+			return
+		}
+		// Wait for the browser's event loop to exit — this happens when the
+		// CDP WebSocket closes. rod doesn't expose a direct "disconnected" channel,
+		// but we can poll Connected() or use a heartbeat.
+		// Simpler: use a ticker to poll browser connectivity every 5s.
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.closingGracefully:
+				return
+			case <-ticker.C:
+				if !m.Connected() {
+					// Connection lost — check if it's intentional.
+					select {
+					case <-m.closingGracefully:
+						return // intentional close, don't fire LostConnection
+					default:
+					}
+					select {
+					case <-m.LostConnection:
+						// already closed
+					default:
+						close(m.LostConnection)
+					}
+					return
+				}
+				// Active health probe: try a no-op CDP call.
+				b := m.getBrowser()
+				if b == nil {
+					continue
+				}
+				if _, err := (&proto.BrowserGetVersion{}).Call(b); err != nil {
+					select {
+					case <-m.closingGracefully:
+						return
+					default:
+					}
+					select {
+					case <-m.LostConnection:
+					default:
+						close(m.LostConnection)
+					}
+					return
+				}
+			}
+		}
+	}()
 }
 
 // reconnect closes the old connection and establishes a new one.
@@ -69,6 +129,8 @@ func (m *ChromeManager) reconnect() error {
 	m.guard = guard
 	m.keepaliveCtxID = ""
 	pool := m.pool
+	// Recreate LostConnection for the new connection — the old one may have been closed.
+	m.LostConnection = make(chan struct{})
 	m.mu.Unlock()
 
 	if pool != nil {
@@ -81,6 +143,8 @@ func (m *ChromeManager) reconnect() error {
 		}
 		m.mu.Unlock()
 	}
+	// Restart the disconnect watcher on the new connection.
+	m.startDisconnectWatcher()
 	return nil
 }
 
@@ -92,9 +156,17 @@ func (m *ChromeManager) Connected() bool {
 }
 
 // Close disconnects from Chrome and releases resources.
+// Signals closingGracefully so the disconnect watcher doesn't fire LostConnection.
 // Sets browser to nil under lock so concurrent callers see the shutdown state,
 // then closes the old browser outside the lock (may take seconds).
 func (m *ChromeManager) Close() {
+	// Signal intentional close — disconnect watcher checks this before firing LostConnection.
+	select {
+	case <-m.closingGracefully:
+	default:
+		close(m.closingGracefully)
+	}
+
 	m.mu.Lock()
 	b := m.browser
 	m.browser = nil
