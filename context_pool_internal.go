@@ -3,6 +3,7 @@ package browser
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -300,12 +301,20 @@ func (p *ContextPool) watchTargetDestroyed() {
 
 // sessionNameFromURL derives a human-readable session name from a URL.
 // Example: "https://example.com/page?q=1" → "example.com/page".
+// #20: Logs a warning when the URL is malformed or has no host — the session
+// name silently downgrades to an ephemeral ID, which makes session management
+// harder for callers expecting a deterministic name.
 func sessionNameFromURL(rawURL string) string {
 	if rawURL == "" || rawURL == "about:blank" {
 		return generateEphemeralID()
 	}
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
+	if err != nil {
+		slog.Warn("context_pool: malformed URL for session name — using ephemeral ID", "url", rawURL, "err", err)
+		return generateEphemeralID()
+	}
+	if u.Host == "" {
+		slog.Warn("context_pool: URL has no host for session name — using ephemeral ID", "url", rawURL)
 		return generateEphemeralID()
 	}
 	name := u.Host + u.Path

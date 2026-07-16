@@ -2,6 +2,7 @@ package browser
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 
 	"github.com/go-rod/rod"
@@ -52,8 +53,15 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 	// fresh one on the new connection.
 	var cleanup func()
 	if proxyUser != "" {
-		if guard := m.getGuard(); guard != nil {
+		guard := m.getGuard()
+		if guard != nil {
 			cleanup = guard.registerProxyAuth(proxyUser, proxyPass)
+		} else {
+			// #21: Log when proxy auth is silently skipped — the egress guard is nil
+			// (e.g., during reconnect or if installEgressGuard failed). Without this,
+			// authenticated proxy requests will fail with 407 Proxy Authentication
+			// Required and the caller has no idea why.
+			slog.Warn("chrome: proxy auth registration skipped — egress guard is nil (reconnect in progress?)", "proxyUser", proxyUser)
 		}
 	}
 
