@@ -155,6 +155,69 @@ func (m *ChromeManager) Connected() bool {
 	return m.browser != nil
 }
 
+// HealthStatus is the result of a ChromeManager health probe.
+// #49: Returned by HealthCheck() for the /health endpoint and external monitors.
+type HealthStatus struct {
+	Connected   bool   `json:"connected"`
+	WsURL       string `json:"ws_url"`
+	LatencyMs   int64  `json:"latency_ms"`
+	ContextPool *PoolStats `json:"context_pool,omitempty"`
+}
+
+// PoolStats is a snapshot of the ContextPool state for health reporting.
+type PoolStats struct {
+	Contexts  int `json:"contexts"`
+	Pages     int `json:"pages"`
+	Generation uint64 `json:"generation"`
+}
+
+// HealthCheck performs an active CDP health probe and returns the status.
+// If the browser is not connected, returns a disconnected status without
+// attempting a CDP call (which would block).
+func (m *ChromeManager) HealthCheck() HealthStatus {
+	m.mu.RLock()
+	b := m.browser
+	m.mu.RUnlock()
+
+	status := HealthStatus{
+		Connected: b != nil,
+		WsURL:     m.wsURL,
+	}
+
+	if b == nil {
+		return status
+	}
+
+	// Active health probe: measure CDP round-trip latency.
+	start := time.Now()
+	if _, err := (&proto.BrowserGetVersion{}).Call(b); err != nil {
+		// CDP call failed — connection is stale even though browser != nil.
+		status.Connected = false
+		return status
+	}
+	status.LatencyMs = time.Since(start).Milliseconds()
+
+	// Gather pool stats if available.
+	if pool := m.Pool(); pool != nil {
+		pool.contextsMu.RLock()
+		ctxCount := len(pool.contexts)
+		pageCount := 0
+		for _, mc := range pool.contexts {
+			mc.Mu.Lock()
+			pageCount += len(mc.Pages)
+			mc.Mu.Unlock()
+		}
+		pool.contextsMu.RUnlock()
+		status.ContextPool = &PoolStats{
+			Contexts:   ctxCount,
+			Pages:      pageCount,
+			Generation: pool.generation.Load(),
+		}
+	}
+
+	return status
+}
+
 // Close disconnects from Chrome and releases resources.
 // Signals closingGracefully so the disconnect watcher doesn't fire LostConnection.
 // Sets browser to nil under lock so concurrent callers see the shutdown state,

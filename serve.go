@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 )
 
 const (
@@ -70,6 +71,7 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /metrics", s.handleMetrics) // #55: Prometheus metrics
 	mux.HandleFunc("POST /chrome/interact", s.handleInteract)
 	mux.HandleFunc("POST /solve", s.handleSolve)
 	mux.HandleFunc("POST /render", s.handleRender)
@@ -77,9 +79,75 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /selftest", s.handleSelftest)
 }
 
-// handleHealth returns 200 OK with service status.
+// handleHealth returns 200 OK with structured health status.
+// #49: Uses HealthCheck() for active CDP probe with latency measurement.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	if s.chrome == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status":    "degraded",
+			"connected": false,
+			"error":     "chrome not connected",
+		})
+		return
+	}
+	status := s.chrome.HealthCheck()
+	code := http.StatusOK
+	if !status.Connected {
+		code = http.StatusServiceUnavailable
+	}
+	writeJSON(w, code, status)
+}
+
+// handleMetrics exposes Prometheus-format metrics.
+// #55: Text exposition format — no prometheus/client_golang dependency needed.
+// Metrics exposed:
+//   - go_browser_connected (gauge: 1=connected, 0=disconnected)
+//   - go_browser_cdp_latency_ms (gauge: CDP round-trip latency)
+//   - go_browser_context_count (gauge: active browser contexts)
+//   - go_browser_page_count (gauge: active managed pages)
+//   - go_browser_generation (gauge: context pool generation counter)
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+
+	var sb strings.Builder
+	if s.chrome == nil {
+		sb.WriteString("# HELP go_browser_connected Chrome connection state (1=connected, 0=disconnected)\n")
+		sb.WriteString("# TYPE go_browser_connected gauge\n")
+		sb.WriteString("go_browser_connected 0\n")
+		_, _ = w.Write([]byte(sb.String()))
+		return
+	}
+
+	status := s.chrome.HealthCheck()
+
+	connected := 0
+	if status.Connected {
+		connected = 1
+	}
+
+	sb.WriteString("# HELP go_browser_connected Chrome connection state (1=connected, 0=disconnected)\n")
+	sb.WriteString("# TYPE go_browser_connected gauge\n")
+	sb.WriteString(fmt.Sprintf("go_browser_connected %d\n", connected))
+
+	sb.WriteString("# HELP go_browser_cdp_latency_ms CDP round-trip latency in milliseconds\n")
+	sb.WriteString("# TYPE go_browser_cdp_latency_ms gauge\n")
+	sb.WriteString(fmt.Sprintf("go_browser_cdp_latency_ms %d\n", status.LatencyMs))
+
+	if status.ContextPool != nil {
+		sb.WriteString("# HELP go_browser_context_count Active browser contexts\n")
+		sb.WriteString("# TYPE go_browser_context_count gauge\n")
+		sb.WriteString(fmt.Sprintf("go_browser_context_count %d\n", status.ContextPool.Contexts))
+
+		sb.WriteString("# HELP go_browser_page_count Active managed pages\n")
+		sb.WriteString("# TYPE go_browser_page_count gauge\n")
+		sb.WriteString(fmt.Sprintf("go_browser_page_count %d\n", status.ContextPool.Pages))
+
+		sb.WriteString("# HELP go_browser_generation Context pool generation counter (increments on reconnect)\n")
+		sb.WriteString("# TYPE go_browser_generation gauge\n")
+		sb.WriteString(fmt.Sprintf("go_browser_generation %d\n", status.ContextPool.Generation))
+	}
+
+	_, _ = w.Write([]byte(sb.String()))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
