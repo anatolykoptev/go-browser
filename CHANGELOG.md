@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.4](https://github.com/anatolykoptev/go-browser/compare/v0.20.3...v0.20.4) (2026-07-16)
+
+
+### Fixed
+
+* restore StaleContextRecoveryStats — incorrectly removed as dead code ([6d6e12f](https://github.com/anatolykoptev/go-browser/commit/6d6e12f0bde950dbd22aa9cfb189bda690fb5d26))
+
 ## [0.20.3](https://github.com/anatolykoptev/go-browser/compare/v0.20.2...v0.20.3) (2026-07-16)
 
 
