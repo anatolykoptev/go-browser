@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -229,15 +230,24 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	info, infoErr := page.Info()
 	finalURL := req.URL
 	mp.mu.Lock()
-	if infoErr == nil {
+	if infoErr == nil && info != nil {
 		finalURL = info.URL
 		mp.URL = finalURL
+	} else if infoErr != nil {
+		// #24: Log page.Info() error instead of silently ignoring. A failure here
+		// means we can't capture the final URL — the page may have navigated away
+		// or been closed. Log at Warn so it's observable in production.
+		slog.Warn("chrome: failed to get page info for final URL capture", "session", session, "err", infoErr)
 	}
 	mp.LastUsed = time.Now()
 	mp.mu.Unlock()
 
 	if ephemeral || destroyRequested {
-		_ = pool.ClosePage(session)
+		// #14: Log ClosePage errors instead of silently swallowing. A failed
+		// close leaves a zombie tab in Chrome — not fatal, but observable.
+		if err := pool.ClosePage(session); err != nil {
+			slog.Warn("chrome: failed to close ephemeral session", "session", session, "err", err)
+		}
 	}
 
 	// Capture failure snapshot if there was an error
