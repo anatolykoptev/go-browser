@@ -43,9 +43,12 @@ jobs:
       # curl install script — the script's master-branch checksums are
       # unreliable and fail the gate on mismatch (seen live: v2.12.2).
       # golangci-lint v2 requires action v7 (v6 rejects v2 version strings).
+      # v2.12.2 is the latest release — v2.1.6 was built with Go 1.24 and
+      # can't lint a go1.26 module ("Go language version used to build
+      # golangci-lint is lower than the targeted Go version").
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1.6
+          version: v2.12.2
 
       - name: make preflight
         run: make preflight
