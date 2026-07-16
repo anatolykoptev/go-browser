@@ -319,6 +319,9 @@ func (p *ContextPool) ClosePage(session string) error {
 		emptyKey string
 	)
 
+	// Phase 1: find the session under RLock — don't block on ready channel
+	// while holding contextsMu (gostall: starvation).
+	var readyCh chan struct{}
 	p.contextsMu.RLock()
 	for key, c := range p.contexts {
 		c.Mu.Lock()
@@ -327,19 +330,10 @@ func (p *ContextPool) ClosePage(session string) error {
 			c.Mu.Unlock()
 			continue
 		}
-		// If still a placeholder, wait for it so we get a real Page.
-		c.Mu.Unlock()
-		if mp.ready != nil {
-			<-mp.ready
-		}
-		c.Mu.Lock()
-		page = mp.Page
-		delete(c.Pages, session)
-		if len(c.Pages) == 0 && key != "default" {
-			emptyKey = key
-		}
-		c.Mu.Unlock()
+		readyCh = mp.ready
 		mc = c
+		emptyKey = key
+		c.Mu.Unlock()
 		break
 	}
 	p.contextsMu.RUnlock()
@@ -347,6 +341,26 @@ func (p *ContextPool) ClosePage(session string) error {
 	if mc == nil {
 		return fmt.Errorf("context_pool: session %q not found", session)
 	}
+
+	// Phase 2: wait for placeholder ready outside any pool lock.
+	if readyCh != nil {
+		<-readyCh
+	}
+
+	// Phase 3: re-acquire locks to delete and extract page.
+	mc.Mu.Lock()
+	mp, ok := mc.Pages[session]
+	if !ok {
+		// Page was reaped between phase 1 and 3 — nothing to close.
+		mc.Mu.Unlock()
+		return nil
+	}
+	page = mp.Page
+	delete(mc.Pages, session)
+	if len(mc.Pages) != 0 || emptyKey == "default" {
+		emptyKey = ""
+	}
+	mc.Mu.Unlock()
 
 	// Close page unlocked — may take seconds.
 	closePageWithTimeout(page)

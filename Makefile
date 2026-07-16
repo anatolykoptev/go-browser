@@ -1,4 +1,4 @@
-.PHONY: lint test test-integration preflight server run
+.PHONY: lint test test-integration preflight server run gostall
 
 lint:
 	golangci-lint run ./...
@@ -9,10 +9,18 @@ test:
 test-integration:
 	go test ./... -v -count=1 -timeout 60s
 
+# gostall: static analysis for lock-order inversions, missing unlocks,
+# WaitGroup misuse, channel deadlocks, livelocks, starvation.
+# #53: Fleet-wide prevention tool — catches concurrency bugs at build time.
+gostall:
+	@command -v gostall >/dev/null 2>&1 || { echo "gostall not installed: go install github.com/erfanmomeniii/gostall/cmd/gostall@latest"; exit 1; }
+	@echo "==> gostall"
+	GOWORK=off gostall ./...
+
 # preflight = the CI gate: gofmt + vet + build + short tests with race detector.
 # Integration tests (requiring a live Chrome) are skipped under -short.
-# #53: Race detector enabled in CI — catches concurrency bugs that vet misses.
-preflight: lint
+# #53: Race detector + gostall enabled in CI — catches concurrency bugs that vet misses.
+preflight: lint gostall
 	@echo "==> gofmt"
 	@gofmt -l . | tee /dev/stderr | grep -q . && (echo "gofmt issues found" && exit 1) || true
 	@echo "==> go vet"
