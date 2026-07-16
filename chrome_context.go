@@ -72,12 +72,21 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 // Input:  "http://user:pass@host:port" → ("host:port", "user", "pass")
 // Input:  "http://host:port"           → ("http://host:port", "", "")
 // Input:  ""                           → ("", "", "")
+// #36: Validates the scheme is http, https, or socks5; logs and returns
+// the raw string unchanged for unsupported schemes.
 func parseProxy(raw string) (server, user, pass string) {
 	if raw == "" {
 		return "", "", ""
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.User == nil {
+		return raw, "", ""
+	}
+	// #36: Only http, https, and socks5 proxy schemes are allowed.
+	switch u.Scheme {
+	case "http", "https", "socks5":
+	default:
+		slog.Warn("chrome: proxy URL with unsupported scheme, passing through unchanged", "scheme", u.Scheme, "url", raw)
 		return raw, "", ""
 	}
 	pass, _ = u.User.Password()

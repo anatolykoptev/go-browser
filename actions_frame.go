@@ -2,6 +2,8 @@ package browser
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -40,7 +42,7 @@ func execTypeViaKeyboard(ctx context.Context, page *rod.Page, a Action) ActionRe
 		select {
 		case <-ctx.Done():
 			return ActionResult{Action: a.Type, Ok: false, Error: ctx.Err().Error()}
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(frameKeyDelay()): // #42: jittered delay to avoid detection
 		}
 	}
 	if a.Submit {
@@ -63,6 +65,16 @@ const (
 	frameRetryInterval = 500 * time.Millisecond
 	frameMaxRetries    = 10 // 10 × 500ms = 5 seconds max wait for iframe
 )
+
+// frameKeyDelay returns a 50ms base delay with ±10ms jitter (40–60ms) using
+// crypto/rand, so inter-key timing is not a constant that bot detectors can
+// fingerprint. #42
+func frameKeyDelay() time.Duration {
+	var b [2]byte
+	_, _ = rand.Read(b[:])
+	jitter := int16(binary.LittleEndian.Uint16(b[:])) % 21 // range -10..+10
+	return 50*time.Millisecond + time.Duration(jitter)*time.Millisecond
+}
 
 // parseFrameSelector returns ("css", selector) or ("url", pattern).
 func parseFrameSelector(sel string) (string, string) {

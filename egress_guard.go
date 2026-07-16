@@ -127,6 +127,12 @@ func isLocalhostURL(ctx context.Context, u *url.URL) bool {
 	if err != nil || len(addrs) == 0 {
 		return false
 	}
+	// #37: Log DNS resolution at Debug level for observability.
+	ips := make([]string, len(addrs))
+	for i, a := range addrs {
+		ips[i] = a.IP.String()
+	}
+	slog.Debug("egress guard: DNS resolution for URL check", "host", host, "ips", ips)
 	for _, a := range addrs {
 		if httputil.IsBlockedIP(a.IP) {
 			return true
