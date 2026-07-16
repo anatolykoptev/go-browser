@@ -26,6 +26,7 @@ func generateID() (string, error) {
 const (
 	contextPoolReaperInterval = 30 * time.Second
 	contextPoolDefaultTTL     = 30 * time.Minute
+	pageCreationTimeout       = 30 * time.Second // #41: max time to create a page via CDP
 )
 
 // ContextPool manages named browser sessions grouped by context (default/private/proxy).
@@ -82,15 +83,21 @@ type ManagedPage struct {
 	mu           sync.Mutex
 	Session      string
 	Page         *rod.Page
-	ready        chan struct{} // closed when Page != nil (or creation failed)
-	readyErr     error         // non-nil if page creation failed
+	ready        chan struct{}       // closed when Page != nil (or creation failed)
+	readyOnce    sync.Once           // ensures ready is closed exactly once
+	readyErr     error               // non-nil if page creation failed
 	URL          string
 	LastUsed     time.Time
-	TTL          time.Duration // 0 = never expires
+	TTL          time.Duration       // 0 = never expires
 	Refs         *RefMap
 	LogCollector *LogCollector
-	DetachedAt   time.Time // zero = attached (agent-controllable)
-	generation   uint64    // pool generation at creation; mismatch = stale after reconnect
+	DetachedAt   time.Time           // zero = attached (agent-controllable)
+	generation   uint64              // pool generation at creation; mismatch = stale after reconnect
+}
+
+// signalReady closes the ready channel exactly once. Safe to call multiple times.
+func (mp *ManagedPage) signalReady() {
+	mp.readyOnce.Do(func() { close(mp.ready) })
 }
 
 // IsValid reports whether this page belongs to the current browser generation.
@@ -205,7 +212,24 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if p.newPageDelay > 0 {
 		time.Sleep(p.newPageDelay) // test injection — simulates slow CDP
 	}
-	page, cdpErr := p.createPageWithStaleRecovery(mc, key)
+	// #41: Add a timeout to page creation so a hung CDP call doesn't leave a
+	// placeholder with Page==nil indefinitely. The placeholder is cleaned up
+	// and waiters get an explicit error.
+	pageCh := make(chan *rod.Page, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		pg, err := p.createPageWithStaleRecovery(mc, key)
+		pageCh <- pg
+		errCh <- err
+	}()
+	var page *rod.Page
+	var cdpErr error
+	select {
+	case page = <-pageCh:
+		cdpErr = <-errCh
+	case <-time.After(pageCreationTimeout):
+		cdpErr = fmt.Errorf("context_pool: create tab in context %q timed out after %s", key, pageCreationTimeout)
+	}
 
 	// Phase 4: patch placeholder and signal waiters regardless of outcome.
 	mc.Mu.Lock()
@@ -216,7 +240,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		if page != nil {
 			_ = page.Close()
 		}
-		close(placeholder.ready) // unblock any waiters with nil page
+		placeholder.signalReady() // unblock any waiters with nil page
 		placeholder.readyErr = fmt.Errorf("context_pool: session %q was reaped during creation", session)
 		return nil, placeholder.readyErr
 	}
@@ -224,7 +248,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		delete(mc.Pages, session)
 		mc.Mu.Unlock()
 		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", key, cdpErr)
-		close(placeholder.ready)
+		placeholder.signalReady()
 		return nil, placeholder.readyErr
 	}
 	// If reconnect happened during CDP, the page belongs to the old browser — discard it.
@@ -233,7 +257,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		mc.Mu.Unlock()
 		_ = page.Close()
 		placeholder.readyErr = fmt.Errorf("context_pool: session %q invalidated by reconnect during creation", session)
-		close(placeholder.ready)
+		placeholder.signalReady()
 		return nil, placeholder.readyErr
 	}
 	mp.Page = page
@@ -243,7 +267,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if mp.LogCollector != nil {
 		mp.LogCollector.SubscribeCDP(page)
 	}
-	close(placeholder.ready)
+	placeholder.signalReady()
 	return mp, nil
 }
 
