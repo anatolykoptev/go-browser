@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -272,4 +273,98 @@ func TestEgressGuard_CoexistsWithActiveProxyAuth_StillBlocks(t *testing.T) {
 	if !strings.Contains(navErr.Error(), "BLOCKED_BY_CLIENT") {
 		t.Errorf("navigate error = %q, want it to mention BLOCKED_BY_CLIENT (guard-originated, not some other failure)", navErr.Error())
 	}
+}
+
+// TestEgressGuard_AllowLocalhostBypass proves the EGRESS_ALLOW_LOCALHOST
+// escape hatch: when allowLocalhost is true, a navigation to 127.0.0.1
+// (blocked by default) is allowed through. This is the dev/test path for
+// Chrome-in-container reaching a local server on the host or a sibling
+// container — the SSRF guard blocks it by default because a caller-supplied
+// URL reaching internal infrastructure is the classic SSRF vector, but a
+// local dev server is a legitimate target the guard was never meant to stop.
+//
+// The test toggles the package-level allowLocalhost flag directly (it's read
+// at init from EGRESS_ALLOW_LOCALHOST, but the test can't set env vars before
+// init runs) and restores it afterward to avoid leaking state into other
+// tests in this file that rely on the default (blocking) behavior.
+func TestEgressGuard_AllowLocalhostBypass(t *testing.T) {
+	b := acquireSharedBrowser(t)
+	page := newGuardedPage(t, b)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("localhost-bypass-ok"))
+	}))
+	defer srv.Close()
+
+	// Sanity: without the bypass, the guard blocks this (same as
+	// TestEgressGuard_DirectInternalTarget_Blocked).
+	err := page.Timeout(navigateTimeout).Navigate(srv.URL)
+	if err == nil {
+		t.Fatalf("baseline: navigate to %q without bypass should fail, got nil", srv.URL)
+	}
+
+	// Enable the bypass and retry — the same target should now load.
+	prev := allowLocalhost
+	allowLocalhost = true
+	t.Cleanup(func() { allowLocalhost = prev })
+
+	// Navigate to a fresh URL on the same server (Chrome caches the
+	// blocked-by-client result for the exact URL — a query param forces a
+	// new Fetch.requestPaused event).
+	bypassURL := srv.URL + "/?bypass=1"
+	if err := page.Timeout(navigateTimeout).Navigate(bypassURL); err != nil {
+		t.Fatalf("navigate to %q with bypass enabled: %v", bypassURL, err)
+	}
+	_ = page.WaitLoad()
+	html, err := page.HTML()
+	if err != nil {
+		t.Fatalf("page.HTML: %v", err)
+	}
+	if !strings.Contains(html, "localhost-bypass-ok") {
+		t.Errorf("page did not load expected content; got: %s", html)
+	}
+}
+
+// TestIsLocalhostURL covers the URL classification helper that the bypass
+// path uses — no Chrome connection needed, pure function.
+func TestIsLocalhostURL(t *testing.T) {
+	ctx := t.Context()
+
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"http://localhost:8080/", true},
+		{"http://127.0.0.1:8080/", true},
+		{"http://[::1]:8080/", true},
+		{"http://10.0.0.1/", true},
+		{"http://192.168.1.1/", true},
+		{"http://172.16.0.1/", true},
+		{"http://169.254.169.254/", true},
+		{"http://example.com/", false},
+		{"http://8.8.8.8/", false},
+		{"http://foo.localhost/", true},
+		{"http://my.sub.localhost/", true},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			u, err := parseURL(tt.url)
+			if err != nil {
+				if tt.url == "" {
+					return // empty string → parse error is fine, want false
+				}
+				t.Fatalf("parse %q: %v", tt.url, err)
+			}
+			got := isLocalhostURL(ctx, u)
+			if got != tt.want {
+				t.Errorf("isLocalhostURL(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func parseURL(raw string) (*url.URL, error) {
+	return url.Parse(raw)
 }

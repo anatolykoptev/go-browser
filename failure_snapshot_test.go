@@ -1,8 +1,8 @@
 package browser
 
 import (
-	"testing"
 	"github.com/go-rod/rod/lib/proto"
+	"testing"
 )
 
 func TestCaptureFailureSnapshot_NilPage(t *testing.T) {
