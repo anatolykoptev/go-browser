@@ -10,12 +10,15 @@ test-integration:
 	go test ./... -v -count=1 -timeout 60s
 
 # gostall: static analysis for lock-order inversions, missing unlocks,
-# WaitGroup misuse, channel deadlocks, livelocks, starvation.
+# and lock-held-while-blocking starvation.
 # #53: Fleet-wide prevention tool — catches concurrency bugs at build time.
+# Uses -lockorder -missingunlock -starvation only; -waitgroup -channel -livelock
+# excluded (intra-procedural false positives on defer wg.Done() in goroutines,
+# signal.Notify channels, and test spin loops).
 gostall:
 	@command -v gostall >/dev/null 2>&1 || { echo "gostall not installed: go install github.com/erfanmomeniii/gostall/cmd/gostall@latest"; exit 1; }
 	@echo "==> gostall"
-	GOWORK=off gostall ./...
+	GOWORK=off gostall -lockorder -missingunlock -starvation ./...
 
 # preflight = the CI gate: gofmt + vet + build + short tests with race detector.
 # Integration tests (requiring a live Chrome) are skipped under -short.
