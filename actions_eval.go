@@ -47,10 +47,10 @@ func execScreenshot(dc dispatchContext, a Action) (any, error) {
 	case "image", "full", "png", "full_png":
 		return doScreenshotEx(dc.page, opts)
 	default:
-		return doSnapshot(dc.page, a.Depth, "", a.Filter, a.Selector, dc.refMap)
+		return doSnapshotWithLevel(dc.page, a.Depth, "", a.Filter, a.Selector, a.Level, dc.refMap)
 	}
 }
 
 func execSnapshot(dc dispatchContext, a Action) (any, error) {
-	return doSnapshot(dc.page, a.Depth, a.Format, a.Filter, a.Selector, dc.refMap)
+	return doSnapshotWithLevel(dc.page, a.Depth, a.Format, a.Filter, a.Selector, a.Level, dc.refMap)
 }

@@ -171,7 +171,13 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	// here guarantees the domain is active for this interaction's actions.
 	logs := mp.LogCollector
 	if logs == nil {
-		logs = NewLogCollector()
+		// #62: Use stealth LogCollector when stealth profile is active — skips
+		// Runtime.enable and Console.enable to avoid CDP detection.
+		if pool.getStealthProfile() != nil {
+			logs = NewStealthLogCollector()
+		} else {
+			logs = NewLogCollector()
+		}
 		mp.LogCollector = logs
 		logs.SubscribeCDP(page)
 	} else {

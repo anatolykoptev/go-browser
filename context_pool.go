@@ -41,8 +41,9 @@ const (
 //   - CDP I/O (TargetCreateTarget, Page.Close, etc.) runs OUTSIDE any lock.
 //
 // Lock ordering (must be acquired in this order if both are held):
-//   1. contextsMu (global pool lock)
-//   2. ManagedContext.Mu (per-context lock)
+//  1. contextsMu (global pool lock)
+//  2. ManagedContext.Mu (per-context lock)
+//
 // Never acquire in reverse order — deadlock risk. Never hold either lock across a CDP call.
 type ContextPool struct {
 	contextsMu sync.RWMutex
@@ -107,16 +108,16 @@ type ManagedPage struct {
 	mu           sync.Mutex
 	Session      string
 	Page         *rod.Page
-	ready        chan struct{}       // closed when Page != nil (or creation failed)
-	readyOnce    sync.Once           // ensures ready is closed exactly once
-	readyErr     error               // non-nil if page creation failed
+	ready        chan struct{} // closed when Page != nil (or creation failed)
+	readyOnce    sync.Once     // ensures ready is closed exactly once
+	readyErr     error         // non-nil if page creation failed
 	URL          string
 	LastUsed     time.Time
-	TTL          time.Duration       // 0 = never expires
+	TTL          time.Duration // 0 = never expires
 	Refs         *RefMap
 	LogCollector *LogCollector
-	DetachedAt   time.Time           // zero = attached (agent-controllable)
-	generation   uint64              // pool generation at creation; mismatch = stale after reconnect
+	DetachedAt   time.Time // zero = attached (agent-controllable)
+	generation   uint64    // pool generation at creation; mismatch = stale after reconnect
 }
 
 // signalReady closes the ready channel exactly once. Safe to call multiple times.
@@ -196,7 +197,11 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		mc.Mu.Unlock()
 		if adopted, aerr := p.adoptExistingPage(mc); aerr == nil && adopted != nil {
 			curGen := p.generation.Load()
-			mp := &ManagedPage{Session: session, Page: adopted, ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector(), generation: curGen}
+			lc := NewLogCollector()
+			if p.getStealthProfile() != nil {
+				lc = NewStealthLogCollector()
+			}
+			mp := &ManagedPage{Session: session, Page: adopted, ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: lc, generation: curGen}
 			mp.signalReady() // close ready immediately — adopted page is already live
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
@@ -225,13 +230,17 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 
 	// Phase 3: reserve placeholder, release lock, do CDP.
 	curGen := p.generation.Load()
+	placeholderLC := NewLogCollector()
+	if p.getStealthProfile() != nil {
+		placeholderLC = NewStealthLogCollector()
+	}
 	placeholder := &ManagedPage{
 		Session:      session,
 		ready:        make(chan struct{}),
 		LastUsed:     time.Now(),
 		TTL:          contextPoolDefaultTTL,
 		Refs:         NewRefMap(),
-		LogCollector: NewLogCollector(),
+		LogCollector: placeholderLC,
 		URL:          url,
 		generation:   curGen,
 	}

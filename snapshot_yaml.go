@@ -27,6 +27,66 @@ func renderAXTreeYAMLWithURLsAndRefs(
 	return renderYAML(index, roots, maxDepth)
 }
 
+// renderAXTreeWithLevel builds a YAML or text snapshot using an ExtractLevel
+// for filtering. #63: token-lean a11y tree — skeleton/content/full levels.
+func renderAXTreeWithLevel(
+	nodes []*proto.AccessibilityAXNode, maxDepth int, format string, page *rod.Page,
+	selector string, level ExtractLevel, rm *RefMap,
+) string {
+	index, roots := buildAXIndex(nodes)
+	urls := collectLinkURLs(page)
+	if urls != nil {
+		applyLinkURLs(index, nodes, urls)
+	}
+	index, roots = applyLevelFilter(index, roots, level)
+	if selector != "" {
+		// Apply selector narrowing on top of level filter.
+		keep := make(map[string]bool, len(index))
+		sel := strings.ToLower(selector)
+		for id, n := range index {
+			if strings.Contains(strings.ToLower(n.name), sel) ||
+				strings.Contains(strings.ToLower(n.role), sel) ||
+				strings.Contains(strings.ToLower(n.url), sel) {
+				keep[id] = true
+			}
+		}
+		index, roots = buildFilteredIndex(index, roots, keep)
+	}
+	if format == "text" {
+		return renderAXTreeFromIndex(index, roots, maxDepth)
+	}
+	if rm != nil {
+		return renderYAMLWithRefs(index, roots, maxDepth, rm)
+	}
+	return renderYAML(index, roots, maxDepth)
+}
+
+// renderAXTreeFromIndex renders a text tree from a pre-built index and roots.
+func renderAXTreeFromIndex(index map[string]*nodeInfo, roots []string, maxDepth int) string {
+	var sb strings.Builder
+	var walk func(id string, level int)
+	walk = func(id string, level int) {
+		if maxDepth > 0 && level >= maxDepth {
+			return
+		}
+		n, ok := index[id]
+		if !ok {
+			return
+		}
+		if n.role != "" || n.name != "" {
+			indent := strings.Repeat("  ", level)
+			fmt.Fprintf(&sb, "%s[%s] %s\n", indent, n.role, n.name)
+		}
+		for _, cid := range n.children {
+			walk(cid, level+1)
+		}
+	}
+	for _, rootID := range roots {
+		walk(rootID, 0)
+	}
+	return sb.String()
+}
+
 // renderAXTree builds a plain text representation of the accessibility tree.
 func renderAXTree(nodes []*proto.AccessibilityAXNode, maxDepth int, filter, selector string) string {
 	index, roots := buildAXIndex(nodes)
