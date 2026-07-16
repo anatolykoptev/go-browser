@@ -9,8 +9,10 @@ import (
 	"image"
 	"image/jpeg"
 	_ "image/png" // register PNG decoder for decodeImageDimensions
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -336,6 +338,10 @@ func doPress(page *rod.Page, key string, modifiers []string) error {
 // WaitRequestIdle excludes WebSocket/SSE by default — won't hang on Twitter.
 // Navigation wait is capped at 7s — sites with continuous HTTP polling (Yandex, ad-heavy)
 // never reach 500ms of silence, so we proceed after the cap.
+//
+// #51: TLS certificate errors are detected and logged. Chrome blocks pages with
+// invalid certs by default — we surface the error explicitly rather than treating
+// it as a generic navigation failure.
 func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 	// Cap navigation wait: don't block more than 7s waiting for idle.
 	navCtx, cancel := context.WithTimeout(ctx, 7*time.Second)
@@ -350,6 +356,12 @@ func doNavigate(ctx context.Context, page *rod.Page, url string) error {
 	// rod's Navigate: fires proto.PageNavigate + calls unsetJSCtxID().
 	// Returns immediately — does NOT wait for load event.
 	if err := page.Context(ctx).Navigate(url); err != nil {
+		// #51: Check for TLS certificate errors and log them explicitly.
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "certificate") || strings.Contains(errMsg, "SSL") || strings.Contains(errMsg, "ERR_CERT") {
+			slog.Warn("chrome: TLS certificate error during navigation — cert validation is enforced by Chrome, not bypassed",
+				"url", url, "err", err)
+		}
 		return fmt.Errorf("navigate %q: %w", url, err)
 	}
 

@@ -129,11 +129,15 @@ func (b *Browser) renderOnce(ctx context.Context, url string) (*browser.Page, er
 	}
 
 	// Get page info safely (no MustInfo panic).
+	// #24: Log page.Info() error at Debug level — this is a best-effort capture
+	// after HTML has already been retrieved, so failure is non-fatal.
 	finalURL := url
 	title := ""
 	if info, infoErr := page.Info(); infoErr == nil && info != nil {
 		finalURL = info.URL
 		title = info.Title
+	} else if infoErr != nil {
+		slog.Debug("rod: page.Info() failed for final URL/title capture", "url", url, "err", infoErr)
 	}
 
 	return &browser.Page{

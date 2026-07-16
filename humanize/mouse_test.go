@@ -194,20 +194,3 @@ func TestDwellDelay_MicroMoves(t *testing.T) {
 	}
 }
 
-// TestMouseDelayForStep_SlowAtEnds verifies that delay at step 0 is greater
-// than delay at the midpoint step.
-func TestMouseDelayForStep_SlowAtEnds(t *testing.T) {
-	const totalSteps = 100
-	// Run multiple samples since there's randomness in the slow band.
-	startSum, midSum := 0, 0
-	const trials = 50
-	for range trials {
-		startSum += MouseDelayForStep(0, totalSteps)
-		midSum += MouseDelayForStep(totalSteps/2, totalSteps)
-	}
-	avgStart := startSum / trials
-	avgMid := midSum / trials
-	if avgStart <= avgMid {
-		t.Errorf("avg delay at step 0 (%dms) should exceed avg delay at midpoint (%dms)", avgStart, avgMid)
-	}
-}

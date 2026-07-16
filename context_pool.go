@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -25,6 +27,7 @@ func generateID() (string, error) {
 const (
 	contextPoolReaperInterval = 30 * time.Second
 	contextPoolDefaultTTL     = 30 * time.Minute
+	pageCreationTimeout       = 30 * time.Second // #41: max time to create a page via CDP
 )
 
 // ContextPool manages named browser sessions grouped by context (default/private/proxy).
@@ -33,16 +36,58 @@ const (
 // Locking discipline:
 //   - contextsMu (RWMutex) guards the contexts map itself.
 //   - ManagedContext.Mu (Mutex) guards that context's Pages map.
+//   - browser is stored as atomic.Pointer[rod.Browser] for lock-free, nil-safe reads.
+//     UpdateBrowser() atomically swaps the pointer; all readers use Load() without any lock.
 //   - CDP I/O (TargetCreateTarget, Page.Close, etc.) runs OUTSIDE any lock.
+//
+// Lock ordering (must be acquired in this order if both are held):
+//   1. contextsMu (global pool lock)
+//   2. ManagedContext.Mu (per-context lock)
+// Never acquire in reverse order — deadlock risk. Never hold either lock across a CDP call.
 type ContextPool struct {
 	contextsMu sync.RWMutex
-	browser    *rod.Browser
+	browser    atomic.Pointer[rod.Browser]
 	contexts   map[string]*ManagedContext // key: "default" | "private" | "proxy:<url>"
 	stop       chan struct{}
 	done       chan struct{}
 
+	// generation is incremented on each UpdateBrowser (reconnect). ManagedPage
+	// records the generation at creation time; IsValid() checks it matches.
+	// This detects stale page references after reconnect (Playwright _browserClosed
+	// pattern + Vercel agent-browser generation counter).
+	generation atomic.Uint64
+
+	// stealthProfile, when non-nil, is automatically applied to every new page
+	// created via GetOrCreatePage (puppeteer-extra onPageCreated pattern).
+	// This ensures stealth is applied on ALL page creation paths, not just
+	// RunInteract. Set via SetStealthProfile.
+	stealthProfile *StealthProfile
+
 	// test-only injection: sleep before newPageInContext to simulate slow CDP.
 	newPageDelay time.Duration
+}
+
+// SetStealthProfile sets the profile that will be automatically applied to
+// every new page created via GetOrCreatePage. This centralizes stealth
+// application so pages created outside RunInteract (e.g., via the pool
+// directly) also get stealth. puppeteer-extra onPageCreated pattern.
+func (p *ContextPool) SetStealthProfile(profile *StealthProfile) {
+	p.contextsMu.Lock()
+	p.stealthProfile = profile
+	p.contextsMu.Unlock()
+}
+
+// getBrowser returns the current browser atomically. Returns nil if not connected
+// (e.g., during reconnect). Callers must check for nil before use.
+func (p *ContextPool) getBrowser() *rod.Browser {
+	return p.browser.Load()
+}
+
+// getStealthProfile returns the pool's stealth profile under a read lock.
+func (p *ContextPool) getStealthProfile() *StealthProfile {
+	p.contextsMu.RLock()
+	defer p.contextsMu.RUnlock()
+	return p.stealthProfile
 }
 
 // ManagedContext is a Chrome BrowserContext with a set of named pages.
@@ -62,14 +107,28 @@ type ManagedPage struct {
 	mu           sync.Mutex
 	Session      string
 	Page         *rod.Page
-	ready        chan struct{} // closed when Page != nil (or creation failed)
-	readyErr     error         // non-nil if page creation failed
+	ready        chan struct{}       // closed when Page != nil (or creation failed)
+	readyOnce    sync.Once           // ensures ready is closed exactly once
+	readyErr     error               // non-nil if page creation failed
 	URL          string
 	LastUsed     time.Time
-	TTL          time.Duration // 0 = never expires
+	TTL          time.Duration       // 0 = never expires
 	Refs         *RefMap
 	LogCollector *LogCollector
-	DetachedAt   time.Time // zero = attached (agent-controllable)
+	DetachedAt   time.Time           // zero = attached (agent-controllable)
+	generation   uint64              // pool generation at creation; mismatch = stale after reconnect
+}
+
+// signalReady closes the ready channel exactly once. Safe to call multiple times.
+func (mp *ManagedPage) signalReady() {
+	mp.readyOnce.Do(func() { close(mp.ready) })
+}
+
+// IsValid reports whether this page belongs to the current browser generation.
+// After reconnect, all pages from the previous generation are invalid (their
+// rod.Page references point to a closed CDP connection).
+func (mp *ManagedPage) IsValid(pool *ContextPool) bool {
+	return mp != nil && mp.generation == pool.generation.Load()
 }
 
 // ContextInfo describes a context and its sessions (for chrome_tabs tool).
@@ -90,11 +149,11 @@ type SessionInfo struct {
 // and subscribes to CDP target destruction events.
 func NewContextPool(browser *rod.Browser) *ContextPool {
 	p := &ContextPool{
-		browser:  browser,
 		contexts: make(map[string]*ManagedContext),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+	p.browser.Store(browser)
 	go p.reaper()
 	p.watchTargetDestroyed()
 	return p
@@ -136,9 +195,9 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if key == "default" && len(mc.Pages) == 0 {
 		mc.Mu.Unlock()
 		if adopted, aerr := p.adoptExistingPage(mc); aerr == nil && adopted != nil {
-			readyCh := make(chan struct{})
-			close(readyCh)
-			mp := &ManagedPage{Session: session, Page: adopted, ready: readyCh, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector()}
+			curGen := p.generation.Load()
+			mp := &ManagedPage{Session: session, Page: adopted, ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector(), generation: curGen}
+			mp.signalReady() // close ready immediately — adopted page is already live
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
 				mc.Mu.Unlock()
@@ -151,6 +210,12 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 			}
 			mc.Pages[session] = mp
 			mc.Mu.Unlock()
+			// #28: Apply stealth to adopted pages too.
+			if profile := p.getStealthProfile(); profile != nil {
+				if err := applyStealthToExistingPage(adopted, profile); err != nil {
+					slog.Warn("context_pool: auto-stealth on adopted page failed", "session", session, "err", err)
+				}
+			}
 			// Adopted page is already live — subscribe LogCollector immediately.
 			mp.LogCollector.SubscribeCDP(adopted)
 			return mp, nil
@@ -159,6 +224,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	}
 
 	// Phase 3: reserve placeholder, release lock, do CDP.
+	curGen := p.generation.Load()
 	placeholder := &ManagedPage{
 		Session:      session,
 		ready:        make(chan struct{}),
@@ -167,6 +233,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		Refs:         NewRefMap(),
 		LogCollector: NewLogCollector(),
 		URL:          url,
+		generation:   curGen,
 	}
 	mc.Pages[session] = placeholder
 	mc.Mu.Unlock()
@@ -174,18 +241,35 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if p.newPageDelay > 0 {
 		time.Sleep(p.newPageDelay) // test injection — simulates slow CDP
 	}
-	page, cdpErr := p.createPageWithStaleRecovery(mc, key)
+	// #41: Add a timeout to page creation so a hung CDP call doesn't leave a
+	// placeholder with Page==nil indefinitely. The placeholder is cleaned up
+	// and waiters get an explicit error.
+	pageCh := make(chan *rod.Page, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		pg, err := p.createPageWithStaleRecovery(mc, key)
+		pageCh <- pg
+		errCh <- err
+	}()
+	var page *rod.Page
+	var cdpErr error
+	select {
+	case page = <-pageCh:
+		cdpErr = <-errCh
+	case <-time.After(pageCreationTimeout):
+		cdpErr = fmt.Errorf("context_pool: create tab in context %q timed out after %s", key, pageCreationTimeout)
+	}
 
 	// Phase 4: patch placeholder and signal waiters regardless of outcome.
 	mc.Mu.Lock()
 	mp := mc.Pages[session]
 	if mp == nil {
-		// Reaped while we were in CDP.
+		// Reaped while we were in CDP, or invalidated by reconnect (generation changed).
 		mc.Mu.Unlock()
 		if page != nil {
 			_ = page.Close()
 		}
-		close(placeholder.ready) // unblock any waiters with nil page
+		placeholder.signalReady() // unblock any waiters with nil page
 		placeholder.readyErr = fmt.Errorf("context_pool: session %q was reaped during creation", session)
 		return nil, placeholder.readyErr
 	}
@@ -193,17 +277,36 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		delete(mc.Pages, session)
 		mc.Mu.Unlock()
 		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", key, cdpErr)
-		close(placeholder.ready)
+		placeholder.signalReady()
+		return nil, placeholder.readyErr
+	}
+	// If reconnect happened during CDP, the page belongs to the old browser — discard it.
+	if mp.generation != p.generation.Load() {
+		delete(mc.Pages, session)
+		mc.Mu.Unlock()
+		_ = page.Close()
+		placeholder.readyErr = fmt.Errorf("context_pool: session %q invalidated by reconnect during creation", session)
+		placeholder.signalReady()
 		return nil, placeholder.readyErr
 	}
 	mp.Page = page
 	mc.Mu.Unlock()
+	// #28: Apply stealth automatically if a profile is set on the pool.
+	// This ensures pages created via the pool (not just via RunInteract) get
+	// stealth. puppeteer-extra onPageCreated pattern.
+	if profile := p.getStealthProfile(); profile != nil {
+		if err := applyStealthToExistingPage(page, profile); err != nil {
+			// Log the error but don't fail — the page is usable without stealth,
+			// just less protected. Caller can check via NoStealth flag.
+			slog.Warn("context_pool: auto-stealth application failed", "session", session, "err", err)
+		}
+	}
 	// Wire LogCollector to the real page. SubscribeCDP starts a listener goroutine
 	// that runs until the page is closed.
 	if mp.LogCollector != nil {
 		mp.LogCollector.SubscribeCDP(page)
 	}
-	close(placeholder.ready)
+	placeholder.signalReady()
 	return mp, nil
 }
 
@@ -216,6 +319,9 @@ func (p *ContextPool) ClosePage(session string) error {
 		emptyKey string
 	)
 
+	// Phase 1: find the session under RLock — don't block on ready channel
+	// while holding contextsMu (gostall: starvation).
+	var readyCh chan struct{}
 	p.contextsMu.RLock()
 	for key, c := range p.contexts {
 		c.Mu.Lock()
@@ -224,19 +330,10 @@ func (p *ContextPool) ClosePage(session string) error {
 			c.Mu.Unlock()
 			continue
 		}
-		// If still a placeholder, wait for it so we get a real Page.
-		c.Mu.Unlock()
-		if mp.ready != nil {
-			<-mp.ready
-		}
-		c.Mu.Lock()
-		page = mp.Page
-		delete(c.Pages, session)
-		if len(c.Pages) == 0 && key != "default" {
-			emptyKey = key
-		}
-		c.Mu.Unlock()
+		readyCh = mp.ready
 		mc = c
+		emptyKey = key
+		c.Mu.Unlock()
 		break
 	}
 	p.contextsMu.RUnlock()
@@ -244,6 +341,26 @@ func (p *ContextPool) ClosePage(session string) error {
 	if mc == nil {
 		return fmt.Errorf("context_pool: session %q not found", session)
 	}
+
+	// Phase 2: wait for placeholder ready outside any pool lock.
+	if readyCh != nil {
+		<-readyCh
+	}
+
+	// Phase 3: re-acquire locks to delete and extract page.
+	mc.Mu.Lock()
+	mp, ok := mc.Pages[session]
+	if !ok {
+		// Page was reaped between phase 1 and 3 — nothing to close.
+		mc.Mu.Unlock()
+		return nil
+	}
+	page = mp.Page
+	delete(mc.Pages, session)
+	if len(mc.Pages) != 0 || emptyKey == "default" {
+		emptyKey = ""
+	}
+	mc.Mu.Unlock()
 
 	// Close page unlocked — may take seconds.
 	closePageWithTimeout(page)
@@ -317,12 +434,21 @@ func (p *ContextPool) Reap() {
 	}
 	var victims []victim
 
+	curGen := p.generation.Load()
 	p.contextsMu.RLock()
 	for key, mc := range p.contexts {
 		mc.Mu.Lock()
 		for name, mp := range mc.Pages {
 			// Skip detached sessions - they are human-controlled, don't evict
 			if !mp.DetachedAt.IsZero() {
+				continue
+			}
+			// #60/#23: Reap stale pages after reconnect — generation mismatch
+			// means the page's rod.Page points to a dead CDP connection.
+			// Even detached pages are reaped if stale (their browser is gone).
+			if mp.generation != curGen && mp.Page != nil {
+				victims = append(victims, victim{page: mp.Page, key: key, name: name})
+				delete(mc.Pages, name)
 				continue
 			}
 			if mp.TTL > 0 && time.Since(mp.LastUsed) > mp.TTL && mp.Page != nil {
@@ -366,10 +492,27 @@ func (p *ContextPool) Close() {
 	<-p.done
 }
 
-// UpdateBrowser replaces the browser reference (after reconnect).
+// UpdateBrowser replaces the browser reference atomically (after reconnect),
+// increments the generation counter, and invalidates all existing pages.
+// All readers using getBrowser() / p.browser.Load() will see the new browser
+// immediately without any lock contention. Existing ManagedPage objects from
+// the previous generation are cleared — their rod.Page references point to the
+// closed CDP connection and must not be reused (Playwright _browserClosed
+// cascading invalidation pattern).
 func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
+	p.browser.Store(b)
+	p.generation.Add(1)
+
+	// Invalidate all existing pages — they belong to the old browser generation.
+	// Their rod.Page references are dead (CDP connection closed). Callers that
+	// hold a ManagedPage reference can check IsValid() for an explicit error;
+	// the pool's map is cleared so new GetOrCreatePage calls create fresh pages.
 	p.contextsMu.Lock()
-	p.browser = b
+	for _, mc := range p.contexts {
+		mc.Mu.Lock()
+		mc.Pages = make(map[string]*ManagedPage)
+		mc.Mu.Unlock()
+	}
 	p.contextsMu.Unlock()
 }
 

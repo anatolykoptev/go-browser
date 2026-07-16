@@ -41,14 +41,3 @@ func recordStaleCtxRecovery(outcome string) {
 		staleCtxFailed.Add(1)
 	}
 }
-
-// StaleContextRecoveryStats is a point-in-time snapshot of the
-// chrome_stale_context_recovery_total counters, keyed by outcome label.
-// Embedders read this to publish the metric through their own exporter.
-func StaleContextRecoveryStats() map[string]uint64 {
-	return map[string]uint64{
-		StaleCtxOutcomeDetected:  staleCtxDetected.Load(),
-		StaleCtxOutcomeRecovered: staleCtxRecovered.Load(),
-		StaleCtxOutcomeFailed:    staleCtxFailed.Load(),
-	}
-}

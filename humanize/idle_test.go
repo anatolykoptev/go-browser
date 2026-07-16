@@ -2,6 +2,7 @@ package humanize_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,9 +14,10 @@ func TestIdleDrift_Bounds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	calls := 0
+	// #59: Use atomic counter — driftFunc runs in a different goroutine.
+	var calls atomic.Int32
 	driftFunc := func(x, y float64) error {
-		calls++
+		calls.Add(1)
 		return nil
 	}
 
@@ -23,7 +25,7 @@ func TestIdleDrift_Bounds(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	stop()
 
-	if calls == 0 {
+	if calls.Load() == 0 {
 		t.Error("expected at least 1 drift call")
 	}
 

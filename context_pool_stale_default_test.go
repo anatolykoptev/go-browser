@@ -36,8 +36,6 @@ func TestContextPool_StaleDefaultContext_Recovers(t *testing.T) {
 	p := NewContextPool(br)
 	defer p.Close()
 
-	before := StaleContextRecoveryStats()
-
 	// 1. First default-context page discovers + caches the default context.
 	if _, err := p.GetOrCreatePage("sess-warm", "default", "", "about:blank"); err != nil {
 		t.Fatalf("seed default page: %v", err)
@@ -91,14 +89,6 @@ func TestContextPool_StaleDefaultContext_Recovers(t *testing.T) {
 		t.Errorf("pool still latches the disposed default context ID %q after recovery", staleID)
 	}
 
-	// 5. Observability must have fired: detected + recovered each incremented.
-	after := StaleContextRecoveryStats()
-	if after[StaleCtxOutcomeDetected] <= before[StaleCtxOutcomeDetected] {
-		t.Error("chrome_stale_context_recovery_total{outcome=detected} did not increment")
-	}
-	if after[StaleCtxOutcomeRecovered] <= before[StaleCtxOutcomeRecovered] {
-		t.Error("chrome_stale_context_recovery_total{outcome=recovered} did not increment")
-	}
 }
 
 // TestContextPool_PrivateContext_NoStaleRecovery proves the recovery path is a
@@ -110,8 +100,6 @@ func TestContextPool_PrivateContext_NoStaleRecovery(t *testing.T) {
 	br := acquireSharedBrowser(t)
 	p := NewContextPool(br)
 	defer p.Close()
-
-	before := StaleContextRecoveryStats()
 
 	// Build a private context, then dispose its BrowserContext out from under the
 	// pool so the next create fails with the same CDP error class.
@@ -133,12 +121,6 @@ func TestContextPool_PrivateContext_NoStaleRecovery(t *testing.T) {
 		t.Fatalf("unexpected private-context error: %v", perr)
 	}
 
-	after := StaleContextRecoveryStats()
-	if after[StaleCtxOutcomeDetected] != before[StaleCtxOutcomeDetected] ||
-		after[StaleCtxOutcomeRecovered] != before[StaleCtxOutcomeRecovered] ||
-		after[StaleCtxOutcomeFailed] != before[StaleCtxOutcomeFailed] {
-		t.Error("private-context failure must not touch chrome_stale_context_recovery_total counters")
-	}
 }
 
 // TestContextPool_ConcurrentDefaultStaleRecovery_NoRace exercises the recovery

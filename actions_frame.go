@@ -2,7 +2,10 @@ package browser
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -14,32 +17,46 @@ import (
 // Used when frame context is unavailable (OOP iframe) — relies on the iframe
 // already having focus (via clickIframeArea). CDP keyboard events go to
 // whatever element is focused, regardless of frame boundary.
+//
+// #43: Key event errors are logged at Debug level instead of silently swallowed.
+// They are best-effort (the focused element may not accept all key events), but
+// logging them makes failures observable for debugging.
 func execTypeViaKeyboard(ctx context.Context, page *rod.Page, a Action) ActionResult {
 	for _, ch := range a.Text {
 		char := string(ch)
-		_ = (proto.InputDispatchKeyEvent{
+		if err := (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: char,
-		}).Call(page)
-		_ = (proto.InputDispatchKeyEvent{
+		}).Call(page); err != nil {
+			slog.Debug("chrome: keydown event failed", "key", char, "err", err)
+		}
+		if err := (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeChar, Text: char, UnmodifiedText: char,
-		}).Call(page)
-		_ = (proto.InputDispatchKeyEvent{
+		}).Call(page); err != nil {
+			slog.Debug("chrome: char event failed", "key", char, "err", err)
+		}
+		if err := (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: char,
-		}).Call(page)
+		}).Call(page); err != nil {
+			slog.Debug("chrome: keyup event failed", "key", char, "err", err)
+		}
 		select {
 		case <-ctx.Done():
 			return ActionResult{Action: a.Type, Ok: false, Error: ctx.Err().Error()}
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(frameKeyDelay()): // #42: jittered delay to avoid detection
 		}
 	}
 	if a.Submit {
-		_ = (proto.InputDispatchKeyEvent{
+		if err := (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeRawKeyDown, Key: "Enter", Code: "Enter",
 			WindowsVirtualKeyCode: 13,
-		}).Call(page)
-		_ = (proto.InputDispatchKeyEvent{
+		}).Call(page); err != nil {
+			slog.Debug("chrome: enter keydown failed", "err", err)
+		}
+		if err := (proto.InputDispatchKeyEvent{
 			Type: proto.InputDispatchKeyEventTypeKeyUp, Key: "Enter", Code: "Enter",
-		}).Call(page)
+		}).Call(page); err != nil {
+			slog.Debug("chrome: enter keyup failed", "err", err)
+		}
 	}
 	return ActionResult{Action: a.Type, Ok: true}
 }
@@ -48,6 +65,16 @@ const (
 	frameRetryInterval = 500 * time.Millisecond
 	frameMaxRetries    = 10 // 10 × 500ms = 5 seconds max wait for iframe
 )
+
+// frameKeyDelay returns a 50ms base delay with ±10ms jitter (40–60ms) using
+// crypto/rand, so inter-key timing is not a constant that bot detectors can
+// fingerprint. #42
+func frameKeyDelay() time.Duration {
+	var b [2]byte
+	_, _ = rand.Read(b[:])
+	jitter := int16(binary.LittleEndian.Uint16(b[:])) % 21 // range -10..+10
+	return 50*time.Millisecond + time.Duration(jitter)*time.Millisecond
+}
 
 // parseFrameSelector returns ("css", selector) or ("url", pattern).
 func parseFrameSelector(sel string) (string, string) {

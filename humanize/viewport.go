@@ -9,7 +9,6 @@ import (
 const (
 	viewportFallbackW = 1440.0
 	viewportFallbackH = 900.0
-	viewportMargin    = 50.0
 )
 
 // ViewportBounds holds the usable mouse area within the viewport.
@@ -37,16 +36,4 @@ func ReadViewport(page *rod.Page) (width, height float64, err error) {
 		return viewportFallbackW, viewportFallbackH, nil
 	}
 	return vp.W, vp.H, nil
-}
-
-// ViewportInnerBounds returns the safe mouse area with a margin applied.
-// Margin defaults to viewportMargin if not provided.
-func ViewportInnerBounds(page *rod.Page) ViewportBounds {
-	w, h, _ := ReadViewport(page)
-	return ViewportBounds{
-		MinX: viewportMargin,
-		MaxX: w - viewportMargin,
-		MinY: viewportMargin,
-		MaxY: h - viewportMargin,
-	}
 }
