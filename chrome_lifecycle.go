@@ -25,15 +25,24 @@ func (m *ChromeManager) getGuard() *egressGuard {
 }
 
 // reconnect closes the old connection and establishes a new one.
+// The slow CDP work (discover, connect, install guard) runs WITHOUT holding m.mu
+// so concurrent getBrowser()/getGuard() callers are not blocked and never see a
+// nil browser during the reconnect window. The old browser stays readable until
+// the new one is ready, then we atomically swap both browser and guard under lock.
 func (m *ChromeManager) reconnect() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Serialize reconnect — only one at a time.
+	m.reconnectMu.Lock()
+	defer m.reconnectMu.Unlock()
 
-	if m.browser != nil {
-		_ = m.browser.Close()
-		m.browser = nil
+	// Snapshot the old browser under lock, then release the lock for the slow work.
+	m.mu.RLock()
+	oldBrowser := m.browser
+	m.mu.RUnlock()
+
+	// Close the old browser outside the lock — may take seconds.
+	if oldBrowser != nil {
+		_ = oldBrowser.Close()
 	}
-	m.keepaliveCtxID = ""
 
 	debuggerURL, err := discoverWSURL(m.wsURL)
 	if err != nil {
@@ -54,13 +63,23 @@ func (m *ChromeManager) reconnect() error {
 		return fmt.Errorf("%w", err)
 	}
 
+	// Atomically swap browser + guard under lock. Callers never see nil.
+	m.mu.Lock()
 	m.browser = b
 	m.guard = guard
 	m.keepaliveCtxID = ""
-	if m.pool != nil {
-		m.pool.UpdateBrowser(b)
+	pool := m.pool
+	m.mu.Unlock()
+
+	if pool != nil {
+		pool.UpdateBrowser(b)
 	} else {
-		m.pool = NewContextPool(b)
+		// No pool yet — create one. This is the only path that creates a new pool.
+		m.mu.Lock()
+		if m.pool == nil {
+			m.pool = NewContextPool(b)
+		}
+		m.mu.Unlock()
 	}
 	return nil
 }
@@ -73,10 +92,13 @@ func (m *ChromeManager) Connected() bool {
 }
 
 // Close disconnects from Chrome and releases resources.
+// Sets browser to nil under lock so concurrent callers see the shutdown state,
+// then closes the old browser outside the lock (may take seconds).
 func (m *ChromeManager) Close() {
 	m.mu.Lock()
 	b := m.browser
 	m.browser = nil
+	m.guard = nil
 	ctxID := m.keepaliveCtxID
 	m.keepaliveCtxID = ""
 	m.mu.Unlock()
