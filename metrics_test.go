@@ -32,7 +32,9 @@ func connectTestBrowser(t *testing.T) *rod.Browser {
 	}
 
 	// 2. Local binary
-	l := launcher.New().Headless(true)
+	l := launcher.New().Headless(true).
+		Set("no-sandbox").
+		Set("disable-dev-shm-usage")
 	if bin := os.Getenv("BROWSER_BIN"); bin != "" {
 		l = l.Bin(bin)
 	}
