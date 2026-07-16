@@ -42,7 +42,8 @@ jobs:
       # official GitHub action (pinned, checksum-verified) instead of the
       # curl install script — the script's master-branch checksums are
       # unreliable and fail the gate on mismatch (seen live: v2.12.2).
-      - uses: golangci/golangci-lint-action@v6
+      # golangci-lint v2 requires action v7 (v6 rejects v2 version strings).
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1.6
 
