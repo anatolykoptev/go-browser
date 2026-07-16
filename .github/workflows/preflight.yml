@@ -1,0 +1,50 @@
+name: preflight
+
+# Pre-merge build/test gate. Runs on GitHub-hosted `ubuntu-24.04-arm` —
+# free unlimited minutes for public repos, and arm64 matches the ARM prod
+# boxes this code deploys to (krolik Oracle Cloud ARM).
+#
+# go-browser's integration tests require a live Chrome (CloakBrowser or a
+# local Chromium). They self-skip when no browser is found (see
+# chrome_stealth_integration_test.go:acquireSharedBrowser), so `go test -short`
+# runs only the pure-logic unit tests + the SSRF/stealth helpers that don't
+# need a browser. A nightly job (to be added) can provision Chromium for the
+# full integration suite.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          # Fleet policy: CI runs the latest patched toolchain (go.mod is the
+          # minimum, not the pin). A pinned go-version-file would fail the
+          # gate the day a stdlib CVE lands in a patch release.
+          go-version: stable
+
+      - name: Install golangci-lint
+        run: |
+          # golangci-lint is not pre-installed on ubuntu-24.04-arm.
+          # Install the latest stable via the official installer.
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b $(go env GOPATH)/bin
+          golangci-lint --version
+
+      - name: make preflight
+        run: make preflight
