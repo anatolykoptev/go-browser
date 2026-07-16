@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -94,6 +95,13 @@ type LogCollector struct {
 	subMu       sync.Mutex
 	subCancel   context.CancelFunc
 	subCtx      context.Context
+
+	// #19: Atomic dropped counters — incremented when ring buffer evicts oldest entry.
+	// Exposed via DroppedStats() for Prometheus metrics. Prometheus/Loki pattern.
+	droppedNetwork    atomic.Uint64
+	droppedConsole    atomic.Uint64
+	droppedExceptions atomic.Uint64
+	droppedNavigations atomic.Uint64
 }
 
 // NewLogCollector creates an empty log collector.
@@ -113,7 +121,8 @@ func (c *LogCollector) AddNetwork(e NetworkEntry) {
 	if len(c.network) < maxLogEntries {
 		c.network = append(c.network, e)
 	} else {
-		// Drop oldest entry and append new one
+		// #19: Increment dropped counter — silent data loss is now observable.
+		c.droppedNetwork.Add(1)
 		copy(c.network[0:], c.network[1:])
 		c.network[len(c.network)-1] = e
 	}
@@ -126,7 +135,7 @@ func (c *LogCollector) AddConsole(e ConsoleEntry) {
 	if len(c.console) < maxLogEntries {
 		c.console = append(c.console, e)
 	} else {
-		// Drop oldest entry and append new one
+		c.droppedConsole.Add(1)
 		copy(c.console[0:], c.console[1:])
 		c.console[len(c.console)-1] = e
 	}
@@ -139,7 +148,7 @@ func (c *LogCollector) AddException(e ExceptionEntry) {
 	if len(c.exceptions) < maxLogEntries {
 		c.exceptions = append(c.exceptions, e)
 	} else {
-		// Drop oldest entry and append new one
+		c.droppedExceptions.Add(1)
 		copy(c.exceptions[0:], c.exceptions[1:])
 		c.exceptions[len(c.exceptions)-1] = e
 	}
@@ -152,7 +161,7 @@ func (c *LogCollector) AddNavigation(e NavigationEntry) {
 	if len(c.navigations) < maxLogEntries {
 		c.navigations = append(c.navigations, e)
 	} else {
-		// Drop oldest entry and append new one
+		c.droppedNavigations.Add(1)
 		copy(c.navigations[0:], c.navigations[1:])
 		c.navigations[len(c.navigations)-1] = e
 	}
@@ -179,6 +188,35 @@ func (c *LogCollector) Stats() (network, console, exceptions, navigations int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.network), len(c.console), len(c.exceptions), len(c.navigations)
+}
+
+// DroppedStats returns the total number of evicted entries per category.
+// These are atomic counters that only increase — expose as Prometheus Counter
+// with _total suffix. Alert on rate(dropped[5m]) > 0 for active data loss.
+func (c *LogCollector) DroppedStats() (network, console, exceptions, navigations uint64) {
+	return c.droppedNetwork.Load(),
+		c.droppedConsole.Load(),
+		c.droppedExceptions.Load(),
+		c.droppedNavigations.Load()
+}
+
+// UsageRatio returns the maximum buffer usage ratio across all categories
+// (0.0 to 1.0). Alert when > 0.9 for proactive warning before drops occur.
+// #50: 90% high-watermark threshold (golang-cz/ringbuf pattern).
+func (c *LogCollector) UsageRatio() float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	maxLen := len(c.network)
+	if len(c.console) > maxLen {
+		maxLen = len(c.console)
+	}
+	if len(c.exceptions) > maxLen {
+		maxLen = len(c.exceptions)
+	}
+	if len(c.navigations) > maxLen {
+		maxLen = len(c.navigations)
+	}
+	return float64(maxLen) / float64(maxLogEntries)
 }
 
 // Collect returns all accumulated entries.
