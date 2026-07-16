@@ -9,8 +9,9 @@ test:
 test-integration:
 	go test ./... -v -count=1 -timeout 60s
 
-# preflight = the CI gate: gofmt + vet + build + short tests.
+# preflight = the CI gate: gofmt + vet + build + short tests with race detector.
 # Integration tests (requiring a live Chrome) are skipped under -short.
+# #53: Race detector enabled in CI — catches concurrency bugs that vet misses.
 preflight: lint
 	@echo "==> gofmt"
 	@gofmt -l . | tee /dev/stderr | grep -q . && (echo "gofmt issues found" && exit 1) || true
@@ -18,8 +19,8 @@ preflight: lint
 	go vet ./...
 	@echo "==> go build"
 	go build ./...
-	@echo "==> go test -short"
-	go test ./... -short -count=1 -timeout 60s
+	@echo "==> go test -short -race"
+	go test ./... -short -race -count=1 -timeout 120s
 	@echo "preflight OK"
 
 server:
