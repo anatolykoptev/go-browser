@@ -32,7 +32,8 @@ type Action struct {
 	Modifiers     []string      `json:"modifiers,omitempty" jsonschema:"Modifier keys to hold: Alt, Control, Shift, Meta"`
 	Values        []string      `json:"values,omitempty" jsonschema:"Values for select_option action"`
 	Depth         int           `json:"depth,omitempty" jsonschema:"Limit snapshot tree depth (0 = unlimited)"`
-	Filter        string        `json:"filter,omitempty" jsonschema:"Snapshot filter mode: interactive (keep actionable elements + ancestors), forms (keep form subtrees), main (keep main content), text (exclude nav/banner/contentinfo)"`
+	Filter        string        `json:"filter,omitempty" jsonschema:"Snapshot filter mode: interactive (keep actionable elements + ancestors), forms (keep form subtrees), main (keep main content), text (exclude nav/banner/contentinfo). Prefer 'level' for new code — skeleton/content/full are token-lean extraction levels for AI agents."`
+	Level         string        `json:"level,omitempty" jsonschema:"Snapshot extraction level (token-lean a11y tree): skeleton (interactive elements only — minimal tokens), content (skeleton + landmarks + headings — default for AI agents), full (everything with a name). Takes precedence over 'filter' when both are set."`
 	URLContains   string        `json:"url_contains,omitempty" jsonschema:"Keep only nodes whose URL contains this substring (links/iframes)"`
 	Width         int           `json:"width,omitempty" jsonschema:"Viewport width for resize action"`
 	Height        int           `json:"height,omitempty" jsonschema:"Viewport height for resize action"`

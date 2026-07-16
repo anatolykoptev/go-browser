@@ -120,6 +120,13 @@ func isNoiseRole(role string) bool {
 }
 
 func doSnapshot(page *rod.Page, maxDepth int, format, filter, selector string, rm *RefMap) (string, error) {
+	return doSnapshotWithLevel(page, maxDepth, format, filter, selector, "", rm)
+}
+
+// doSnapshotWithLevel is like doSnapshot but also accepts an ExtractLevel
+// (skeleton/content/full). When level is non-empty, it takes precedence over
+// filter. #63: token-lean a11y tree for AI-agent consumers.
+func doSnapshotWithLevel(page *rod.Page, maxDepth int, format, filter, selector, level string, rm *RefMap) (string, error) {
 	// Collect AX trees from main frame + all child frames.
 	allNodes := collectAXNodes(page, proto.PageFrameID(""))
 
@@ -143,16 +150,32 @@ func doSnapshot(page *rod.Page, maxDepth int, format, filter, selector string, r
 		}
 	}
 
+	// Resolve level vs. filter: level takes precedence when set.
+	effectiveFilter := filter
+	if level != "" {
+		if lvl, ok := parseExtractLevel(level); ok {
+			// Dialog filter shows a scoped subtree — depth limit is meaningless and hides form fields.
+			if filter != "dialog" {
+				effectiveFilter = levelToFilter(lvl)
+			}
+		}
+	}
+
 	// Dialog filter shows a scoped subtree — depth limit is meaningless and hides form fields.
-	if filter == "dialog" {
+	if effectiveFilter == "dialog" {
 		maxDepth = 0
+	}
+
+	// For content level, use the dedicated filter path.
+	if effectiveFilter == "__content__" {
+		return renderAXTreeWithLevel(allNodes, maxDepth, format, page, selector, LevelContent, rm), nil
 	}
 
 	switch format {
 	case "text":
-		return renderAXTree(allNodes, maxDepth, filter, selector), nil
+		return renderAXTree(allNodes, maxDepth, effectiveFilter, selector), nil
 	default:
-		return renderAXTreeYAMLWithURLsAndRefs(allNodes, maxDepth, page, filter, selector, rm), nil
+		return renderAXTreeYAMLWithURLsAndRefs(allNodes, maxDepth, page, effectiveFilter, selector, rm), nil
 	}
 }
 

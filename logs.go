@@ -97,11 +97,20 @@ type LogCollector struct {
 	subCancel   context.CancelFunc
 	subCtx      context.Context
 
+	// stealthMode skips Runtime.enable and Console.enable CDP calls, which are
+	// the #1 detection vector for anti-bot systems (Cloudflare, Akamai, DataDome).
+	// Runtime.enable creates a detectable execution context; Console.enable
+	// similarly leaks automation. In stealth mode, console/exception capture is
+	// reduced (no Runtime.consoleAPICalled/exceptionThrown events), but network
+	// and page events still flow via Network.enable and Page.enable.
+	// See: https://apiserpent.com/blog/puppeteer-stealth-still-works-2026
+	stealthMode bool
+
 	// #19: Atomic dropped counters — incremented when ring buffer evicts oldest entry.
 	// Exposed via DroppedStats() for Prometheus metrics. Prometheus/Loki pattern.
-	droppedNetwork    atomic.Uint64
-	droppedConsole    atomic.Uint64
-	droppedExceptions atomic.Uint64
+	droppedNetwork     atomic.Uint64
+	droppedConsole     atomic.Uint64
+	droppedExceptions  atomic.Uint64
 	droppedNavigations atomic.Uint64
 }
 
@@ -113,6 +122,15 @@ func NewLogCollector() *LogCollector {
 		exceptions:  make([]ExceptionEntry, 0, 16),
 		navigations: make([]NavigationEntry, 0, 16),
 	}
+}
+
+// NewStealthLogCollector creates a log collector that skips Runtime.enable and
+// Console.enable CDP calls to avoid the #1 anti-bot detection vector.
+// Network and Page events are still captured; console and exception capture is reduced.
+func NewStealthLogCollector() *LogCollector {
+	c := NewLogCollector()
+	c.stealthMode = true
+	return c
 }
 
 // AddNetwork appends a network entry with ring buffer semantics (drops oldest when full).
@@ -303,18 +321,30 @@ func (c *LogCollector) startSubscription(page *rod.Page) {
 	if err := (proto.NetworkEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Network.enable err=%v\n", err)
 	}
-	if err := (proto.RuntimeEnable{}).Call(page); err != nil {
-		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Runtime.enable err=%v\n", err)
+
+	// #62: In stealth mode, skip Runtime.enable and Console.enable — these are
+	// the #1 CDP detection vector. Anti-bot systems detect the execution context
+	// created by Runtime.enable. Console.enable similarly leaks automation.
+	// Network and Page events still flow; console/exception capture is reduced.
+	if !c.stealthMode {
+		if err := (proto.RuntimeEnable{}).Call(page); err != nil {
+			fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Runtime.enable err=%v\n", err)
+		}
 	}
+
 	if err := (proto.PageEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Page.enable err=%v\n", err)
 	}
+
 	// Console and Log domains are required: cloakbrowser's fingerprint-patched
 	// Chromium 145 strips Runtime.consoleAPICalled / Runtime.exceptionThrown
 	// from flat-mode browser-WS sessions, but still emits Console.messageAdded
 	// when Console.enable is on.
-	if err := (proto.ConsoleEnable{}).Call(page); err != nil {
-		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Console.enable err=%v\n", err)
+	// #62: Skip Console.enable in stealth mode — it's a secondary detection vector.
+	if !c.stealthMode {
+		if err := (proto.ConsoleEnable{}).Call(page); err != nil {
+			fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Console.enable err=%v\n", err)
+		}
 	}
 	if err := (proto.LogEnable{}).Call(page); err != nil {
 		fmt.Fprintf(os.Stderr, "logs.SubscribeCDP: Log.enable err=%v\n", err)
@@ -510,7 +540,11 @@ func (c *LogCollector) dispatch(msg *rod.Message) {
 // SubscribeConsole enables the Runtime domain for console log capture.
 // This is a known CDP detection vector (Castle.io and similar services detect
 // RuntimeEnable). Only call this when console logging is explicitly needed.
+// In stealth mode, this is a no-op — Runtime.enable is skipped to avoid detection.
 func (c *LogCollector) SubscribeConsole(page *rod.Page) {
+	if c.stealthMode {
+		return
+	}
 	_ = proto.RuntimeEnable{}.Call(page)
 }
 

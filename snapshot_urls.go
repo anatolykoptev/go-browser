@@ -8,6 +8,9 @@ import (
 // collectLinkURLs fetches the full DOM tree and extracts href attributes
 // from <a> elements, returning a map from BackendNodeID to href.
 func collectLinkURLs(page *rod.Page) map[proto.DOMBackendNodeID]string {
+	if page == nil {
+		return nil
+	}
 	depth := -1
 	res, err := proto.DOMGetDocument{Depth: &depth, Pierce: true}.Call(page)
 	if err != nil {
