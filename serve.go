@@ -127,24 +127,24 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 
 	sb.WriteString("# HELP go_browser_connected Chrome connection state (1=connected, 0=disconnected)\n")
 	sb.WriteString("# TYPE go_browser_connected gauge\n")
-	sb.WriteString(fmt.Sprintf("go_browser_connected %d\n", connected))
+	fmt.Fprintf(&sb, "go_browser_connected %d\n", connected)
 
 	sb.WriteString("# HELP go_browser_cdp_latency_ms CDP round-trip latency in milliseconds\n")
 	sb.WriteString("# TYPE go_browser_cdp_latency_ms gauge\n")
-	sb.WriteString(fmt.Sprintf("go_browser_cdp_latency_ms %d\n", status.LatencyMs))
+	fmt.Fprintf(&sb, "go_browser_cdp_latency_ms %d\n", status.LatencyMs)
 
 	if status.ContextPool != nil {
 		sb.WriteString("# HELP go_browser_context_count Active browser contexts\n")
 		sb.WriteString("# TYPE go_browser_context_count gauge\n")
-		sb.WriteString(fmt.Sprintf("go_browser_context_count %d\n", status.ContextPool.Contexts))
+		fmt.Fprintf(&sb, "go_browser_context_count %d\n", status.ContextPool.Contexts)
 
 		sb.WriteString("# HELP go_browser_page_count Active managed pages\n")
 		sb.WriteString("# TYPE go_browser_page_count gauge\n")
-		sb.WriteString(fmt.Sprintf("go_browser_page_count %d\n", status.ContextPool.Pages))
+		fmt.Fprintf(&sb, "go_browser_page_count %d\n", status.ContextPool.Pages)
 
 		sb.WriteString("# HELP go_browser_generation Context pool generation counter (increments on reconnect)\n")
 		sb.WriteString("# TYPE go_browser_generation gauge\n")
-		sb.WriteString(fmt.Sprintf("go_browser_generation %d\n", status.ContextPool.Generation))
+		fmt.Fprintf(&sb, "go_browser_generation %d\n", status.ContextPool.Generation)
 	}
 
 	_, _ = w.Write([]byte(sb.String()))
