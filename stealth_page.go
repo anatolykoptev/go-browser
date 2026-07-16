@@ -3,6 +3,7 @@ package browser
 import (
 	_ "embed"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/go-rod/rod"
@@ -99,11 +100,27 @@ func applyStealthToExistingPage(page *rod.Page, profile *StealthProfile) error {
 
 // applyEmulationOverrides sets CDP Emulation timezone, locale, and user-agent
 // (with full userAgentMetadata for Sec-CH-UA-* headers) from the profile.
+//
+// Chrome's LocaleController and TimeZoneController are process-wide singletons
+// (see chromium's inspector_emulation_agent.cc / locale_controller.cc): only
+// ONE page at a time may hold an active locale or timezone override. When two
+// pages in the same browser try to set the same override concurrently, the
+// second call fails with "Another locale override is already in effect" /
+// "Timezone override is already in effect". Since all pages use the same
+// stealth profile (same locale, same timezone), the override set by the first
+// page is already the correct value for every other page — the error is
+// cosmetic, not a functional gap. We log it as a warning and continue rather
+// than fail the entire interact call, which would make parallel chrome_interact
+// invocations randomly error out (4 of 5 fail under concurrent load).
 func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 	if profile.Timezone != "" {
 		tzOverride := proto.EmulationSetTimezoneOverride{TimezoneID: profile.Timezone}
 		if err := tzOverride.Call(page); err != nil {
-			return fmt.Errorf("chrome: set timezone override: %w", err)
+			if isAlreadyInEffectErr(err) {
+				slog.Debug("chrome: timezone override already set by another page (singleton controller) — skipping", "timezone", profile.Timezone)
+			} else {
+				return fmt.Errorf("chrome: set timezone override: %w", err)
+			}
 		}
 	}
 
@@ -111,7 +128,11 @@ func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 		// CDP locale uses ICU format (e.g. "en-US"); first language tag is the primary.
 		localeOverride := proto.EmulationSetLocaleOverride{Locale: profile.Langs[0]}
 		if err := localeOverride.Call(page); err != nil {
-			return fmt.Errorf("chrome: set locale override: %w", err)
+			if isAlreadyInEffectErr(err) {
+				slog.Debug("chrome: locale override already set by another page (singleton controller) — skipping", "locale", profile.Langs[0])
+			} else {
+				return fmt.Errorf("chrome: set locale override: %w", err)
+			}
 		}
 	}
 
@@ -124,6 +145,20 @@ func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 	}
 
 	return nil
+}
+
+// isAlreadyInEffectErr reports whether err is the Chrome CDP "another override
+// is already in effect" error returned by Emulation.setLocaleOverride /
+// setTimezoneOverride when a different page already holds the singleton
+// override. The error text is stable across Chrome versions (see
+// inspector_emulation_agent.cc: Response::ServerError("Another locale override
+// is already in effect") and the timezone equivalent).
+func isAlreadyInEffectErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "already in effect")
 }
 
 // applyUserAgentOverride calls Emulation.setUserAgentOverride with the full

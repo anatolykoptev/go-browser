@@ -56,6 +56,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +72,60 @@ import (
 // slow-to-respond authoritative server for a caller-supplied hostname stalls
 // only that one paused request, not the browser connection.
 const checkTimeout = 5 * time.Second
+
+// allowLocalhost, set from the EGRESS_ALLOW_LOCALHOST env var, relaxes the
+// SSRF egress guard for loopback and private addresses. This is a
+// operator-controlled escape hatch for development/testing where Chrome
+// (CloakBrowser) runs in a separate container from the target local server —
+// the SSRF guard blocks localhost/127.0.0.1/RFC1918 by default because a
+// caller-supplied URL reaching internal infrastructure is the classic SSRF
+// vector, but a local dev server on the host or a sibling container is a
+// legitimate target that the guard was never meant to stop.
+//
+// NEVER enable in production where chrome_interact/render/screenshot_url
+// accept URLs from untrusted callers (LLM-generated, user-submitted) — a
+// blocked localhost is the guard doing its job there. The flag is parsed once
+// at init from EGRESS_ALLOW_LOCALHOST=true/1/yes.
+var allowLocalhost = parseBoolEnv("EGRESS_ALLOW_LOCALHOST")
+
+func parseBoolEnv(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "true" || v == "1" || v == "yes"
+}
+
+// isLocalhostURL reports whether u's host resolves to a loopback or private
+// address — the class the SSRF guard blocks but allowLocalhost exempts.
+// Resolves the hostname (with a bounded timeout) to check all returned IPs;
+// a literal IP is checked directly.
+func isLocalhostURL(ctx context.Context, u *url.URL) bool {
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return httputil.IsBlockedIP(ip)
+	}
+	// "localhost" and "*.localhost" are always loopback per RFC 6761.
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	resolver := net.DefaultResolver
+	if r, ok := ctx.Value(resolverKey{}).(*net.Resolver); ok && r != nil {
+		resolver = r
+	}
+	addrs, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil || len(addrs) == 0 {
+		return false
+	}
+	for _, a := range addrs {
+		if httputil.IsBlockedIP(a.IP) {
+			return true
+		}
+	}
+	return false
+}
+
+type resolverKey struct{}
 
 // egressGuard is the single, connection-wide owner of the CDP Fetch domain
 // for one Chrome connection (see installEgressGuard). It merges two
@@ -174,6 +232,20 @@ func (g *egressGuard) respondPaused(b *rod.Browser, ev *proto.FetchRequestPaused
 
 	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
+
+	// Operator-controlled localhost bypass: when EGRESS_ALLOW_LOCALHOST is
+	// set, skip the SSRF check for URLs that resolve to loopback/private
+	// addresses. The scheme allowlist (http/https only) is still enforced
+	// by CheckRawURL below for non-local URLs — the bypass is narrowly
+	// scoped to the address class the guard blocks, not a blanket skip.
+	if allowLocalhost {
+		if parsed, perr := url.Parse(ev.Request.URL); perr == nil && isLocalhostURL(ctx, parsed) {
+			if err := (proto.FetchContinueRequest{RequestID: ev.RequestID}).Call(b); err != nil {
+				slog.Warn("egress guard: continue request (localhost bypass) failed", "url", ev.Request.URL, "err", err)
+			}
+			return
+		}
+	}
 
 	if err := httputil.CheckRawURL(ctx, ev.Request.URL); err != nil {
 		// err's text already embeds the resolved blocked IP (see

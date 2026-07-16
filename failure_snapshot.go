@@ -10,9 +10,9 @@ import (
 // FailureSnapshot is the compact context captured automatically on action failure.
 // Capped in size to avoid bloating responses on common failures.
 type FailureSnapshot struct {
-	URL          string `json:"url"`
-	Title        string `json:"title,omitempty"`
-	Snapshot     string `json:"snapshot,omitempty"`     // accessibility tree, depth=3, max 4 KB
+	URL           string `json:"url"`
+	Title         string `json:"title,omitempty"`
+	Snapshot      string `json:"snapshot,omitempty"`       // accessibility tree, depth=3, max 4 KB
 	ScreenshotB64 string `json:"screenshot_b64,omitempty"` // JPEG 400x300, ~20 KB
 }
 

@@ -33,6 +33,11 @@ func chromiumBin() string {
 // skipIfNoChromium skips integration tests when Chromium is not available.
 func skipIfNoChromium(t *testing.T) {
 	t.Helper()
+	// -short skips all Chrome-dependent integration tests — the CI preflight
+	// gate runs with -short so it passes on a runner without Chrome.
+	if testing.Short() {
+		t.Skip("skipping Chrome integration test in -short mode")
+	}
 	if os.Getenv("INTEGRATION") != "" {
 		return
 	}

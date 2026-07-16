@@ -52,6 +52,13 @@ var (
 func acquireSharedBrowser(t *testing.T) *rod.Browser {
 	t.Helper()
 
+	// -short skips all Chrome-dependent integration tests — the CI preflight
+	// gate runs with -short so it passes on a runner without Chrome. Set
+	// INTEGRATION=1 or CLOAKBROWSER_WS_URL to override (local dev, nightly).
+	if testing.Short() {
+		t.Skip("skipping Chrome integration test in -short mode")
+	}
+
 	wsURL := os.Getenv("CLOAKBROWSER_WS_URL")
 	if wsURL == "" && os.Getenv("INTEGRATION") == "" && !chromiumAvailable() {
 		t.Skip("no Chromium found; set CLOAKBROWSER_WS_URL or INTEGRATION")

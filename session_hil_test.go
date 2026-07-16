@@ -43,7 +43,7 @@ func TestContextPool_DetachNonExistentSession(t *testing.T) {
 	pool := &ContextPool{
 		contexts: make(map[string]*ManagedContext),
 	}
-	
+
 	err := pool.DetachSession("nonexistent", "default")
 	if err == nil {
 		t.Error("expected error when detaching non-existent session")
@@ -55,7 +55,7 @@ func TestContextPool_AttachNonExistentSession(t *testing.T) {
 	pool := &ContextPool{
 		contexts: make(map[string]*ManagedContext),
 	}
-	
+
 	err := pool.AttachSession("nonexistent", "default")
 	if err == nil {
 		t.Error("expected error when attaching non-existent session")
@@ -94,4 +94,3 @@ func TestManagedPage_DetachedAtField(t *testing.T) {
 		t.Error("DetachedAt should be cleared after attach")
 	}
 }
-

@@ -16,6 +16,9 @@ import (
 // state. A dedicated instance gives full control of the target set.
 func launchDedicatedBrowser(t *testing.T) (*rod.Browser, func()) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping Chrome integration test in -short mode")
+	}
 	if os.Getenv("CLOAKBROWSER_WS_URL") == "" && os.Getenv("INTEGRATION") == "" && !chromiumAvailable() {
 		t.Skip("no local Chromium found; set INTEGRATION or install chromium")
 	}
