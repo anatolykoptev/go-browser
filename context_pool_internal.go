@@ -243,6 +243,27 @@ func (p *ContextPool) adoptExistingPage(mc *ManagedContext) (*rod.Page, error) {
 		}
 		return page, nil
 	}
+	// #31: If no page matched the cached ctxID, rediscover the default context
+	// and try again. The cached mc.ID may be stale (Chrome disposed/recreated
+	// the context). This matches the recovery in createPageWithStaleRecovery.
+	if ctxID != p.discoverPersistentDefaultCtxID() {
+		liveID := p.discoverPersistentDefaultCtxID()
+		if liveID != "" {
+			mc.Mu.Lock()
+			mc.ID = liveID
+			mc.Mu.Unlock()
+			for _, t := range targets.TargetInfos {
+				if t.Type != "page" || t.BrowserContextID != liveID {
+					continue
+				}
+				page, err := b.PageFromTarget(t.TargetID)
+				if err != nil {
+					continue
+				}
+				return page, nil
+			}
+		}
+	}
 	return nil, fmt.Errorf("no existing page found")
 }
 
@@ -421,13 +442,17 @@ func (p *ContextPool) createPageWithStaleRecovery(mc *ManagedContext, key string
 	}
 
 	// Stale default-context handle observed — re-discover the live default context
-	// and retry once. If re-discovery yields the same (still-stale) ID, the retry
-	// would fail identically, so short-circuit to a failed outcome.
+	// and retry with a short backoff. The delay handles the case where Chrome is
+	// in the middle of disposing/recreating the context (TOCTOU window).
+	// #22: Added 200ms backoff before retry — was immediate, which could race
+	// with Chrome's context recreation.
 	recordStaleCtxRecovery(StaleCtxOutcomeDetected)
 	if !p.rediscoverDefaultContext(mc) {
 		recordStaleCtxRecovery(StaleCtxOutcomeFailed)
 		return nil, err
 	}
+	// Brief backoff to let Chrome finish context recreation.
+	time.Sleep(200 * time.Millisecond)
 	page, err = p.newPageInContext(mc)
 	if err != nil {
 		recordStaleCtxRecovery(StaleCtxOutcomeFailed)
