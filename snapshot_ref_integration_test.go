@@ -11,11 +11,21 @@ func TestRefWorkflow_Integration(t *testing.T) {
 		t.Skip("integration test requires Chrome")
 	}
 
-	chrome, err := NewChromeManager("")
+	// Use the shared browser (launched by acquireSharedBrowser or connected
+	// to CLOAKBROWSER_WS_URL). NewChromeManager("") fails when no Chrome is
+	// already listening on a default port — in CI we launch Chrome via the
+	// shared launcher, so build the ChromeManager from that browser instance.
+	b := acquireSharedBrowser(t)
+
+	guard, err := installEgressGuard(b)
 	if err != nil {
-		t.Fatalf("chrome: %v", err)
+		t.Fatalf("install egress guard: %v", err)
 	}
-	defer chrome.Close()
+	chrome := &ChromeManager{
+		browser: b,
+		pool:    NewContextPool(b),
+		guard:   guard,
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

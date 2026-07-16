@@ -26,13 +26,20 @@ func TestInsertTextInputEvent_ContentEditable(t *testing.T) {
 	}
 	b := acquireSharedBrowser(t)
 
-	const html = `data:text/html,<div contenteditable="true" id="t" style="padding:8px;border:1px solid #333">OLD</div>`
-	page, err := b.Page(proto.TargetCreateTarget{URL: html})
+	// data:text/html URLs with quotes/angle brackets get URL-encoded by Chrome,
+	// mangling the HTML and making elements unfindable. Use about:blank + 
+	// document.write instead for deterministic HTML injection.
+	page, err := b.Page(proto.TargetCreateTarget{URL: "about:blank"})
 	if err != nil {
 		t.Fatalf("open page: %v", err)
 	}
 	defer func() { _ = page.Close() }()
 	_ = page.Timeout(5 * time.Second).WaitLoad()
+
+	_, err = page.Eval(`(html) => { document.open(); document.write(html); document.close(); }`, `<div contenteditable="true" id="t" style="padding:8px;border:1px solid #333">OLD</div>`)
+	if err != nil {
+		t.Fatalf("inject HTML: %v", err)
+	}
 
 	diag, err := doInsertTextInputEvent(page, "#t", "NEW")
 	if err != nil {
