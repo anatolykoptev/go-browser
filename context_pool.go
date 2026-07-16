@@ -195,10 +195,9 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if key == "default" && len(mc.Pages) == 0 {
 		mc.Mu.Unlock()
 		if adopted, aerr := p.adoptExistingPage(mc); aerr == nil && adopted != nil {
-			readyCh := make(chan struct{})
-			close(readyCh)
 			curGen := p.generation.Load()
-			mp := &ManagedPage{Session: session, Page: adopted, ready: readyCh, URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector(), generation: curGen}
+			mp := &ManagedPage{Session: session, Page: adopted, ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: NewLogCollector(), generation: curGen}
+			mp.signalReady() // close ready immediately — adopted page is already live
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
 				mc.Mu.Unlock()
