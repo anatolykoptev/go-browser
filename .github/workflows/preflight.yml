@@ -38,13 +38,13 @@ jobs:
           # gate the day a stdlib CVE lands in a patch release.
           go-version: stable
 
-      - name: Install golangci-lint
-        run: |
-          # golangci-lint is not pre-installed on ubuntu-24.04-arm.
-          # Install the latest stable via the official installer.
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b $(go env GOPATH)/bin
-          golangci-lint --version
+      # golangci-lint is not pre-installed on ubuntu-24.04-arm. Use the
+      # official GitHub action (pinned, checksum-verified) instead of the
+      # curl install script — the script's master-branch checksums are
+      # unreliable and fail the gate on mismatch (seen live: v2.12.2).
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.1.6
 
       - name: make preflight
         run: make preflight
