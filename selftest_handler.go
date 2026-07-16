@@ -78,22 +78,27 @@ func makePageFactory(chrome *ChromeManager, profileName string) selftest.PageFac
 		if err != nil {
 			return nil, nil, fmt.Errorf("create context: %w", err)
 		}
-
-		page, err := chrome.NewStealthPage(b, profile)
-		if err != nil {
-			_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(b)
+		// #16: Defer auth cleanup immediately after NewContext succeeds so it
+		// runs even if NewStealthPage panics. The context disposal is handled
+		// separately below.
+		cleanupAuth := func() {
 			if authCleanup != nil {
 				authCleanup()
 			}
+		}
+
+		page, err := chrome.NewStealthPage(b, profile)
+		if err != nil {
+			// Error path: dispose context + run auth cleanup.
+			_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(b)
+			cleanupAuth()
 			return nil, nil, fmt.Errorf("create stealth page: %w", err)
 		}
 
 		cleanup := func() {
 			_ = page.Close()
 			_ = proto.TargetDisposeBrowserContext{BrowserContextID: contextID}.Call(b)
-			if authCleanup != nil {
-				authCleanup()
-			}
+			cleanupAuth()
 		}
 		return page, cleanup, nil
 	}
