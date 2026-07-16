@@ -30,7 +30,9 @@ func New(opts ...Option) (*Browser, error) {
 	}
 
 	l := launcher.New().Headless(o.Headless).
-		Set("disable-blink-features", "AutomationControlled")
+		Set("disable-blink-features", "AutomationControlled").
+		Set("no-sandbox").
+		Set("disable-dev-shm-usage")
 	if o.Bin != "" {
 		l = l.Bin(o.Bin)
 	}
