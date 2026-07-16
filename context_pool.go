@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -33,16 +34,29 @@ const (
 // Locking discipline:
 //   - contextsMu (RWMutex) guards the contexts map itself.
 //   - ManagedContext.Mu (Mutex) guards that context's Pages map.
+//   - browser is stored as atomic.Pointer[rod.Browser] for lock-free, nil-safe reads.
+//     UpdateBrowser() atomically swaps the pointer; all readers use Load() without any lock.
 //   - CDP I/O (TargetCreateTarget, Page.Close, etc.) runs OUTSIDE any lock.
+//
+// Lock ordering (must be acquired in this order if both are held):
+//   1. contextsMu (global pool lock)
+//   2. ManagedContext.Mu (per-context lock)
+// Never acquire in reverse order — deadlock risk. Never hold either lock across a CDP call.
 type ContextPool struct {
 	contextsMu sync.RWMutex
-	browser    *rod.Browser
+	browser    atomic.Pointer[rod.Browser]
 	contexts   map[string]*ManagedContext // key: "default" | "private" | "proxy:<url>"
 	stop       chan struct{}
 	done       chan struct{}
 
 	// test-only injection: sleep before newPageInContext to simulate slow CDP.
 	newPageDelay time.Duration
+}
+
+// getBrowser returns the current browser atomically. Returns nil if not connected
+// (e.g., during reconnect). Callers must check for nil before use.
+func (p *ContextPool) getBrowser() *rod.Browser {
+	return p.browser.Load()
 }
 
 // ManagedContext is a Chrome BrowserContext with a set of named pages.
@@ -90,11 +104,11 @@ type SessionInfo struct {
 // and subscribes to CDP target destruction events.
 func NewContextPool(browser *rod.Browser) *ContextPool {
 	p := &ContextPool{
-		browser:  browser,
 		contexts: make(map[string]*ManagedContext),
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+	p.browser.Store(browser)
 	go p.reaper()
 	p.watchTargetDestroyed()
 	return p
@@ -366,11 +380,11 @@ func (p *ContextPool) Close() {
 	<-p.done
 }
 
-// UpdateBrowser replaces the browser reference (after reconnect).
+// UpdateBrowser replaces the browser reference atomically (after reconnect).
+// All readers using getBrowser() / p.browser.Load() will see the new browser
+// immediately without any lock contention.
 func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
-	p.contextsMu.Lock()
-	p.browser = b
-	p.contextsMu.Unlock()
+	p.browser.Store(b)
 }
 
 // FindManagedPage finds a managed page by session name across all contexts.

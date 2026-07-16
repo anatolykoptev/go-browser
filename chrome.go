@@ -14,11 +14,12 @@ import (
 
 // ChromeManager manages a connection to a remote Chrome instance (CloakBrowser).
 type ChromeManager struct {
-	mu             sync.RWMutex
-	browser        *rod.Browser
-	pool           *ContextPool
-	guard          *egressGuard                  // connection-wide SSRF egress guard; see egress_guard.go
-	wsURL          string                        // original ws URL for discovery
+	mu             sync.RWMutex                   // guards browser, guard, pool, keepaliveCtxID
+	reconnectMu    sync.Mutex                     // serializes reconnect calls
+	browser        *rod.Browser                   // protected by mu
+	pool           *ContextPool                   // protected by mu
+	guard          *egressGuard                   // connection-wide SSRF egress guard; protected by mu
+	wsURL          string                         // original ws URL for discovery (immutable)
 	keepaliveCtxID proto.BrowserBrowserContextID // unused, kept for lifecycle compat
 }
 
