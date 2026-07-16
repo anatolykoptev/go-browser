@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,14 +57,37 @@ type ContextPool struct {
 	// pattern + Vercel agent-browser generation counter).
 	generation atomic.Uint64
 
+	// stealthProfile, when non-nil, is automatically applied to every new page
+	// created via GetOrCreatePage (puppeteer-extra onPageCreated pattern).
+	// This ensures stealth is applied on ALL page creation paths, not just
+	// RunInteract. Set via SetStealthProfile.
+	stealthProfile *StealthProfile
+
 	// test-only injection: sleep before newPageInContext to simulate slow CDP.
 	newPageDelay time.Duration
+}
+
+// SetStealthProfile sets the profile that will be automatically applied to
+// every new page created via GetOrCreatePage. This centralizes stealth
+// application so pages created outside RunInteract (e.g., via the pool
+// directly) also get stealth. puppeteer-extra onPageCreated pattern.
+func (p *ContextPool) SetStealthProfile(profile *StealthProfile) {
+	p.contextsMu.Lock()
+	p.stealthProfile = profile
+	p.contextsMu.Unlock()
 }
 
 // getBrowser returns the current browser atomically. Returns nil if not connected
 // (e.g., during reconnect). Callers must check for nil before use.
 func (p *ContextPool) getBrowser() *rod.Browser {
 	return p.browser.Load()
+}
+
+// getStealthProfile returns the pool's stealth profile under a read lock.
+func (p *ContextPool) getStealthProfile() *StealthProfile {
+	p.contextsMu.RLock()
+	defer p.contextsMu.RUnlock()
+	return p.stealthProfile
 }
 
 // ManagedContext is a Chrome BrowserContext with a set of named pages.
@@ -187,6 +211,12 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 			}
 			mc.Pages[session] = mp
 			mc.Mu.Unlock()
+			// #28: Apply stealth to adopted pages too.
+			if profile := p.getStealthProfile(); profile != nil {
+				if err := applyStealthToExistingPage(adopted, profile); err != nil {
+					slog.Warn("context_pool: auto-stealth on adopted page failed", "session", session, "err", err)
+				}
+			}
 			// Adopted page is already live — subscribe LogCollector immediately.
 			mp.LogCollector.SubscribeCDP(adopted)
 			return mp, nil
@@ -262,6 +292,16 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	}
 	mp.Page = page
 	mc.Mu.Unlock()
+	// #28: Apply stealth automatically if a profile is set on the pool.
+	// This ensures pages created via the pool (not just via RunInteract) get
+	// stealth. puppeteer-extra onPageCreated pattern.
+	if profile := p.getStealthProfile(); profile != nil {
+		if err := applyStealthToExistingPage(page, profile); err != nil {
+			// Log the error but don't fail — the page is usable without stealth,
+			// just less protected. Caller can check via NoStealth flag.
+			slog.Warn("context_pool: auto-stealth application failed", "session", session, "err", err)
+		}
+	}
 	// Wire LogCollector to the real page. SubscribeCDP starts a listener goroutine
 	// that runs until the page is closed.
 	if mp.LogCollector != nil {
