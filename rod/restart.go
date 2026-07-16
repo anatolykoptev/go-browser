@@ -35,7 +35,9 @@ func (b *Browser) restart() error {
 	}
 
 	l := launcher.New().Headless(b.opts.Headless).
-		Set("disable-blink-features", "AutomationControlled")
+		Set("disable-blink-features", "AutomationControlled").
+		Set("no-sandbox").
+		Set("disable-dev-shm-usage")
 	if b.opts.Bin != "" {
 		l = l.Bin(b.opts.Bin)
 	}
