@@ -2,6 +2,7 @@ package browser
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 
 	"github.com/go-rod/rod"
@@ -52,8 +53,15 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 	// fresh one on the new connection.
 	var cleanup func()
 	if proxyUser != "" {
-		if guard := m.getGuard(); guard != nil {
+		guard := m.getGuard()
+		if guard != nil {
 			cleanup = guard.registerProxyAuth(proxyUser, proxyPass)
+		} else {
+			// #21: Log when proxy auth is silently skipped — the egress guard is nil
+			// (e.g., during reconnect or if installEgressGuard failed). Without this,
+			// authenticated proxy requests will fail with 407 Proxy Authentication
+			// Required and the caller has no idea why.
+			slog.Warn("chrome: proxy auth registration skipped — egress guard is nil (reconnect in progress?)", "proxyUser", proxyUser)
 		}
 	}
 
@@ -64,12 +72,21 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 // Input:  "http://user:pass@host:port" → ("host:port", "user", "pass")
 // Input:  "http://host:port"           → ("http://host:port", "", "")
 // Input:  ""                           → ("", "", "")
+// #36: Validates the scheme is http, https, or socks5; logs and returns
+// the raw string unchanged for unsupported schemes.
 func parseProxy(raw string) (server, user, pass string) {
 	if raw == "" {
 		return "", "", ""
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.User == nil {
+		return raw, "", ""
+	}
+	// #36: Only http, https, and socks5 proxy schemes are allowed.
+	switch u.Scheme {
+	case "http", "https", "socks5":
+	default:
+		slog.Warn("chrome: proxy URL with unsupported scheme, passing through unchanged", "scheme", u.Scheme, "url", raw)
 		return raw, "", ""
 	}
 	pass, _ = u.User.Password()

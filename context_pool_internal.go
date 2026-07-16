@@ -3,6 +3,7 @@ package browser
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -112,7 +113,11 @@ func (p *ContextPool) knownIncognitoCtxIDs() map[proto.BrowserBrowserContextID]s
 // the caller then omits BrowserContextID on TargetCreateTarget and lands in
 // Chrome's current default context — the documented empty-ID fallback.
 func (p *ContextPool) discoverPersistentDefaultCtxID() proto.BrowserBrowserContextID {
-	targets, err := proto.TargetGetTargets{}.Call(p.browser)
+	b := p.getBrowser()
+	if b == nil {
+		return ""
+	}
+	targets, err := proto.TargetGetTargets{}.Call(b)
 	if err != nil {
 		return ""
 	}
@@ -156,10 +161,14 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 
 	if mode != "default" {
 		proxyServer, _, _ := parseProxy(proxy)
+		b := p.getBrowser()
+		if b == nil {
+			return nil, ErrUnavailable
+		}
 		res, err := proto.TargetCreateBrowserContext{
 			ProxyServer:     proxyServer,
 			DisposeOnDetach: true,
-		}.Call(p.browser)
+		}.Call(b)
 		if err != nil {
 			return nil, fmt.Errorf("create browser context: %w", err)
 		}
@@ -171,7 +180,9 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 	// Double-check: another goroutine may have created it while we were in CDP.
 	if existing, ok := p.contexts[key]; ok {
 		if mc.ID != "" && mode != "default" {
-			_ = proto.TargetDisposeBrowserContext{BrowserContextID: mc.ID}.Call(p.browser)
+			if b := p.getBrowser(); b != nil {
+				_ = proto.TargetDisposeBrowserContext{BrowserContextID: mc.ID}.Call(b)
+			}
 		}
 		return existing, nil
 	}
@@ -180,6 +191,10 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 }
 
 func (p *ContextPool) newPageInContext(mc *ManagedContext) (*rod.Page, error) {
+	b := p.getBrowser()
+	if b == nil {
+		return nil, ErrUnavailable
+	}
 	var targetReq proto.TargetCreateTarget
 	targetReq.URL = "about:blank"
 	// Snapshot mc.ID under mc.Mu: rediscoverDefaultContext may rewrite it
@@ -191,11 +206,11 @@ func (p *ContextPool) newPageInContext(mc *ManagedContext) (*rod.Page, error) {
 	if ctxID != "" {
 		targetReq.BrowserContextID = ctxID
 	}
-	res, err := targetReq.Call(p.browser)
+	res, err := targetReq.Call(b)
 	if err != nil {
 		return nil, fmt.Errorf("create target: %w", err)
 	}
-	page, err := p.browser.PageFromTarget(res.TargetID)
+	page, err := b.PageFromTarget(res.TargetID)
 	if err != nil {
 		return nil, fmt.Errorf("page from target: %w", err)
 	}
@@ -205,7 +220,11 @@ func (p *ContextPool) newPageInContext(mc *ManagedContext) (*rod.Page, error) {
 // adoptExistingPage finds Chrome's existing default tab (e.g. chrome://newtab)
 // and wraps it as a rod.Page so the pool can manage it instead of creating a new one.
 func (p *ContextPool) adoptExistingPage(mc *ManagedContext) (*rod.Page, error) {
-	targets, err := proto.TargetGetTargets{}.Call(p.browser)
+	b := p.getBrowser()
+	if b == nil {
+		return nil, ErrUnavailable
+	}
+	targets, err := proto.TargetGetTargets{}.Call(b)
 	if err != nil {
 		return nil, err
 	}
@@ -218,18 +237,41 @@ func (p *ContextPool) adoptExistingPage(mc *ManagedContext) (*rod.Page, error) {
 		if t.Type != "page" || t.BrowserContextID != ctxID {
 			continue
 		}
-		page, err := p.browser.PageFromTarget(t.TargetID)
+		page, err := b.PageFromTarget(t.TargetID)
 		if err != nil {
 			continue
 		}
 		return page, nil
+	}
+	// #31: If no page matched the cached ctxID, rediscover the default context
+	// and try again. The cached mc.ID may be stale (Chrome disposed/recreated
+	// the context). This matches the recovery in createPageWithStaleRecovery.
+	if ctxID != p.discoverPersistentDefaultCtxID() {
+		liveID := p.discoverPersistentDefaultCtxID()
+		if liveID != "" {
+			mc.Mu.Lock()
+			mc.ID = liveID
+			mc.Mu.Unlock()
+			for _, t := range targets.TargetInfos {
+				if t.Type != "page" || t.BrowserContextID != liveID {
+					continue
+				}
+				page, err := b.PageFromTarget(t.TargetID)
+				if err != nil {
+					continue
+				}
+				return page, nil
+			}
+		}
 	}
 	return nil, fmt.Errorf("no existing page found")
 }
 
 func (p *ContextPool) disposeContext(mc *ManagedContext) {
 	if mc.ID != "" {
-		_ = proto.TargetDisposeBrowserContext{BrowserContextID: mc.ID}.Call(p.browser)
+		if b := p.getBrowser(); b != nil {
+			_ = proto.TargetDisposeBrowserContext{BrowserContextID: mc.ID}.Call(b)
+		}
 	}
 }
 
@@ -252,7 +294,11 @@ func (p *ContextPool) reaper() {
 // Only removes pages whose TargetID exactly matches the destroyed target.
 // Does NOT dispose the BrowserContext — let Chrome handle context lifecycle.
 func (p *ContextPool) watchTargetDestroyed() {
-	go p.browser.EachEvent(func(e *proto.TargetTargetDestroyed) bool {
+	b := p.getBrowser()
+	if b == nil {
+		return
+	}
+	go b.EachEvent(func(e *proto.TargetTargetDestroyed) bool {
 		p.contextsMu.RLock()
 		ctxs := make([]*ManagedContext, 0, len(p.contexts))
 		for _, mc := range p.contexts {
@@ -276,12 +322,20 @@ func (p *ContextPool) watchTargetDestroyed() {
 
 // sessionNameFromURL derives a human-readable session name from a URL.
 // Example: "https://example.com/page?q=1" → "example.com/page".
+// #20: Logs a warning when the URL is malformed or has no host — the session
+// name silently downgrades to an ephemeral ID, which makes session management
+// harder for callers expecting a deterministic name.
 func sessionNameFromURL(rawURL string) string {
 	if rawURL == "" || rawURL == "about:blank" {
 		return generateEphemeralID()
 	}
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
+	if err != nil {
+		slog.Warn("context_pool: malformed URL for session name — using ephemeral ID", "url", rawURL, "err", err)
+		return generateEphemeralID()
+	}
+	if u.Host == "" {
+		slog.Warn("context_pool: URL has no host for session name — using ephemeral ID", "url", rawURL)
 		return generateEphemeralID()
 	}
 	name := u.Host + u.Path
@@ -388,13 +442,17 @@ func (p *ContextPool) createPageWithStaleRecovery(mc *ManagedContext, key string
 	}
 
 	// Stale default-context handle observed — re-discover the live default context
-	// and retry once. If re-discovery yields the same (still-stale) ID, the retry
-	// would fail identically, so short-circuit to a failed outcome.
+	// and retry with a short backoff. The delay handles the case where Chrome is
+	// in the middle of disposing/recreating the context (TOCTOU window).
+	// #22: Added 200ms backoff before retry — was immediate, which could race
+	// with Chrome's context recreation.
 	recordStaleCtxRecovery(StaleCtxOutcomeDetected)
 	if !p.rediscoverDefaultContext(mc) {
 		recordStaleCtxRecovery(StaleCtxOutcomeFailed)
 		return nil, err
 	}
+	// Brief backoff to let Chrome finish context recreation.
+	time.Sleep(200 * time.Millisecond)
 	page, err = p.newPageInContext(mc)
 	if err != nil {
 		recordStaleCtxRecovery(StaleCtxOutcomeFailed)

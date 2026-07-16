@@ -88,6 +88,16 @@ const checkTimeout = 5 * time.Second
 // at init from EGRESS_ALLOW_LOCALHOST=true/1/yes.
 var allowLocalhost = parseBoolEnv("EGRESS_ALLOW_LOCALHOST")
 
+// #27: Warn at init if EGRESS_ALLOW_LOCALHOST is enabled — this is a security
+// escape hatch that should NEVER be on in production where untrusted callers
+// can supply URLs. The warning is logged once at package init.
+func init() {
+	if allowLocalhost {
+		slog.Warn("egress guard: EGRESS_ALLOW_LOCALHOST is enabled — SSRF guard will NOT block localhost/private IPs. " +
+			"This is a development escape hatch — NEVER enable in production with untrusted caller URLs.")
+	}
+}
+
 func parseBoolEnv(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	return v == "true" || v == "1" || v == "yes"
@@ -117,6 +127,12 @@ func isLocalhostURL(ctx context.Context, u *url.URL) bool {
 	if err != nil || len(addrs) == 0 {
 		return false
 	}
+	// #37: Log DNS resolution at Debug level for observability.
+	ips := make([]string, len(addrs))
+	for i, a := range addrs {
+		ips[i] = a.IP.String()
+	}
+	slog.Debug("egress guard: DNS resolution for URL check", "host", host, "ips", ips)
 	for _, a := range addrs {
 		if httputil.IsBlockedIP(a.IP) {
 			return true
@@ -177,6 +193,12 @@ type egressGuard struct {
 	username string
 	password string
 	active   bool
+
+	// #15: rebindDomains tracks hostnames whose response-stage remoteIPAddress
+	// was a blocked IP (DNS rebind detected). Future Request-stage checks for
+	// these domains will be blocked regardless of current DNS resolution.
+	// Protected by mu.
+	rebindDomains map[string]bool
 }
 
 // installEgressGuard enables CDP Fetch-domain interception on b — exactly
@@ -196,16 +218,50 @@ func installEgressGuard(b *rod.Browser) (*egressGuard, error) {
 		return nil, fmt.Errorf("browser: enable Fetch domain for egress guard: %w", err)
 	}
 
+	// #15/#58: Enable Network domain to capture response-stage remoteIPAddress.
+	// This allows detecting DNS-rebinding attacks: the Request-stage check
+	// resolves the hostname in THIS process, but Chrome does its own DNS
+	// resolution. If the IP changed between check and dial (DNS rebind), the
+	// response's remoteIPAddress will differ from what we checked.
+	// We can't prevent the connection (it's already made), but we detect and
+	// alert on the rebind, and track the domain for future Request-stage checks.
+	//
+	// #58: CloakBrowser (Chrome 146) does not support Network.enable — the
+	// call fails with -32601 and we fall back to Page.frameNavigated-based
+	// detection. This fallback can't check the remote IP, but it CAN detect
+	// when Chrome navigated to a URL that resolves to a blocked IP by
+	// re-resolving the hostname from Go and comparing against the blocklist.
+	networkEnabled := true
+	if err := (proto.NetworkEnable{}).Call(b); err != nil {
+		slog.Warn("egress guard: Network.enable not supported — using Page.frameNavigated fallback for DNS-rebind detection", "err", err)
+		networkEnabled = false
+	}
+
 	g := &egressGuard{}
 
-	wait := b.EachEvent(
+	events := []any{
 		func(ev *proto.FetchRequestPaused) {
 			go g.respondPaused(b, ev)
 		},
 		func(ev *proto.FetchAuthRequired) {
 			go g.respondAuth(b, ev)
 		},
-	)
+	}
+	if networkEnabled {
+		events = append(events, func(ev *proto.NetworkResponseReceived) {
+			g.checkResponseIP(b, ev)
+		})
+	} else {
+		// #58: Fallback — use Page.frameNavigated to detect post-navigation
+		// URL changes. We re-resolve the hostname from Go and check against
+		// the blocklist. This catches DNS-rebind where Chrome navigated to
+		// a URL that now resolves to a blocked IP.
+		events = append(events, func(ev *proto.PageFrameNavigated) {
+			g.checkFrameNavigated(b, ev)
+		})
+	}
+
+	wait := b.EachEvent(events...)
 	go wait()
 
 	return g, nil
@@ -247,6 +303,22 @@ func (g *egressGuard) respondPaused(b *rod.Browser, ev *proto.FetchRequestPaused
 		}
 	}
 
+	// #15: Check if this domain was previously flagged for DNS rebinding.
+	// If so, block immediately regardless of current DNS resolution.
+	if parsed, perr := url.Parse(ev.Request.URL); perr == nil && parsed.Hostname() != "" {
+		if g.isRebindDomain(parsed.Hostname()) {
+			slog.Warn("egress guard: blocking request to DNS-rebind-flagged domain",
+				"url", ev.Request.URL, "host", parsed.Hostname())
+			if failErr := (proto.FetchFailRequest{
+				RequestID:   ev.RequestID,
+				ErrorReason: proto.NetworkErrorReasonBlockedByClient,
+			}).Call(b); failErr != nil {
+				slog.Error("egress guard: FAILED to block rebind-flagged request", "url", ev.Request.URL, "err", failErr)
+			}
+			return
+		}
+	}
+
 	if err := httputil.CheckRawURL(ctx, ev.Request.URL); err != nil {
 		// err's text already embeds the resolved blocked IP (see
 		// httputil.CheckURL) — nothing more to extract for the log line.
@@ -270,6 +342,104 @@ func (g *egressGuard) respondPaused(b *rod.Browser, ev *proto.FetchRequestPaused
 
 	if err := (proto.FetchContinueRequest{RequestID: ev.RequestID}).Call(b); err != nil {
 		slog.Warn("egress guard: continue request failed", "url", ev.Request.URL, "err", err)
+	}
+}
+
+// checkResponseIP verifies the remoteIPAddress from a Network.responseReceived
+// event against the SSRF blocklist. This is the Response-stage DNS-rebind
+// detection (#15): if the IP Chrome actually connected to is blocked, but the
+// Request-stage URL check passed (because DNS resolved differently at check
+// time), we log the rebind and track the domain for future blocking.
+//
+// We cannot abort the connection at this point (it's already established), but
+// we CAN:
+//  1. Alert at Error level so operators see the DNS-rebind attempt
+//  2. Add the domain to rebindDomains so future Request-stage checks block it
+//     immediately, regardless of what DNS resolves to
+func (g *egressGuard) checkResponseIP(b *rod.Browser, ev *proto.NetworkResponseReceived) {
+	if ev.Response == nil || ev.Response.RemoteIPAddress == "" {
+		return
+	}
+	ip := net.ParseIP(ev.Response.RemoteIPAddress)
+	if ip == nil {
+		return
+	}
+	if !httputil.IsBlockedIP(ip) {
+		return
+	}
+	// DNS rebind detected: Chrome connected to a blocked IP that our
+	// Request-stage check didn't catch (hostname resolved differently).
+	host := ""
+	if ev.Response.URL != "" {
+		if u, err := url.Parse(ev.Response.URL); err == nil {
+			host = u.Hostname()
+		}
+	}
+	if allowLocalhost && host != "" {
+		// If localhost is allowed and the IP is loopback, don't flag it.
+		if ip.IsLoopback() {
+			return
+		}
+	}
+	slog.Error("egress guard: DNS REBIND DETECTED — Chrome connected to blocked IP despite Request-stage check passing",
+		"url", ev.Response.URL,
+		"remote_ip", ev.Response.RemoteIPAddress,
+		"host", host,
+		"request_id", ev.RequestID,
+	)
+	// Track the domain so future requests are blocked at Request stage.
+	if host != "" {
+		g.mu.Lock()
+		if g.rebindDomains == nil {
+			g.rebindDomains = make(map[string]bool)
+		}
+		g.rebindDomains[host] = true
+		g.mu.Unlock()
+	}
+}
+
+// isRebindDomain checks if a hostname has been flagged for DNS rebinding.
+func (g *egressGuard) isRebindDomain(host string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.rebindDomains[host]
+}
+
+// checkFrameNavigated is the #58 fallback for CloakBrowser which doesn't
+// support Network.enable. After each navigation, it re-resolves the
+// hostname from Go and checks if it now resolves to a blocked IP.
+// This catches DNS-rebind where the URL passed the Request-stage check
+// (resolved to a public IP) but Chrome connected to a private IP.
+//
+// Limitation vs Network.responseReceived: we can't see Chrome's actual
+// remoteIPAddress — we only see the URL Chrome navigated to. If Chrome
+// followed a redirect to a different hostname, we check the final hostname.
+func (g *egressGuard) checkFrameNavigated(_ *rod.Browser, ev *proto.PageFrameNavigated) {
+	if ev.Frame == nil {
+		return
+	}
+	u, err := url.Parse(ev.Frame.URL)
+	if err != nil || u.Hostname() == "" {
+		return
+	}
+	host := u.Hostname()
+	// Skip non-http(s) schemes (about:blank, data:, chrome:, etc.)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if isLocalhostURL(ctx, u) {
+		slog.Error("egress guard: DNS-rebind detected via frameNavigated — hostname now resolves to blocked IP",
+			"host", host,
+			"url", ev.Frame.URL,
+		)
+		g.mu.Lock()
+		if g.rebindDomains == nil {
+			g.rebindDomains = make(map[string]bool)
+		}
+		g.rebindDomains[host] = true
+		g.mu.Unlock()
 	}
 }
 

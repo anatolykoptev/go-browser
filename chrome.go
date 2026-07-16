@@ -14,12 +14,23 @@ import (
 
 // ChromeManager manages a connection to a remote Chrome instance (CloakBrowser).
 type ChromeManager struct {
-	mu             sync.RWMutex
-	browser        *rod.Browser
-	pool           *ContextPool
-	guard          *egressGuard                  // connection-wide SSRF egress guard; see egress_guard.go
-	wsURL          string                        // original ws URL for discovery
+	mu             sync.RWMutex                   // guards browser, guard, pool, keepaliveCtxID
+	reconnectMu    sync.Mutex                     // serializes reconnect calls
+	browser        *rod.Browser                   // protected by mu
+	pool           *ContextPool                   // protected by mu
+	guard          *egressGuard                   // connection-wide SSRF egress guard; protected by mu
+	wsURL          string                         // original ws URL for discovery (immutable)
 	keepaliveCtxID proto.BrowserBrowserContextID // unused, kept for lifecycle compat
+
+	// LostConnection is closed when the CDP connection drops unexpectedly (not
+	// during intentional Close). Callers can select on it to detect disconnects
+	// proactively. chromedp pattern (browser.go:31-34).
+	LostConnection chan struct{}
+
+	// closingGracefully is closed by Close() to signal the disconnect watcher
+	// that the connection loss is intentional — don't attempt reconnect or fire
+	// LostConnection. chromedp pattern (allocate.go:170-180).
+	closingGracefully chan struct{}
 }
 
 // NewChromeManager connects to a remote Chrome via WebSocket debugger URL.
@@ -51,12 +62,16 @@ func NewChromeManager(wsURL string) (*ChromeManager, error) {
 
 	pool := NewContextPool(b)
 
-	return &ChromeManager{
-		browser: b,
-		pool:    pool,
-		guard:   guard,
-		wsURL:   wsURL,
-	}, nil
+	m := &ChromeManager{
+		browser:           b,
+		pool:              pool,
+		guard:             guard,
+		wsURL:             wsURL,
+		LostConnection:    make(chan struct{}),
+		closingGracefully: make(chan struct{}),
+	}
+	m.startDisconnectWatcher()
+	return m, nil
 }
 
 // Pool returns the ContextPool owned by this ChromeManager.

@@ -54,7 +54,8 @@ func TestWithRetry_ImmediateContextCancel(t *testing.T) {
 }
 
 // TestWithRetry_Timing verifies that 3 consecutive failures incur 2 delay intervals
-// totalling between 400 ms and 700 ms (2 x [200..300] ms with scheduling slack).
+// with exponential backoff (100ms * 2^attempt + jitter), totalling between 300 ms
+// and 600 ms (100+200 base + up to 2x100ms jitter, with scheduling slack).
 func TestWithRetry_Timing(t *testing.T) {
 	t.Parallel()
 
@@ -66,9 +67,10 @@ func TestWithRetry_Timing(t *testing.T) {
 	})
 	elapsed := time.Since(start)
 
-	// 2 delays x retryBaseMs + up to retryJitterMs each = 2x200..2x300 ms
-	const minExpected = 2 * retryBaseMs * time.Millisecond
-	const maxExpected = 2*(retryBaseMs+retryJitterMs)*time.Millisecond + 150*time.Millisecond // +150ms scheduling slack
+	// #30: Exponential backoff — attempt 0: 100ms, attempt 1: 200ms, plus jitter.
+	// min = 100 + 200 = 300ms, max = (100+99) + (200+99) = 498ms + slack.
+	const minExpected = 300 * time.Millisecond
+	const maxExpected = 500*time.Millisecond + 150*time.Millisecond // +150ms scheduling slack
 
 	if elapsed < minExpected {
 		t.Fatalf("timing too fast: %v < %v; delays may have been skipped", elapsed, minExpected)

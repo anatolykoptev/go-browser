@@ -26,13 +26,6 @@ const (
 	minControlPoints = 3
 	extraControlPts  = 3 // rand in [0, extraControlPts) → total in [3,5]
 
-	// Delay bands (ms).
-	delayFastMs  = 8
-	delaySlowMin = 20
-	delaySlowMax = 30
-	// Fraction of path considered "near start/end" for slow delay.
-	endZone = 0.20
-
 	// DwellDelay constants (T3 behavioral biometric).
 	dwellBaseMs       = 50
 	dwellTargetFactor = 100.0
@@ -100,7 +93,6 @@ func BezierPath(startX, startY, endX, endY float64, steps int) []Point {
 
 // MouseDelay returns a human-like delay between mouse move steps in milliseconds.
 // Base delay is 2–8ms with a 10% chance of a 15–30ms pause.
-// Use MouseDelayForStep for position-aware variation.
 func MouseDelay() int {
 	base := mouseBaseMin + rand.IntN(mouseBaseMax-mouseBaseMin+1)
 	if rand.Float64() < pauseChance {
@@ -134,20 +126,4 @@ func DwellDelay(targetWidth float64) (delayMs int, microMoves []Point) {
 		}
 	}
 	return
-}
-
-// MouseDelayForStep returns a position-aware delay in milliseconds that mirrors
-// the minimum-jerk velocity profile: slower at path endpoints (20–30ms) and
-// faster in the middle (8ms). This supplements the spatial minimum-jerk curve
-// with temporal variation for more realistic bot-evasion behavior.
-func MouseDelayForStep(stepIndex, totalSteps int) int {
-	if totalSteps <= 1 {
-		return delaySlowMin
-	}
-	frac := float64(stepIndex) / float64(totalSteps-1)
-	// Slow at start (frac < endZone) and end (frac > 1-endZone).
-	if frac < endZone || frac > 1-endZone {
-		return delaySlowMin + rand.IntN(delaySlowMax-delaySlowMin+1)
-	}
-	return delayFastMs
 }

@@ -116,7 +116,7 @@ func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 	if profile.Timezone != "" {
 		tzOverride := proto.EmulationSetTimezoneOverride{TimezoneID: profile.Timezone}
 		if err := tzOverride.Call(page); err != nil {
-			if isAlreadyInEffectErr(err) {
+			if IsAlreadyInEffectErr(err) {
 				slog.Debug("chrome: timezone override already set by another page (singleton controller) — skipping", "timezone", profile.Timezone)
 			} else {
 				return fmt.Errorf("chrome: set timezone override: %w", err)
@@ -128,7 +128,7 @@ func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 		// CDP locale uses ICU format (e.g. "en-US"); first language tag is the primary.
 		localeOverride := proto.EmulationSetLocaleOverride{Locale: profile.Langs[0]}
 		if err := localeOverride.Call(page); err != nil {
-			if isAlreadyInEffectErr(err) {
+			if IsAlreadyInEffectErr(err) {
 				slog.Debug("chrome: locale override already set by another page (singleton controller) — skipping", "locale", profile.Langs[0])
 			} else {
 				return fmt.Errorf("chrome: set locale override: %w", err)
@@ -145,20 +145,6 @@ func applyEmulationOverrides(page *rod.Page, profile *StealthProfile) error {
 	}
 
 	return nil
-}
-
-// isAlreadyInEffectErr reports whether err is the Chrome CDP "another override
-// is already in effect" error returned by Emulation.setLocaleOverride /
-// setTimezoneOverride when a different page already holds the singleton
-// override. The error text is stable across Chrome versions (see
-// inspector_emulation_agent.cc: Response::ServerError("Another locale override
-// is already in effect") and the timezone equivalent).
-func isAlreadyInEffectErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "already in effect")
 }
 
 // applyUserAgentOverride calls Emulation.setUserAgentOverride with the full
@@ -234,9 +220,15 @@ func setAcceptLanguage(page *rod.Page, langs []string) error {
 		fmt.Fprintf(&b, ",%s;q=%.1f", l, q)
 	}
 
-	_ = proto.NetworkSetExtraHTTPHeaders{
+	// #26: Return the error instead of swallowing it. A failed Accept-Language
+	// header means the page may send the wrong language偏好 to servers, which
+	// defeats the stealth profile's locale consistency.
+	setHeaders := proto.NetworkSetExtraHTTPHeaders{
 		Headers: proto.NetworkHeaders{"Accept-Language": gson.New(b.String())},
-	}.Call(page)
+	}
+	if err := setHeaders.Call(page); err != nil {
+		return fmt.Errorf("chrome: set Accept-Language header: %w", err)
+	}
 
 	return nil
 }
