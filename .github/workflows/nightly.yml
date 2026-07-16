@@ -45,9 +45,14 @@ jobs:
       # binary with no snap/AppArmor issues — rod launches it directly.
       # See https://github.com/actions/partner-runner-images: "Chrome
       # browser" is listed under "omitted from the current image".
+      #
+      # --with-deps is omitted because it runs apt-get to install system
+      # deps (fonts, libs) from ports.ubuntu.com, which is intermittently
+      # unreachable from the arm runner. The runner's pre-installed libs
+      # are sufficient for headless Chrome in tests.
       - name: Install Chromium (Playwright-bundled)
         run: |
-          npx --yes playwright@latest install --with-deps chromium
+          npx --yes playwright@latest install chromium
           # Find the installed binary and symlink it to a known path
           # so BROWSER_BIN can point to it deterministically.
           BIN=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)
