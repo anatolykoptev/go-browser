@@ -218,30 +218,50 @@ func installEgressGuard(b *rod.Browser) (*egressGuard, error) {
 		return nil, fmt.Errorf("browser: enable Fetch domain for egress guard: %w", err)
 	}
 
-	// #15: Enable Network domain to capture response-stage remoteIPAddress.
+	// #15/#58: Enable Network domain to capture response-stage remoteIPAddress.
 	// This allows detecting DNS-rebinding attacks: the Request-stage check
 	// resolves the hostname in THIS process, but Chrome does its own DNS
 	// resolution. If the IP changed between check and dial (DNS rebind), the
 	// response's remoteIPAddress will differ from what we checked.
 	// We can't prevent the connection (it's already made), but we detect and
 	// alert on the rebind, and track the domain for future Request-stage checks.
+	//
+	// #58: CloakBrowser (Chrome 146) does not support Network.enable — the
+	// call fails with -32601 and we fall back to Page.frameNavigated-based
+	// detection. This fallback can't check the remote IP, but it CAN detect
+	// when Chrome navigated to a URL that resolves to a blocked IP by
+	// re-resolving the hostname from Go and comparing against the blocklist.
+	networkEnabled := true
 	if err := (proto.NetworkEnable{}).Call(b); err != nil {
-		slog.Warn("egress guard: failed to enable Network domain for DNS-rebind detection — residual risk", "err", err)
+		slog.Warn("egress guard: Network.enable not supported — using Page.frameNavigated fallback for DNS-rebind detection", "err", err)
+		networkEnabled = false
 	}
 
 	g := &egressGuard{}
 
-	wait := b.EachEvent(
+	events := []any{
 		func(ev *proto.FetchRequestPaused) {
 			go g.respondPaused(b, ev)
 		},
 		func(ev *proto.FetchAuthRequired) {
 			go g.respondAuth(b, ev)
 		},
-		func(ev *proto.NetworkResponseReceived) {
+	}
+	if networkEnabled {
+		events = append(events, func(ev *proto.NetworkResponseReceived) {
 			g.checkResponseIP(b, ev)
-		},
-	)
+		})
+	} else {
+		// #58: Fallback — use Page.frameNavigated to detect post-navigation
+		// URL changes. We re-resolve the hostname from Go and check against
+		// the blocklist. This catches DNS-rebind where Chrome navigated to
+		// a URL that now resolves to a blocked IP.
+		events = append(events, func(ev *proto.PageFrameNavigated) {
+			g.checkFrameNavigated(b, ev)
+		})
+	}
+
+	wait := b.EachEvent(events...)
 	go wait()
 
 	return g, nil
@@ -383,6 +403,44 @@ func (g *egressGuard) isRebindDomain(host string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.rebindDomains[host]
+}
+
+// checkFrameNavigated is the #58 fallback for CloakBrowser which doesn't
+// support Network.enable. After each navigation, it re-resolves the
+// hostname from Go and checks if it now resolves to a blocked IP.
+// This catches DNS-rebind where the URL passed the Request-stage check
+// (resolved to a public IP) but Chrome connected to a private IP.
+//
+// Limitation vs Network.responseReceived: we can't see Chrome's actual
+// remoteIPAddress — we only see the URL Chrome navigated to. If Chrome
+// followed a redirect to a different hostname, we check the final hostname.
+func (g *egressGuard) checkFrameNavigated(_ *rod.Browser, ev *proto.PageFrameNavigated) {
+	if ev.Frame == nil {
+		return
+	}
+	u, err := url.Parse(ev.Frame.URL)
+	if err != nil || u.Hostname() == "" {
+		return
+	}
+	host := u.Hostname()
+	// Skip non-http(s) schemes (about:blank, data:, chrome:, etc.)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if isLocalhostURL(ctx, u) {
+		slog.Error("egress guard: DNS-rebind detected via frameNavigated — hostname now resolves to blocked IP",
+			"host", host,
+			"url", ev.Frame.URL,
+		)
+		g.mu.Lock()
+		if g.rebindDomains == nil {
+			g.rebindDomains = make(map[string]bool)
+		}
+		g.rebindDomains[host] = true
+		g.mu.Unlock()
+	}
 }
 
 // respondAuth answers an upstream-proxy authentication challenge using the

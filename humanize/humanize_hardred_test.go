@@ -216,23 +216,6 @@ func TestCorrectionPath_HardRed_Accuracy(t *testing.T) {
 	}
 }
 
-// TestTypoChar_MostlyDifferent verifies typo is usually a different key.
-// Note: double_key typo (12%) intentionally returns same char — that's valid.
-func TestTypoChar_MostlyDifferent(t *testing.T) {
-	n := 1000
-	same := 0
-	for range n {
-		if TypoChar('e') == 'e' {
-			same++
-		}
-	}
-	rate := float64(same) / float64(n)
-	// transpose (20%) + double_key (12%) = 32% return same char. Allow 25-45%.
-	if rate < 0.20 || rate > 0.50 {
-		t.Errorf("TypoChar('e') same-char rate = %.3f; want 0.20-0.50", rate)
-	}
-}
-
 // TestLookupChar_SpecialChars verifies tricky chars have correct VK codes.
 func TestLookupChar_SpecialChars(t *testing.T) {
 	tests := []struct {

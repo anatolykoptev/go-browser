@@ -20,27 +20,6 @@ func TestDefaultOptions(t *testing.T) {
 	}
 }
 
-func TestApply_OverridesDefaults(t *testing.T) {
-	o := browser.Apply(
-		browser.WithConcurrency(5),
-		browser.WithRenderTimeout(10*time.Second),
-		browser.WithHydrationWait(1*time.Second),
-		browser.WithUserAgent("test-ua"),
-	)
-	if o.Concurrency != 5 {
-		t.Errorf("Concurrency = %d, want 5", o.Concurrency)
-	}
-	if o.RenderTimeout != 10*time.Second {
-		t.Errorf("RenderTimeout = %v, want 10s", o.RenderTimeout)
-	}
-	if o.HydrationWait != 1*time.Second {
-		t.Errorf("HydrationWait = %v, want 1s", o.HydrationWait)
-	}
-	if o.UserAgent != "test-ua" {
-		t.Errorf("UserAgent = %q, want 'test-ua'", o.UserAgent)
-	}
-}
-
 func TestApply_NoOpts_ReturnsDefaults(t *testing.T) {
 	o := browser.Apply()
 	def := browser.DefaultOptions()

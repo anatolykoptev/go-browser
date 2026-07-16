@@ -420,12 +420,21 @@ func (p *ContextPool) Reap() {
 	}
 	var victims []victim
 
+	curGen := p.generation.Load()
 	p.contextsMu.RLock()
 	for key, mc := range p.contexts {
 		mc.Mu.Lock()
 		for name, mp := range mc.Pages {
 			// Skip detached sessions - they are human-controlled, don't evict
 			if !mp.DetachedAt.IsZero() {
+				continue
+			}
+			// #60/#23: Reap stale pages after reconnect — generation mismatch
+			// means the page's rod.Page points to a dead CDP connection.
+			// Even detached pages are reaped if stale (their browser is gone).
+			if mp.generation != curGen && mp.Page != nil {
+				victims = append(victims, victim{page: mp.Page, key: key, name: name})
+				delete(mc.Pages, name)
 				continue
 			}
 			if mp.TTL > 0 && time.Since(mp.LastUsed) > mp.TTL && mp.Page != nil {
