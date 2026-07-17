@@ -1,5 +1,8 @@
 .PHONY: lint test test-integration preflight server run gostall
 
+GOSTALL_VERSION := v1.0.0
+GOSTALL := $(shell command -v gostall 2>/dev/null || echo $$(go env GOPATH)/bin/gostall)
+
 lint:
 	golangci-lint run ./...
 
@@ -16,9 +19,9 @@ test-integration:
 # excluded (intra-procedural false positives on defer wg.Done() in goroutines,
 # signal.Notify channels, and test spin loops).
 gostall:
-	@command -v gostall >/dev/null 2>&1 || { echo "gostall not installed: go install github.com/erfanmomeniii/gostall/cmd/gostall@latest"; exit 1; }
+	@[ -x "$(GOSTALL)" ] || { echo "gostall not installed: go install github.com/erfanmomeniii/gostall/cmd/gostall@$(GOSTALL_VERSION)"; exit 1; }
 	@echo "==> gostall"
-	GOWORK=off gostall -lockorder -missingunlock -starvation ./...
+	GOWORK=off "$(GOSTALL)" -lockorder -missingunlock -starvation ./...
 
 # preflight = the CI gate: gofmt + vet + build + short tests with race detector.
 # Integration tests (requiring a live Chrome) are skipped under -short.
