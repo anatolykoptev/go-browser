@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.5](https://github.com/anatolykoptev/go-browser/compare/v0.20.4...v0.20.5) (2026-07-18)
+
+
+### Dependencies
+
+* bump go-stealth to v1.19.1 ([#71](https://github.com/anatolykoptev/go-browser/issues/71)) ([6662760](https://github.com/anatolykoptev/go-browser/commit/66627600fb3d125ac8645f71a70692835bba112b))
+
 ## [0.20.4](https://github.com/anatolykoptev/go-browser/compare/v0.20.3...v0.20.4) (2026-07-16)
 
 
