@@ -98,7 +98,7 @@
 
 **Гипотеза 1: IP reputation** (datacenter IP 203.0.113.10).
 - Тест через Webshare residential proxy → 399.
-- Тест через SSH tunnel с ноутбука (residential IP 216.77.50.8) → 399.
+- Тест через SSH tunnel с ноутбука (residential IP 203.0.113.20) → 399.
 - **Вывод**: НЕ IP.
 
 **Гипотеза 2: Castle token от botwitter.com несовместим**.
@@ -209,7 +209,7 @@
 | hullyday | datacenter | нет | 399 |
 | EvalikFulvik | datacenter | нет | 399 |
 
-**Ручной логин** с Mac (216.77.50.8) в реальном Chrome → **работает**.
+**Ручной логин** с Mac (203.0.113.20) в реальном Chrome → **работает**.
 
 ---
 
