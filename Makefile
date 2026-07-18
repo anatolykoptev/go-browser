@@ -1,4 +1,4 @@
-.PHONY: lint test test-integration preflight server run gostall
+.PHONY: lint test test-integration preflight server run gostall stealth-check
 
 GOSTALL_VERSION := v1.0.0
 GOSTALL := $(shell command -v gostall 2>/dev/null || echo $$(go env GOPATH)/bin/gostall)
@@ -23,10 +23,21 @@ gostall:
 	@echo "==> gostall"
 	GOWORK=off "$(GOSTALL)" -lockorder -missingunlock -starvation ./...
 
+# stealth-check: verify stealth_complement.js is fresh (matches build.sh output).
+# stealth_complement.js is a GENERATED artifact — stealth/*.js are the sources,
+# stealth/build.sh is the generator. This guard prevents hand-editing the generated
+# file without updating sources (the root cause of past divergence).
+stealth-check:
+	@echo "==> stealth freshness"
+	@tmp=$$(mktemp); bash stealth/build.sh "$$tmp" >/dev/null 2>&1 || { rm -f $$tmp; echo "stealth-check: build.sh failed" && exit 1; }; \
+	diff -w stealth_complement.js "$$tmp" >/dev/null 2>&1 || { rm -f "$$tmp"; \
+		echo "stealth_complement.js is stale — run 'bash stealth/build.sh' to regenerate from stealth/*.js sources" && exit 1; }; \
+	rm -f "$$tmp"
+
 # preflight = the CI gate: gofmt + vet + build + short tests with race detector.
 # Integration tests (requiring a live Chrome) are skipped under -short.
 # #53: Race detector + gostall enabled in CI — catches concurrency bugs that vet misses.
-preflight: lint gostall
+preflight: stealth-check lint gostall
 	@echo "==> gofmt"
 	@gofmt -l . | tee /dev/stderr | grep -q . && (echo "gofmt issues found" && exit 1) || true
 	@echo "==> go vet"

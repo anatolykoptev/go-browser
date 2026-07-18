@@ -4,7 +4,7 @@
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-OUT="$DIR/../stealth_complement.js"
+OUT="${1:-$DIR/../stealth_complement.js}"
 
 echo "(() => {" > "$OUT"
 for f in "$DIR"/[0-9]*.js; do
