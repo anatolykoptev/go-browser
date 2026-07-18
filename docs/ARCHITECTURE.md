@@ -178,7 +178,7 @@ Tested 2026-03-28:
 
 ## Deployment
 
-Both services in `~/deploy/krolik-server/compose/search.yml`:
+Both services in `~/deploy/server-config/compose/search.yml`:
 
 ```bash
 # ox-browser (Rust HTTP)

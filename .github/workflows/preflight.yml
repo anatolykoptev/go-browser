@@ -2,7 +2,7 @@ name: preflight
 
 # Pre-merge build/test gate. Runs on GitHub-hosted `ubuntu-24.04-arm` —
 # free unlimited minutes for public repos, and arm64 matches the ARM prod
-# boxes this code deploys to (krolik Oracle Cloud ARM).
+# boxes this code deploys to (host-a Oracle Cloud ARM).
 #
 # go-browser's integration tests require a live Chrome (CloakBrowser or a
 # local Chromium). They self-skip when no browser is found (see
