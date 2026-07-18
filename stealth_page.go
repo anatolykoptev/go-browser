@@ -15,7 +15,7 @@ import (
 var complementJS string
 
 // NewStealthPage creates a page with stealth evasions applied.
-// stealth_complement.js (684 LOC) is the sole stealth layer — go-rod/stealth
+// stealth_complement.js is the sole stealth layer — go-rod/stealth
 // was removed because its Proxy on Function.prototype.toString triggered
 // CreepJS hasToStringProxy detection.
 //
