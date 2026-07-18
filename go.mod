@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/anatolykoptev/go-kit v0.95.0
-	github.com/anatolykoptev/go-stealth v1.12.0
+	github.com/anatolykoptev/go-stealth v1.19.1
 	github.com/chromedp/chromedp v0.15.1
 	github.com/go-rod/rod v0.116.2
 	github.com/ysmood/gson v0.7.3
