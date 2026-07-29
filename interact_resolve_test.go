@@ -13,6 +13,8 @@ func TestResolveSessionParams_EmptySessionRespectsMode(t *testing.T) {
 		{"empty session + mode=private", InteractRequest{Mode: "private"}, "private", true},
 		{"empty session + mode=proxy", InteractRequest{Mode: "proxy", Proxy: strPtr("http://p:80")}, "proxy", true},
 		{"explicit session + mode=default", InteractRequest{Session: "foo", Mode: "default"}, "default", false},
+		{"named session + empty mode defaults to default (#74)", InteractRequest{Session: "foo"}, "default", false},
+		{"named session + empty mode + proxy defaults to proxy (#74)", InteractRequest{Session: "foo", Proxy: strPtr("http://p:80")}, "proxy", false},
 		{"no session no mode", InteractRequest{}, "private", false}, // backward compat
 	}
 	for _, tc := range cases {

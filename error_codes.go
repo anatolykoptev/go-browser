@@ -40,6 +40,7 @@ var sentinelTable = []struct {
 	{ErrNetworkError, ErrCodeNetworkError},
 	{ErrCdpError, ErrCodeCdpError},
 	{ErrJsException, ErrCodeJsException},
+	{ErrInvalidMode, ErrCodeInvalidInput},
 }
 
 // ErrorCode is a stable machine-readable classification for action failures.

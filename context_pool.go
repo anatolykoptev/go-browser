@@ -107,6 +107,7 @@ type ManagedContext struct {
 type ManagedPage struct {
 	mu           sync.Mutex
 	Session      string
+	Mode         string // resolved context mode: "default", "private", or "proxy"
 	Page         *rod.Page
 	ready        chan struct{} // closed when Page != nil (or creation failed)
 	readyOnce    sync.Once     // ensures ready is closed exactly once
@@ -163,9 +164,43 @@ func NewContextPool(browser *rod.Browser) *ContextPool {
 // GetOrCreatePage returns the existing page for session, or creates a new tab in the
 // appropriate context. If session is empty an ephemeral name is generated.
 //
+// Rule 1 (#74): a named session (session != "") with an empty mode defaults to
+// the persistent context ("default"). A named session is a request for
+// continuity; giving it an ephemeral jar contradicts its own purpose. An
+// anonymous call (empty session) must opt into ephemeral explicitly.
+//
+// Rule 2 (#74): an unrecognised mode (e.g. "defualt") is a typed error
+// (ErrInvalidMode) — the old contextKey default-arm silently absorbed typos
+// into an incognito context, making an authenticated session indistinguishable
+// from an expired one.
+//
+// Rule 3 (#74): the resolved mode is stored on the returned ManagedPage.Mode
+// so a consumer can assert which context was actually used. ManagedPage.Mode is
+// an opt-in observability field — it is written on every page-returning path but
+// is NOT read by any internal code in this package; it exists for external
+// consumers (go-wowa, callers of GetOrCreatePage). The resolved mode is also
+// logged at context creation (getOrCreateContextSafe) so the resolved context is
+// surfaced in logs without a reader of this field.
+//
 // CDP calls run OUTSIDE any lock to avoid blocking List/SessionCount callers.
 func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*ManagedPage, error) {
-	key := contextKey(mode, proxy)
+	// Rule 1: named session + empty mode → persistent context. With a proxy
+	// the persistent context is the proxy context (egress through that proxy),
+	// matching resolveSessionParams in interact.go. Hardcoding "default" here
+	// would drop the proxy: contextKey("default", proxy) yields "default", and
+	// getOrCreateContextSafe's default branch never sets proxyServer — the
+	// caller would get an unproxied context (proxy bypass / datacenter-IP leak).
+	if session != "" && mode == "" {
+		if proxy != "" {
+			mode = modeProxy
+		} else {
+			mode = modeDefault
+		}
+	}
+	key, err := contextKey(mode, proxy)
+	if err != nil {
+		return nil, err
+	}
 
 	// Phase 1: get or create context (CDP BrowserContext creation runs unlocked).
 	mc, err := p.getOrCreateContextSafe(key, mode, proxy)
@@ -201,7 +236,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 			if p.getStealthProfile() != nil {
 				lc = NewStealthLogCollector()
 			}
-			mp := &ManagedPage{Session: session, Page: adopted, ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: lc, generation: curGen}
+			mp := &ManagedPage{Session: session, Mode: mode, Page: adopted, ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: lc, generation: curGen}
 			mp.signalReady() // close ready immediately — adopted page is already live
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
@@ -236,6 +271,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	}
 	placeholder := &ManagedPage{
 		Session:      session,
+		Mode:         mode,
 		ready:        make(chan struct{}),
 		LastUsed:     time.Now(),
 		TTL:          contextPoolDefaultTTL,

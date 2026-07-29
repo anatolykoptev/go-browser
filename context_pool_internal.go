@@ -33,15 +33,31 @@ func closePageWithTimeout(page *rod.Page) {
 	}
 }
 
-// contextKey returns the map key for the given mode/proxy combination.
-func contextKey(mode, proxy string) string {
+// ErrInvalidMode is returned when a context mode is not one of the accepted
+// values. It is a typed error so callers can distinguish a bad mode from a
+// CDP/transport failure.
+var ErrInvalidMode = errors.New("browser: invalid context mode")
+
+// contextKey returns the map key for the given mode/proxy combination and
+// validates mode against the known set. An empty mode maps to "private"
+// (the ephemeral default for anonymous calls); every other unrecognised
+// value is an error — the old default-arm silently absorbed typos like
+// "defualt" into an incognito context, making an authenticated session
+// indistinguishable from an expired one (issue #74).
+//
+// Rule 1 (named session defaults to persistent) is applied by the caller
+// (GetOrCreatePage) BEFORE contextKey is invoked, so an empty mode reaching
+// contextKey means the session is anonymous — leave it ephemeral.
+func contextKey(mode, proxy string) (string, error) {
 	switch mode {
 	case "default":
-		return "default"
+		return "default", nil
+	case "private", "":
+		return "private", nil
 	case "proxy":
-		return "proxy:" + proxy
+		return "proxy:" + proxy, nil
 	default:
-		return "private"
+		return "", fmt.Errorf("%w: %q (accepted: default, private, proxy)", ErrInvalidMode, mode)
 	}
 }
 
@@ -159,8 +175,11 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 		mc.ID = p.discoverPersistentDefaultCtxID()
 	}
 
+	// proxyServer is the credential-stripped proxy URL (for Chrome's
+	// ProxyServer field and for logging). Hoisted out of the mode != "default"
+	// branch so the creation log below never emits credentials.
+	proxyServer, _, _ := parseProxy(proxy)
 	if mode != "default" {
-		proxyServer, _, _ := parseProxy(proxy)
 		b := p.getBrowser()
 		if b == nil {
 			return nil, ErrUnavailable
@@ -187,6 +206,16 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 		return existing, nil
 	}
 	p.contexts[key] = mc
+	// Surface the resolved context mode at creation so the actually-used
+	// context is observable in logs (ManagedPage.Mode is not read internally).
+	// proxyServer is credential-stripped; the proxy context key embeds the raw
+	// proxy (which may carry creds), so for proxy mode we log the sanitized
+	// proxyServer as the identity and omit the key.
+	if mode == modeProxy {
+		slog.Info("context_pool: created context", "mode", mode, "proxy", proxyServer)
+	} else {
+		slog.Info("context_pool: created context", "mode", mode, "key", key)
+	}
 	return mc, nil
 }
 
