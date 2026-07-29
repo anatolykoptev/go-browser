@@ -44,6 +44,7 @@ func TestSentinel_AllSentinelsClassifyCorrectly(t *testing.T) {
 		{ErrCaptchaDetected, ErrCodeCaptchaDetected},
 		{ErrNetworkError, ErrCodeNetworkError},
 		{ErrCdpError, ErrCodeCdpError},
+		{ErrInvalidMode, ErrCodeInvalidInput},
 	}
 
 	for _, tt := range tests {
