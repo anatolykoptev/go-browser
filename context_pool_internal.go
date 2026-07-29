@@ -175,8 +175,11 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 		mc.ID = p.discoverPersistentDefaultCtxID()
 	}
 
+	// proxyServer is the credential-stripped proxy URL (for Chrome's
+	// ProxyServer field and for logging). Hoisted out of the mode != "default"
+	// branch so the creation log below never emits credentials.
+	proxyServer, _, _ := parseProxy(proxy)
 	if mode != "default" {
-		proxyServer, _, _ := parseProxy(proxy)
 		b := p.getBrowser()
 		if b == nil {
 			return nil, ErrUnavailable
@@ -203,6 +206,16 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 		return existing, nil
 	}
 	p.contexts[key] = mc
+	// Surface the resolved context mode at creation so the actually-used
+	// context is observable in logs (ManagedPage.Mode is not read internally).
+	// proxyServer is credential-stripped; the proxy context key embeds the raw
+	// proxy (which may carry creds), so for proxy mode we log the sanitized
+	// proxyServer as the identity and omit the key.
+	if mode == modeProxy {
+		slog.Info("context_pool: created context", "mode", mode, "proxy", proxyServer)
+	} else {
+		slog.Info("context_pool: created context", "mode", mode, "key", key)
+	}
 	return mc, nil
 }
 

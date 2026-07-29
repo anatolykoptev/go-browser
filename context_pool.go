@@ -175,7 +175,12 @@ func NewContextPool(browser *rod.Browser) *ContextPool {
 // from an expired one.
 //
 // Rule 3 (#74): the resolved mode is stored on the returned ManagedPage.Mode
-// so a consumer can assert which context was actually used.
+// so a consumer can assert which context was actually used. ManagedPage.Mode is
+// an opt-in observability field — it is written on every page-returning path but
+// is NOT read by any internal code in this package; it exists for external
+// consumers (go-wowa, callers of GetOrCreatePage). The resolved mode is also
+// logged at context creation (getOrCreateContextSafe) so the resolved context is
+// surfaced in logs without a reader of this field.
 //
 // CDP calls run OUTSIDE any lock to avoid blocking List/SessionCount callers.
 func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*ManagedPage, error) {
