@@ -179,9 +179,18 @@ func NewContextPool(browser *rod.Browser) *ContextPool {
 //
 // CDP calls run OUTSIDE any lock to avoid blocking List/SessionCount callers.
 func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*ManagedPage, error) {
-	// Rule 1: named session + empty mode → persistent default context.
+	// Rule 1: named session + empty mode → persistent context. With a proxy
+	// the persistent context is the proxy context (egress through that proxy),
+	// matching resolveSessionParams in interact.go. Hardcoding "default" here
+	// would drop the proxy: contextKey("default", proxy) yields "default", and
+	// getOrCreateContextSafe's default branch never sets proxyServer — the
+	// caller would get an unproxied context (proxy bypass / datacenter-IP leak).
 	if session != "" && mode == "" {
-		mode = "default"
+		if proxy != "" {
+			mode = modeProxy
+		} else {
+			mode = modeDefault
+		}
 	}
 	key, err := contextKey(mode, proxy)
 	if err != nil {

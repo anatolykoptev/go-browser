@@ -237,6 +237,69 @@ func TestContextKey_RejectsTypos(t *testing.T) {
 	}
 }
 
+// TestContextPool_NamedSession_EmptyMode_WithProxy_LandsInProxyContext
+// verifies F3: GetOrCreatePage with a named session, empty mode AND a proxy
+// must resolve to a PROXY context with proxyServer set — NOT drop the proxy
+// and fall back to the unproxied default context (proxy bypass / datacenter-IP
+// leak). resolveSessionParams already gets this right; GetOrCreatePage must
+// agree.
+//
+// This test calls GetOrCreatePage directly (not resolveSessionParams) because
+// the existing proxy test only exercises resolveSessionParams and does not
+// cover the pool's rule-1 path.
+//
+// Mutation probe: restore the unconditional `mode = "default"` in
+// GetOrCreatePage's rule 1 → contextKey("default", proxy) yields "default" →
+// getOrCreateContextSafe's default branch never sets proxyServer → the session
+// lands in an unproxied default context → mc.Mode != "proxy" → RED.
+func TestContextPool_NamedSession_EmptyMode_WithProxy_LandsInProxyContext(t *testing.T) {
+	br := acquireSharedBrowser(t)
+	p := NewContextPool(br)
+	defer p.Close()
+
+	// Use a non-routable proxy address with credentials so parseProxy returns a
+	// sanitized server. about:blank navigation never touches the proxy, so
+	// TargetCreateBrowserContext succeeds without a live proxy.
+	proxyRaw := "http://user:pass@127.0.0.1:9"
+	mp, err := p.GetOrCreatePage("named-proxy-sess", "", proxyRaw, "about:blank")
+	if err != nil {
+		t.Fatalf("GetOrCreatePage(named, empty mode, proxy): %v", err)
+	}
+	defer func() { _ = p.ClosePage("named-proxy-sess") }()
+
+	// 1. Resolved mode on the page must be "proxy" (rule 3).
+	if mp.Mode != "proxy" {
+		t.Fatalf("ManagedPage.Mode = %q, want %q (rule 1 with proxy must "+
+			"resolve to proxy, not default — proxy bypass)", mp.Mode, "proxy")
+	}
+
+	// 2. The context that owns this session must be a proxy context with the
+	// proxy recorded. If rule 1 dropped the proxy, the session would land in
+	// the default context (Mode="default", Proxy="") and egress from the
+	// datacenter IP.
+	var owner *ManagedContext
+	p.contextsMu.RLock()
+	for _, mc := range p.contexts {
+		mc.Mu.Lock()
+		_, ok := mc.Pages["named-proxy-sess"]
+		mc.Mu.Unlock()
+		if ok {
+			owner = mc
+			break
+		}
+	}
+	p.contextsMu.RUnlock()
+	if owner == nil {
+		t.Fatal("no context owns the named-proxy-sess session")
+	}
+	if owner.Mode != "proxy" {
+		t.Errorf("owning context Mode = %q, want %q", owner.Mode, "proxy")
+	}
+	if owner.Proxy == "" {
+		t.Errorf("owning context Proxy is empty — proxy was dropped (proxy bypass)")
+	}
+}
+
 // TestContextKey_AcceptedModes is a pure unit test verifying the accepted mode
 // set maps correctly. No browser needed.
 func TestContextKey_AcceptedModes(t *testing.T) {
