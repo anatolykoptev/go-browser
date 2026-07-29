@@ -33,15 +33,31 @@ func closePageWithTimeout(page *rod.Page) {
 	}
 }
 
-// contextKey returns the map key for the given mode/proxy combination.
-func contextKey(mode, proxy string) string {
+// ErrInvalidMode is returned when a context mode is not one of the accepted
+// values. It is a typed error so callers can distinguish a bad mode from a
+// CDP/transport failure.
+var ErrInvalidMode = errors.New("browser: invalid context mode")
+
+// contextKey returns the map key for the given mode/proxy combination and
+// validates mode against the known set. An empty mode maps to "private"
+// (the ephemeral default for anonymous calls); every other unrecognised
+// value is an error — the old default-arm silently absorbed typos like
+// "defualt" into an incognito context, making an authenticated session
+// indistinguishable from an expired one (issue #74).
+//
+// Rule 1 (named session defaults to persistent) is applied by the caller
+// (GetOrCreatePage) BEFORE contextKey is invoked, so an empty mode reaching
+// contextKey means the session is anonymous — leave it ephemeral.
+func contextKey(mode, proxy string) (string, error) {
 	switch mode {
 	case "default":
-		return "default"
+		return "default", nil
+	case "private", "":
+		return "private", nil
 	case "proxy":
-		return "proxy:" + proxy
+		return "proxy:" + proxy, nil
 	default:
-		return "private"
+		return "", fmt.Errorf("%w: %q (accepted: default, private, proxy)", ErrInvalidMode, mode)
 	}
 }
 

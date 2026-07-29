@@ -32,7 +32,7 @@ type InteractRequest struct {
 	Proxy       *string  `json:"proxy,omitempty"`
 	// New session/mode params.
 	Session string `json:"session,omitempty"` // named session; empty = ephemeral
-	Mode    string `json:"mode,omitempty"`    // "default", "private" (default), "proxy"
+	Mode    string `json:"mode,omitempty"`    // "default", "private", "proxy"; empty + named session → "default" (#74)
 	// Backward-compat params (still accepted, mapped to Session/Mode internally).
 	SessionID   *string `json:"session_id,omitempty"`
 	Profile     string  `json:"profile,omitempty"`
@@ -282,7 +282,8 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 //   - session_id="new"           → mode="private", ephemeral=false (session auto-named)
 //   - session_id=<id>            → mode="private", session=<id>, persistent
 //   - reuse_page=true            → mode="default", session="__reuse__", persistent
-//   - session=<name> (new param) → mode from Mode field, persistent
+//   - session=<name> + mode set  → that mode, persistent
+//   - session=<name> + no mode   → mode="default" (persistent, #74 rule 1)
 //   - nothing                    → mode="private", ephemeral
 func resolveSessionParams(req InteractRequest) (session, mode, proxy string, ephemeral bool) {
 	proxy = ""
@@ -295,10 +296,13 @@ func resolveSessionParams(req InteractRequest) (session, mode, proxy string, eph
 		session = req.Session
 		mode = req.Mode
 		if mode == "" {
+			// Rule 1 (#74): a named session is a request for continuity —
+			// default to the persistent context, not an ephemeral incognito
+			// jar. With a proxy, the persistent context is the proxy context.
 			if proxy != "" {
 				mode = modeProxy
 			} else {
-				mode = modePrivate
+				mode = modeDefault
 			}
 		}
 		return session, mode, proxy, false
