@@ -3,7 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/anatolykoptev/go-browser.svg)](https://pkg.go.dev/github.com/anatolykoptev/go-browser)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Headless browser library for Go with pluggable backends, crash recovery, proxy rotation, and resource blocking.
+Headless browser library and HTTP server for Go. One `Browser` interface over Rod (in-process Chromium) and any remote CDP endpoint, plus a 27-action automation API, fingerprint leak patches, humanized input, and a self-test harness that measures what your browser actually leaks to public detectors.
 
 ## Why
 
@@ -17,7 +17,7 @@ go-browser wraps both behind a single `Browser` interface, adds production featu
 ## Install
 
 ```
-go get github.com/anatolykoptev/go-browser@v0.3.1
+go get github.com/anatolykoptev/go-browser@v0.20.5
 ```
 
 Requires Go 1.26+.
@@ -88,6 +88,58 @@ type Page struct {
     Status int    // HTTP status (0 if unknown)
 }
 ```
+
+## Actions
+
+Beyond `Render`, the package dispatches 27 named actions against a live page. Each carries
+jsonschema tags, so the `Action` struct doubles as a tool schema for an LLM agent.
+
+```go
+res := browser.ExecuteAction(ctx, page, browser.Action{
+    Type:     "click",
+    Selector: "button.submit",
+    Humanize: true,
+}, cursor, logs, stealthMode, refMap)
+```
+
+| Group | Actions |
+|-------|---------|
+| Pointer | `click`, `hover`, `go_back` |
+| Keyboard | `type_text`, `press`, `fill_form`, `select_option`, `select_all`, `insert_text_input_event` |
+| Navigation | `navigate`, `scroll`, `wait_for`, `wait_for_navigation`, `sleep` |
+| Page | `evaluate`, `eval_on_new_document`, `screenshot`, `snapshot`, `element_inspect` |
+| Frames | `type_into_frame` — targets out-of-process cross-origin iframes, which the ordinary selector path cannot reach |
+| Session | `set_cookies`, `get_cookies`, `handle_dialog`, `get_logs`, `warmup`, `destroy_session` |
+
+`snapshot` returns a token-lean accessibility tree rather than raw DOM, with depth limiting,
+an `interactive` filter that keeps only actionable nodes, and URL substring filtering. It is
+built to be read by a model without spending the context on markup.
+
+## Stealth
+
+`stealth/` holds 14 numbered JS patches, each closing one specific detection leak, applied
+before page scripts run:
+
+| | | |
+|---|---|---|
+| `01_cdp_markers` | `02_navigator` | `03_chrome_object` |
+| `04_media_permissions` | `05_worker_injection` | `06_webrtc_leak` |
+| `07_navigator_plugins` | `08_speech_voices` | `09_fonts_shim` |
+| `10_storage` | `11_navigator_polyfills` | `12_iframe_proxy` |
+| `13_screen_override` | `00_profile` | |
+
+Profiles under `stealth/profiles/` pin a coherent identity across all of them:
+`mac_chrome145`, `win_chrome145`, `linux_chrome145`.
+
+With `stealthMode` enabled, actions that would otherwise call `Runtime.callFunctionOn` are
+routed through `cdputil` using plain CDP DOM and Input methods instead, because the former
+is itself observable from the page.
+
+## Humanize
+
+`humanize/` synthesises input a real person would produce: Bézier cursor paths with
+overshoot and correction, viewport-aware scrolling, idle pauses, and per-character keyboard
+cadence. Pass `Humanize: true` on `click`, `type_text` or `hover` to route through it.
 
 ## Proxy
 
@@ -177,6 +229,8 @@ github.com/anatolykoptev/go-browser
 ├── options.go       Common options (Concurrency, RenderTimeout, HydrationWait)
 ├── errors.go        Sentinel errors
 ├── pool.go          Channel-based semaphore with context cancellation
+├── actions*.go      27-action registry and executors (click, type, nav, eval, session)
+├── serve.go         HTTP server (ServerConfigFromEnv, NewServer)
 │
 ├── rod/             In-process Chromium backend
 │   ├── rod.go       New, Render (with retry wrapper), Close
@@ -184,15 +238,24 @@ github.com/anatolykoptev/go-browser
 │   ├── restart.go   isConnectionError detection + browser restart
 │   └── hijack.go    Request interception for resource blocking
 │
-└── remote/          External CDP endpoint backend
-    ├── remote.go    New, Render, Close (via chromedp)
-    └── options.go   Remote-specific options (Endpoint)
+├── remote/          External CDP endpoint backend
+│   ├── remote.go    New, Render, Close (via chromedp)
+│   └── options.go   Remote-specific options (Endpoint)
+│
+├── stealth/         14 numbered JS leak patches + identity profiles
+├── humanize/        Bézier cursor, overshoot, scroll, idle, keyboard cadence
+├── selftest/        Detector harnesses (CreepJS, BotD, sannysoft, rebrowser, canvas, WebRTC)
+├── cdputil/         Plain-CDP click and query, used when stealthMode is on
+├── cdpmock/         CDP fake, so the action tests need no browser
+└── webvitals/       Core Web Vitals capture during render
 ```
 
 ## Stealth Self-Test (`/selftest`)
 
-The HTTP server exposes a `/selftest` endpoint that runs the live CloakBrowser instance
-against public antibot probe pages and returns a structured JSON trust report.
+`cmd/server` runs the HTTP API. `PORT` defaults to **8906** and `CLOAKBROWSER_WS_URL` to
+`ws://127.0.0.1:9222`. Its `/selftest` endpoint drives the attached browser against public
+antibot probe pages and returns a structured JSON trust report, so a fingerprint claim is
+measured rather than asserted.
 
 ### Endpoint
 
@@ -256,13 +319,13 @@ Multiple targets: `?target=creepjs,sannysoft`
 
 ```bash
 # Single target
-curl "http://localhost:8901/selftest?target=sannysoft" | jq .
+curl "http://localhost:8906/selftest?target=sannysoft" | jq .
 
 # All targets + screenshots
-curl "http://localhost:8901/selftest?target=all&screenshot=1" | jq '.summary'
+curl "http://localhost:8906/selftest?target=all&screenshot=1" | jq '.summary'
 
 # Specific profile
-curl "http://localhost:8901/selftest?target=creepjs&profile=win_chrome145" | jq '.results[0].trust_score'
+curl "http://localhost:8906/selftest?target=creepjs&profile=win_chrome145" | jq '.results[0].trust_score'
 ```
 
 Per-target errors are embedded in `results[i].ok=false, error:"..."` — the endpoint
