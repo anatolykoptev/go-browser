@@ -116,8 +116,24 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		}
 	}
 
-	page := mp.Page
-	isNewPage := page.MustInfo().URL == "about:blank" || page.MustInfo().URL == ""
+	// #79: merge the request ctx with the page's lifecycle ctx — the result
+	// dies when the request ends OR when the tab dies (targetDestroyed, reap,
+	// reconnect). Every downstream rod call on the bound clone fails fast
+	// instead of hanging on a dead target; the pooled mp.Page is untouched.
+	lifeCtx := mp.lifeCtx
+	if lifeCtx == nil {
+		lifeCtx = ctx
+	}
+	ctx, workCancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(lifeCtx, workCancel)
+	defer func() { stop(); workCancel() }()
+	page := mp.Page.Context(ctx)
+
+	info, err := page.Info()
+	if err != nil {
+		return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("page info: %s", err), ErrorCode: ClassifyError(err), SessionID: session}
+	}
+	isNewPage := info.URL == "about:blank" || info.URL == ""
 
 	// Set up stealth / proxy auth on freshly created pages only.
 	if isNewPage {
@@ -152,7 +168,11 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 
 	// Navigate: skip if URL already matches or ReusePage is set.
 	if req.URL != "" && req.URL != "about:blank" {
-		if isNewPage || (!req.ReusePage && !strings.HasPrefix(page.MustInfo().URL, req.URL)) {
+		curURL := ""
+		if cur, ierr := page.Info(); ierr == nil && cur != nil {
+			curURL = cur.URL
+		}
+		if isNewPage || (!req.ReusePage && !strings.HasPrefix(curURL, req.URL)) {
 			if err := doNavigate(ctx, page, req.URL); err != nil {
 				return InteractResponse{URL: req.URL, Status: "error", Error: err.Error(), ErrorCode: ClassifyError(err)}
 			}

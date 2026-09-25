@@ -338,6 +338,7 @@ func (p *ContextPool) watchTargetDestroyed() {
 			mc.Mu.Lock()
 			for name, mp := range mc.Pages {
 				if mp.Page != nil && mp.Page.TargetID == e.TargetID {
+					cancelPageLife(mp)
 					delete(mc.Pages, name)
 					mc.Mu.Unlock()
 					return false

@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -28,6 +29,7 @@ const (
 	contextPoolReaperInterval = 30 * time.Second
 	contextPoolDefaultTTL     = 30 * time.Minute
 	pageCreationTimeout       = 30 * time.Second // #41: max time to create a page via CDP
+	pageLivenessTimeout       = 2 * time.Second  // #79: bounded Info() probe on pooled-page checkout
 )
 
 // ContextPool manages named browser sessions grouped by context (default/private/proxy).
@@ -57,6 +59,14 @@ type ContextPool struct {
 	// This detects stale page references after reconnect (Playwright _browserClosed
 	// pattern + Vercel agent-browser generation counter).
 	generation atomic.Uint64
+
+	// genCtx is the per-generation context: cancelled once by UpdateBrowser,
+	// which fails every in-flight CDP call on pages of the previous generation
+	// at once (Playwright fail-all-pending-callbacks-on-disconnect). Each
+	// ManagedPage.lifeCtx is a child of genCtx.
+	genMu     sync.Mutex
+	genCtx    context.Context
+	genCancel context.CancelFunc
 
 	// stealthProfile, when non-nil, is automatically applied to every new page
 	// created via GetOrCreatePage (puppeteer-extra onPageCreated pattern).
@@ -119,6 +129,13 @@ type ManagedPage struct {
 	LogCollector *LogCollector
 	DetachedAt   time.Time // zero = attached (agent-controllable)
 	generation   uint64    // pool generation at creation; mismatch = stale after reconnect
+	// lifeCtx dies when the tab dies (targetDestroyed), the page is closed or
+	// reaped, or the browser reconnects. Page itself is bound to it at
+	// publication, so every rod call on the pooled page is cancel-on-death
+	// (Playwright _closedOrCrashedScope equivalent). RunInteract rebinds a
+	// merged request+lifecycle ctx per call.
+	lifeCtx    context.Context
+	lifeCancel context.CancelFunc
 }
 
 // signalReady closes the ready channel exactly once. Safe to call multiple times.
@@ -155,10 +172,55 @@ func NewContextPool(browser *rod.Browser) *ContextPool {
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+	p.genCtx, p.genCancel = context.WithCancel(context.Background())
 	p.browser.Store(browser)
 	go p.reaper()
 	p.watchTargetDestroyed()
 	return p
+}
+
+// newPageLifecycle derives a per-page cancel context under the current pool
+// generation. Firing the returned cancel is the cancel-on-death signal: every
+// in-flight rod call on the page returns ctx.Err() immediately instead of
+// waiting for a CDP response that will never arrive.
+func (p *ContextPool) newPageLifecycle() (context.Context, context.CancelFunc) {
+	p.genMu.Lock()
+	defer p.genMu.Unlock()
+	return context.WithCancel(p.genCtx)
+}
+
+// cancelPageLife fires the page's lifecycle cancel, if set.
+func cancelPageLife(mp *ManagedPage) {
+	if mp != nil && mp.lifeCancel != nil {
+		mp.lifeCancel()
+	}
+}
+
+// pageAlive probes a pooled page with a short deadline (validate-on-checkout,
+// like database/sql Ping). A dead tab — target destroyed without a delivered
+// event, or a silently detached session — fails fast instead of handing the
+// caller an unresponsive *rod.Page.
+func (p *ContextPool) pageAlive(mp *ManagedPage) bool {
+	if mp == nil || mp.Page == nil || mp.lifeCtx == nil {
+		return false
+	}
+	if mp.lifeCtx.Err() != nil {
+		return false // lifecycle already dead — no CDP call needed
+	}
+	b := p.getBrowser()
+	if b == nil {
+		return false
+	}
+	// NOTE: Page.Info() ignores the page's ctx — it delegates to
+	// browser.pageInfo() which uses the browser's ctx. The probe must bind a
+	// browser clone, not the page.
+	probe, cancel := context.WithTimeout(mp.lifeCtx, pageLivenessTimeout)
+	defer cancel()
+	_, err := (proto.TargetGetTargetInfo{TargetID: mp.Page.TargetID}).Call(b.Context(probe))
+	if err != nil {
+		slog.Warn("pageAlive: probe failed", "session", mp.Session, "target", mp.Page.TargetID, "err", err)
+	}
+	return err == nil
 }
 
 // GetOrCreatePage returns the existing page for session, or creates a new tab in the
@@ -217,13 +279,28 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		if mp.readyErr != nil {
 			return nil, mp.readyErr
 		}
-		mp.mu.Lock()
-		mp.LastUsed = time.Now()
-		if url != "" && url != "about:blank" && url != mp.URL {
-			mp.URL = url
+		// #79: validate-on-checkout — a page whose target died without a
+		// delivered TargetDestroyed event is a corpse; hand out a fresh tab
+		// instead of letting the caller discover it via a hung CDP call.
+		if !p.pageAlive(mp) {
+			mc.Mu.Lock()
+			if cur, ok := mc.Pages[session]; ok && cur == mp {
+				delete(mc.Pages, session)
+			}
+			cancelPageLife(mp)
+			// Do NOT close the underlying tab: if it is still alive the
+			// adopt path below reuses it for the replacement — closing here
+			// races TargetDestroyed and kills the fresh page.
+			// Lock is held: fall through to deduplicateSession/create below.
+		} else {
+			mp.mu.Lock()
+			mp.LastUsed = time.Now()
+			if url != "" && url != "about:blank" && url != mp.URL {
+				mp.URL = url
+			}
+			mp.mu.Unlock()
+			return mp, nil
 		}
-		mp.mu.Unlock()
-		return mp, nil
 	}
 	session = deduplicateSession(mc, session)
 
@@ -236,11 +313,13 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 			if p.getStealthProfile() != nil {
 				lc = NewStealthLogCollector()
 			}
-			mp := &ManagedPage{Session: session, Mode: mode, Page: adopted, ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: lc, generation: curGen}
+			lifeCtx, lifeCancel := p.newPageLifecycle()
+			mp := &ManagedPage{Session: session, Mode: mode, Page: adopted.Context(lifeCtx), ready: make(chan struct{}), URL: url, LastUsed: time.Now(), TTL: contextPoolDefaultTTL, Refs: NewRefMap(), LogCollector: lc, generation: curGen, lifeCtx: lifeCtx, lifeCancel: lifeCancel}
 			mp.signalReady() // close ready immediately — adopted page is already live
 			mc.Mu.Lock()
 			if existing, ok := mc.Pages[session]; ok {
 				mc.Mu.Unlock()
+				cancelPageLife(mp)
 				_ = adopted.Close()
 				<-existing.ready
 				if existing.readyErr != nil {
@@ -257,7 +336,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 				}
 			}
 			// Adopted page is already live — subscribe LogCollector immediately.
-			mp.LogCollector.SubscribeCDP(adopted)
+			mp.LogCollector.SubscribeCDP(mp.Page)
 			return mp, nil
 		}
 		mc.Mu.Lock()
@@ -269,6 +348,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if p.getStealthProfile() != nil {
 		placeholderLC = NewStealthLogCollector()
 	}
+	lifeCtx, lifeCancel := p.newPageLifecycle()
 	placeholder := &ManagedPage{
 		Session:      session,
 		Mode:         mode,
@@ -279,6 +359,8 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		LogCollector: placeholderLC,
 		URL:          url,
 		generation:   curGen,
+		lifeCtx:      lifeCtx,
+		lifeCancel:   lifeCancel,
 	}
 	mc.Pages[session] = placeholder
 	mc.Mu.Unlock()
@@ -314,6 +396,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 		if page != nil {
 			_ = page.Close()
 		}
+		cancelPageLife(placeholder)
 		placeholder.signalReady() // unblock any waiters with nil page
 		placeholder.readyErr = fmt.Errorf("context_pool: session %q was reaped during creation", session)
 		return nil, placeholder.readyErr
@@ -321,6 +404,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if cdpErr != nil {
 		delete(mc.Pages, session)
 		mc.Mu.Unlock()
+		cancelPageLife(placeholder)
 		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", key, cdpErr)
 		placeholder.signalReady()
 		return nil, placeholder.readyErr
@@ -329,12 +413,13 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	if mp.generation != p.generation.Load() {
 		delete(mc.Pages, session)
 		mc.Mu.Unlock()
+		cancelPageLife(placeholder)
 		_ = page.Close()
 		placeholder.readyErr = fmt.Errorf("context_pool: session %q invalidated by reconnect during creation", session)
 		placeholder.signalReady()
 		return nil, placeholder.readyErr
 	}
-	mp.Page = page
+	mp.Page = page.Context(mp.lifeCtx)
 	mc.Mu.Unlock()
 	// #28: Apply stealth automatically if a profile is set on the pool.
 	// This ensures pages created via the pool (not just via RunInteract) get
@@ -349,7 +434,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	// Wire LogCollector to the real page. SubscribeCDP starts a listener goroutine
 	// that runs until the page is closed.
 	if mp.LogCollector != nil {
-		mp.LogCollector.SubscribeCDP(page)
+		mp.LogCollector.SubscribeCDP(mp.Page)
 	}
 	placeholder.signalReady()
 	return mp, nil
@@ -401,6 +486,7 @@ func (p *ContextPool) ClosePage(session string) error {
 		return nil
 	}
 	page = mp.Page
+	cancelPageLife(mp)
 	delete(mc.Pages, session)
 	if len(mc.Pages) != 0 || emptyKey == "default" {
 		emptyKey = ""
@@ -473,9 +559,10 @@ func (p *ContextPool) List() []ContextInfo {
 // Page closes run unlocked to avoid blocking callers.
 func (p *ContextPool) Reap() {
 	type victim struct {
-		page *rod.Page
-		key  string
-		name string
+		page   *rod.Page
+		cancel context.CancelFunc
+		key    string
+		name   string
 	}
 	var victims []victim
 
@@ -492,12 +579,12 @@ func (p *ContextPool) Reap() {
 			// means the page's rod.Page points to a dead CDP connection.
 			// Even detached pages are reaped if stale (their browser is gone).
 			if mp.generation != curGen && mp.Page != nil {
-				victims = append(victims, victim{page: mp.Page, key: key, name: name})
+				victims = append(victims, victim{page: mp.Page, cancel: mp.lifeCancel, key: key, name: name})
 				delete(mc.Pages, name)
 				continue
 			}
 			if mp.TTL > 0 && time.Since(mp.LastUsed) > mp.TTL && mp.Page != nil {
-				victims = append(victims, victim{page: mp.Page, key: key, name: name})
+				victims = append(victims, victim{page: mp.Page, cancel: mp.lifeCancel, key: key, name: name})
 				delete(mc.Pages, name)
 			}
 		}
@@ -507,6 +594,9 @@ func (p *ContextPool) Reap() {
 
 	// Close pages unlocked.
 	for _, v := range victims {
+		if v.cancel != nil {
+			v.cancel()
+		}
 		closePageWithTimeout(v.page)
 	}
 
@@ -548,6 +638,15 @@ func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
 	p.browser.Store(b)
 	p.generation.Add(1)
 
+	// Fail all in-flight calls on previous-generation pages at once: their
+	// lifeCtx derives from the generation ctx being cancelled here.
+	p.genMu.Lock()
+	if p.genCancel != nil {
+		p.genCancel()
+	}
+	p.genCtx, p.genCancel = context.WithCancel(context.Background())
+	p.genMu.Unlock()
+
 	// Invalidate all existing pages — they belong to the old browser generation.
 	// Their rod.Page references are dead (CDP connection closed). Callers that
 	// hold a ManagedPage reference can check IsValid() for an explicit error;
@@ -559,6 +658,11 @@ func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
 		mc.Mu.Unlock()
 	}
 	p.contextsMu.Unlock()
+
+	// The destruction watcher was subscribed on the old CDP connection and
+	// died with it — resubscribe on the new browser so cancel-on-death keeps
+	// working across reconnects.
+	p.watchTargetDestroyed()
 }
 
 // FindManagedPage finds a managed page by session name across all contexts.
