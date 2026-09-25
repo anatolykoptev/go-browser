@@ -92,6 +92,23 @@ func (s *Server) handleInteract(w http.ResponseWriter, r *http.Request) {
 }
 
 // RunInteract executes a Chrome interaction sequence using the ChromeManager's ContextPool.
+// targetInfo fetches TargetTargetInfo through a ctx-bound browser clone.
+// rod's Page.Info() delegates to browser.pageInfo() and ignores the page's
+// ctx entirely, so page-level binding cannot bound it — the browser must be
+// rebound instead.
+func targetInfo(pool *ContextPool, page *rod.Page, ctx context.Context) (*proto.TargetTargetInfo, error) {
+	b := pool.getBrowser()
+	if b == nil {
+		return nil, fmt.Errorf("context_pool: browser not available")
+	}
+	res, err := (proto.TargetGetTargetInfo{TargetID: page.TargetID}).Call(b.Context(ctx))
+	if err != nil {
+		return nil, err
+	}
+	return res.TargetInfo, nil
+}
+
+// RunInteract executes a Chrome interaction sequence using the ChromeManager's ContextPool.
 func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest) InteractResponse {
 	pool := chrome.Pool()
 	if pool == nil {
@@ -129,11 +146,14 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	defer func() { stop(); workCancel() }()
 	page := mp.Page.Context(ctx)
 
-	info, err := page.Info()
+	// page.Info() ignores the page ctx — it delegates to browser.pageInfo()
+	// which uses the browser's ctx. Query through a ctx-bound browser clone
+	// so a wedged browser or dead target cannot hang the request.
+	info, err := targetInfo(pool, page, ctx)
 	if err != nil {
 		return InteractResponse{URL: req.URL, Status: "error", Error: fmt.Sprintf("page info: %s", err), ErrorCode: ClassifyError(err), SessionID: session}
 	}
-	isNewPage := info.URL == "about:blank" || info.URL == ""
+	isNewPage := info == nil || info.URL == "about:blank" || info.URL == ""
 
 	// Set up stealth / proxy auth on freshly created pages only.
 	if isNewPage {
@@ -169,7 +189,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	// Navigate: skip if URL already matches or ReusePage is set.
 	if req.URL != "" && req.URL != "about:blank" {
 		curURL := ""
-		if cur, ierr := page.Info(); ierr == nil && cur != nil {
+		if cur, ierr := targetInfo(pool, page, ctx); ierr == nil && cur != nil {
 			curURL = cur.URL
 		}
 		if isNewPage || (!req.ReusePage && !strings.HasPrefix(curURL, req.URL)) {

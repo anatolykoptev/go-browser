@@ -635,17 +635,19 @@ func (p *ContextPool) Close() {
 // closed CDP connection and must not be reused (Playwright _browserClosed
 // cascading invalidation pattern).
 func (p *ContextPool) UpdateBrowser(b *rod.Browser) {
-	p.browser.Store(b)
-	p.generation.Add(1)
-
-	// Fail all in-flight calls on previous-generation pages at once: their
-	// lifeCtx derives from the generation ctx being cancelled here.
+	// Rotate under genMu so newPageLifecycle never hands out a lifecycle ctx
+	// that is about to die: a creator either gets the old gen+old ctx (page
+	// discarded by the phase-4 generation check) or the new gen+new ctx.
 	p.genMu.Lock()
 	if p.genCancel != nil {
+		// Fail all in-flight calls on previous-generation pages at once:
+		// their lifeCtx derives from the generation ctx cancelled here.
 		p.genCancel()
 	}
 	p.genCtx, p.genCancel = context.WithCancel(context.Background())
+	p.generation.Add(1)
 	p.genMu.Unlock()
+	p.browser.Store(b)
 
 	// Invalidate all existing pages — they belong to the old browser generation.
 	// Their rod.Page references are dead (CDP connection closed). Callers that

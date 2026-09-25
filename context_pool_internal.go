@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,7 +25,13 @@ func closePageWithTimeout(page *rod.Page) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = page.Close()
+		// Pooled pages carry a lifecycle ctx that is already cancelled by the
+		// time close runs (cancel-on-death) — Page.Close() on the dead ctx
+		// returns instantly without sending Page.close, leaking the tab.
+		// Bind a fresh ctx for the close call itself.
+		ctx, cancel := context.WithTimeout(context.Background(), pageCloseTimeout)
+		defer cancel()
+		_ = page.Context(ctx).Close()
 	}()
 	select {
 	case <-done:
