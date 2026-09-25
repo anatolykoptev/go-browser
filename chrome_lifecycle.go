@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -158,16 +159,22 @@ func (m *ChromeManager) Connected() bool {
 // HealthStatus is the result of a ChromeManager health probe.
 // #49: Returned by HealthCheck() for the /health endpoint and external monitors.
 type HealthStatus struct {
-	Connected   bool   `json:"connected"`
-	WsURL       string `json:"ws_url"`
-	LatencyMs   int64  `json:"latency_ms"`
+	Connected bool   `json:"connected"`
+	WsURL     string `json:"ws_url"`
+	LatencyMs int64  `json:"latency_ms"`
+	// Targets is the number of CDP targets Chrome reported during the probe.
+	Targets     int        `json:"targets,omitempty"`
 	ContextPool *PoolStats `json:"context_pool,omitempty"`
 }
 
+// healthProbeTimeout bounds every CDP probe inside HealthCheck — the probe
+// exists to detect a wedged browser, so it must never wait unboundedly.
+const healthProbeTimeout = 2 * time.Second
+
 // PoolStats is a snapshot of the ContextPool state for health reporting.
 type PoolStats struct {
-	Contexts  int `json:"contexts"`
-	Pages     int `json:"pages"`
+	Contexts   int    `json:"contexts"`
+	Pages      int    `json:"pages"`
 	Generation uint64 `json:"generation"`
 }
 
@@ -188,23 +195,51 @@ func (m *ChromeManager) HealthCheck() HealthStatus {
 		return status
 	}
 
+	// All probes share one bounded ctx — an unbounded Call on a wedged
+	// browser would hang the health endpoint itself (socket alive, browser
+	// dead — the exact failure this probe exists to catch).
+	probeCtx, cancel := context.WithTimeout(context.Background(), healthProbeTimeout)
+	defer cancel()
+	hb := b.Context(probeCtx)
+
 	// Active health probe: measure CDP round-trip latency.
 	start := time.Now()
-	if _, err := (&proto.BrowserGetVersion{}).Call(b); err != nil {
+	if _, err := (&proto.BrowserGetVersion{}).Call(hb); err != nil {
 		// CDP call failed — connection is stale even though browser != nil.
 		status.Connected = false
 		return status
 	}
 	status.LatencyMs = time.Since(start).Milliseconds()
 
+	// Page-level probe (krolik-server#493): BrowserGetVersion proves the
+	// browser domain answers, but a wedged target set — e.g. after an
+	// external Chrome restart behind a persistent websocket — leaves every
+	// pooled tab dead while the socket stays healthy. TargetGetTargets
+	// forces the browser to enumerate its targets; failure => unhealthy.
+	targets, err := (&proto.TargetGetTargets{}).Call(hb)
+	if err != nil {
+		status.Connected = false
+		return status
+	}
+	status.Targets = len(targets.TargetInfos)
+
 	// Gather pool stats if available.
 	if pool := m.Pool(); pool != nil {
 		pool.contextsMu.RLock()
 		ctxCount := len(pool.contexts)
 		pageCount := 0
+		var probeTarget proto.TargetTargetID
 		for _, mc := range pool.contexts {
 			mc.Mu.Lock()
 			pageCount += len(mc.Pages)
+			if probeTarget == "" {
+				for _, mp := range mc.Pages {
+					if mp.Page != nil {
+						probeTarget = mp.Page.TargetID
+						break
+					}
+				}
+			}
 			mc.Mu.Unlock()
 		}
 		pool.contextsMu.RUnlock()
@@ -212,6 +247,15 @@ func (m *ChromeManager) HealthCheck() HealthStatus {
 			Contexts:   ctxCount,
 			Pages:      pageCount,
 			Generation: pool.generation.Load(),
+		}
+		// If the pool holds pages, verify one actually resolves in the
+		// browser — a pool full of destroyed targets is dead even when the
+		// connection is alive.
+		if probeTarget != "" {
+			if _, err := (proto.TargetGetTargetInfo{TargetID: probeTarget}).Call(hb); err != nil {
+				status.Connected = false
+				return status
+			}
 		}
 	}
 
