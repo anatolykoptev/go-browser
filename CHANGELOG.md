@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.6](https://github.com/anatolykoptev/go-browser/compare/v0.20.5...v0.20.6) (2026-09-25)
+
+
+### Fixed
+
+* **context-pool:** cancel-on-death lifecycle + request-ctx binding for pooled pages ([#80](https://github.com/anatolykoptev/go-browser/issues/80)) ([2a252bf](https://github.com/anatolykoptev/go-browser/commit/2a252bf7252f30e8822e8dc82d0506733a803256))
+* **context-pool:** named session defaults to persistent context, fail closed on bad mode ([#77](https://github.com/anatolykoptev/go-browser/issues/77)) ([c0f20ce](https://github.com/anatolykoptev/go-browser/commit/c0f20ce6ae575ebacfb71784696996f4392148d1))
+
+
+### Documentation
+
+* **readme:** document actions, stealth and humanize; fix stale version and port ([541178e](https://github.com/anatolykoptev/go-browser/commit/541178edc1032f880463095eda37db6bc095fc6a))
+
 ## [0.20.5](https://github.com/anatolykoptev/go-browser/compare/v0.20.4...v0.20.5) (2026-07-18)
 
 
