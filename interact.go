@@ -273,7 +273,11 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		}
 	}
 
-	info, infoErr := page.Info()
+	// Best-effort final-URL capture: fresh short ctx (request ctx may already be
+	// expired), browser clone so a wedged browser cannot hang this past 2s.
+	infoCtx, infoCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	info, infoErr := targetInfo(pool, page, infoCtx)
+	infoCancel()
 	finalURL := req.URL
 	mp.mu.Lock()
 	if infoErr == nil && info != nil {
