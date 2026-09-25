@@ -228,16 +228,18 @@ func (m *ChromeManager) HealthCheck() HealthStatus {
 		pool.contextsMu.RLock()
 		ctxCount := len(pool.contexts)
 		pageCount := 0
-		var probeTarget proto.TargetTargetID
+		type candidate struct {
+			mc       *ManagedContext
+			session  string
+			targetID proto.TargetTargetID
+		}
+		var cands []candidate
 		for _, mc := range pool.contexts {
 			mc.Mu.Lock()
 			pageCount += len(mc.Pages)
-			if probeTarget == "" {
-				for _, mp := range mc.Pages {
-					if mp.Page != nil {
-						probeTarget = mp.Page.TargetID
-						break
-					}
+			for sess, mp := range mc.Pages {
+				if mp.Page != nil {
+					cands = append(cands, candidate{mc, sess, mp.Page.TargetID})
 				}
 			}
 			mc.Mu.Unlock()
@@ -248,14 +250,29 @@ func (m *ChromeManager) HealthCheck() HealthStatus {
 			Pages:      pageCount,
 			Generation: pool.generation.Load(),
 		}
-		// If the pool holds pages, verify one actually resolves in the
-		// browser — a pool full of destroyed targets is dead even when the
-		// connection is alive.
-		if probeTarget != "" {
-			if _, err := (proto.TargetGetTargetInfo{TargetID: probeTarget}).Call(hb); err != nil {
-				status.Connected = false
-				return status
+		// Page-level verdict: unhealthy only when registered pages exist and
+		// NONE resolve — a single dead tab must not fail global health (it is
+		// the reaper's job, not docker's). A candidate that was concurrently
+		// unregistered after the snapshot raced a normal ClosePage/reap, so
+		// its failure is not evidence of a dead browser.
+		live := false
+		staleRegistered := false
+		for _, c := range cands {
+			if _, err := (proto.TargetGetTargetInfo{TargetID: c.targetID}).Call(hb); err == nil {
+				live = true
+				break
 			}
+			c.mc.Mu.Lock()
+			mp, ok := c.mc.Pages[c.session]
+			still := ok && mp.Page != nil && mp.Page.TargetID == c.targetID
+			c.mc.Mu.Unlock()
+			if still {
+				staleRegistered = true
+			}
+		}
+		if !live && staleRegistered {
+			status.Connected = false
+			return status
 		}
 	}
 
