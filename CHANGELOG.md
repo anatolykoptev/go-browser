@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.7](https://github.com/anatolykoptev/go-browser/compare/v0.20.6...v0.20.7) (2026-09-25)
+
+
+### Fixed
+
+* **health:** bound HealthCheck probes + page-level target probe ([#81](https://github.com/anatolykoptev/go-browser/issues/81)) ([c0d244a](https://github.com/anatolykoptev/go-browser/commit/c0d244a0acabf47c507990a6041bd3df1fad1d84))
+
 ## [0.20.6](https://github.com/anatolykoptev/go-browser/compare/v0.20.5...v0.20.6) (2026-09-25)
 
 
