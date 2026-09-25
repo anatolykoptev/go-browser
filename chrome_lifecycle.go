@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -158,16 +159,22 @@ func (m *ChromeManager) Connected() bool {
 // HealthStatus is the result of a ChromeManager health probe.
 // #49: Returned by HealthCheck() for the /health endpoint and external monitors.
 type HealthStatus struct {
-	Connected   bool   `json:"connected"`
-	WsURL       string `json:"ws_url"`
-	LatencyMs   int64  `json:"latency_ms"`
+	Connected bool   `json:"connected"`
+	WsURL     string `json:"ws_url"`
+	LatencyMs int64  `json:"latency_ms"`
+	// Targets is the number of CDP targets Chrome reported during the probe.
+	Targets     int        `json:"targets,omitempty"`
 	ContextPool *PoolStats `json:"context_pool,omitempty"`
 }
 
+// healthProbeTimeout bounds every CDP probe inside HealthCheck — the probe
+// exists to detect a wedged browser, so it must never wait unboundedly.
+const healthProbeTimeout = 2 * time.Second
+
 // PoolStats is a snapshot of the ContextPool state for health reporting.
 type PoolStats struct {
-	Contexts  int `json:"contexts"`
-	Pages     int `json:"pages"`
+	Contexts   int    `json:"contexts"`
+	Pages      int    `json:"pages"`
 	Generation uint64 `json:"generation"`
 }
 
@@ -188,23 +195,53 @@ func (m *ChromeManager) HealthCheck() HealthStatus {
 		return status
 	}
 
+	// All probes share one bounded ctx — an unbounded Call on a wedged
+	// browser would hang the health endpoint itself (socket alive, browser
+	// dead — the exact failure this probe exists to catch).
+	probeCtx, cancel := context.WithTimeout(context.Background(), healthProbeTimeout)
+	defer cancel()
+	hb := b.Context(probeCtx)
+
 	// Active health probe: measure CDP round-trip latency.
 	start := time.Now()
-	if _, err := (&proto.BrowserGetVersion{}).Call(b); err != nil {
+	if _, err := (&proto.BrowserGetVersion{}).Call(hb); err != nil {
 		// CDP call failed — connection is stale even though browser != nil.
 		status.Connected = false
 		return status
 	}
 	status.LatencyMs = time.Since(start).Milliseconds()
 
+	// Page-level probe (krolik-server#493): BrowserGetVersion proves the
+	// browser domain answers, but a wedged target set — e.g. after an
+	// external Chrome restart behind a persistent websocket — leaves every
+	// pooled tab dead while the socket stays healthy. TargetGetTargets
+	// forces the browser to enumerate its targets; failure => unhealthy.
+	targets, err := (&proto.TargetGetTargets{}).Call(hb)
+	if err != nil {
+		status.Connected = false
+		return status
+	}
+	status.Targets = len(targets.TargetInfos)
+
 	// Gather pool stats if available.
 	if pool := m.Pool(); pool != nil {
 		pool.contextsMu.RLock()
 		ctxCount := len(pool.contexts)
 		pageCount := 0
+		type candidate struct {
+			mc       *ManagedContext
+			session  string
+			targetID proto.TargetTargetID
+		}
+		var cands []candidate
 		for _, mc := range pool.contexts {
 			mc.Mu.Lock()
 			pageCount += len(mc.Pages)
+			for sess, mp := range mc.Pages {
+				if mp.Page != nil {
+					cands = append(cands, candidate{mc, sess, mp.Page.TargetID})
+				}
+			}
 			mc.Mu.Unlock()
 		}
 		pool.contextsMu.RUnlock()
@@ -212,6 +249,30 @@ func (m *ChromeManager) HealthCheck() HealthStatus {
 			Contexts:   ctxCount,
 			Pages:      pageCount,
 			Generation: pool.generation.Load(),
+		}
+		// Page-level verdict: unhealthy only when registered pages exist and
+		// NONE resolve — a single dead tab must not fail global health (it is
+		// the reaper's job, not docker's). A candidate that was concurrently
+		// unregistered after the snapshot raced a normal ClosePage/reap, so
+		// its failure is not evidence of a dead browser.
+		live := false
+		staleRegistered := false
+		for _, c := range cands {
+			if _, err := (proto.TargetGetTargetInfo{TargetID: c.targetID}).Call(hb); err == nil {
+				live = true
+				break
+			}
+			c.mc.Mu.Lock()
+			mp, ok := c.mc.Pages[c.session]
+			still := ok && mp.Page != nil && mp.Page.TargetID == c.targetID
+			c.mc.Mu.Unlock()
+			if still {
+				staleRegistered = true
+			}
+		}
+		if !live && staleRegistered {
+			status.Connected = false
+			return status
 		}
 	}
 
