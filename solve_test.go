@@ -36,6 +36,54 @@ func TestSolveRequest_Parse(t *testing.T) {
 	}
 }
 
+func TestSolveResponse_SessionArtifacts(t *testing.T) {
+	// The FlareSolverr-shaped contract ox-browser's GoBrowserSolver decodes:
+	// cookies + user_agent + body + final_url. Mutation check: dropping a
+	// field from SolveResponse leaves it zero → assertion fails.
+	raw := `{
+		"status": "ok",
+		"cookies": {"cf_clearance": "tok"},
+		"user_agent": "Mozilla/5.0 Chrome/131",
+		"body": "<html><body>real page</body></html>",
+		"final_url": "https://example.com/landing"
+	}`
+
+	var resp SolveResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Cookies["cf_clearance"] != "tok" {
+		t.Errorf("cookies: got %v", resp.Cookies)
+	}
+	if resp.UserAgent != "Mozilla/5.0 Chrome/131" {
+		t.Errorf("user_agent: got %q", resp.UserAgent)
+	}
+	if !strings.Contains(resp.Body, "real page") {
+		t.Errorf("body: got %q", resp.Body)
+	}
+	if resp.FinalURL != "https://example.com/landing" {
+		t.Errorf("final_url: got %q", resp.FinalURL)
+	}
+}
+
+func TestLooksLikeChallenge(t *testing.T) {
+	challenged := []string{
+		"<html><head><title>Just a moment...</title></head></html>",
+		`<div id="challenge-platform"></div>`,
+		`<div id="cf-chl-widget-abc"></div>`,
+		"<p>Checking your browser before accessing example.com</p>",
+		`<script>window._cf_chl_opt = {}</script>`,
+	}
+	for i, html := range challenged {
+		if !looksLikeChallenge(html) {
+			t.Errorf("case %d: challenge HTML not detected: %q", i, html)
+		}
+	}
+	if looksLikeChallenge("<html><body><h1>real content</h1></body></html>") {
+		t.Error("normal page misclassified as challenge")
+	}
+}
+
 func TestSolveRequest_Parse_OmitemptyFields(t *testing.T) {
 	raw := `{"url": "https://example.com"}`
 
