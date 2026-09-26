@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.9](https://github.com/anatolykoptev/go-browser/compare/v0.20.8...v0.20.9) (2026-09-26)
+
+
+### Fixed
+
+* **solve:** drop challenge-platform marker — CF injects it into normal pages ([#85](https://github.com/anatolykoptev/go-browser/issues/85)) ([3aa9a78](https://github.com/anatolykoptev/go-browser/commit/3aa9a78cd98fc1eaed902a18a59493b558bad827))
+
 ## [0.20.8](https://github.com/anatolykoptev/go-browser/compare/v0.20.7...v0.20.8) (2026-09-26)
 
 
