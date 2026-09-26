@@ -69,7 +69,6 @@ func TestSolveResponse_SessionArtifacts(t *testing.T) {
 func TestLooksLikeChallenge(t *testing.T) {
 	challenged := []string{
 		"<html><head><title>Just a moment...</title></head></html>",
-		`<div id="challenge-platform"></div>`,
 		`<div id="cf-chl-widget-abc"></div>`,
 		"<p>Checking your browser before accessing example.com</p>",
 		`<script>window._cf_chl_opt = {}</script>`,
@@ -81,6 +80,11 @@ func TestLooksLikeChallenge(t *testing.T) {
 	}
 	if looksLikeChallenge("<html><body><h1>real content</h1></body></html>") {
 		t.Error("normal page misclassified as challenge")
+	}
+	// CF injects challenge-platform scripts into real post-clearance pages —
+	// it must NOT classify them as challenged (verified live: topcv.vn).
+	if looksLikeChallenge(`<html><body><script src="/cdn-cgi/challenge-platform/h/g/s.js"></script>real</body></html>`) {
+		t.Error("post-clearance page with CF challenge-platform script misclassified")
 	}
 }
 
