@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.8](https://github.com/anatolykoptev/go-browser/compare/v0.20.7...v0.20.8) (2026-09-26)
+
+
+### Added
+
+* **solve:** return post-clearance page body, UA and final URL from SolveCF ([#83](https://github.com/anatolykoptev/go-browser/issues/83)) ([8e9794d](https://github.com/anatolykoptev/go-browser/commit/8e9794dfcb32766c8f7cc7aae9c7ac3d522f60af))
+
 ## [0.20.7](https://github.com/anatolykoptev/go-browser/compare/v0.20.6...v0.20.7) (2026-09-25)
 
 
