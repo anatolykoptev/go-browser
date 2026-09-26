@@ -94,12 +94,15 @@ func SolveCF(ctx context.Context, chrome *ChromeManager, url string, proxy strin
 
 // challengeMarkers are strings present in CF's interstitial that must be
 // gone before the page HTML is safe to serve as solved content.
+// Interstitial-only markers. Deliberately excludes "challenge-platform" —
+// CF injects /cdn-cgi/challenge-platform/ scripts into normal served pages
+// post-clearance, so matching it flags real content as challenged forever.
 var challengeMarkers = []string{
 	"Just a moment",         // challenge page <title>
-	"challenge-platform",    // CF challenge script container
 	"cf-chl-",               // legacy challenge element ids
 	"Checking your browser", // interstitial copy
 	"window._cf_chl_opt",    // challenge bootstrap object
+	"Attention Required",    // CF block page <title>
 }
 
 // looksLikeChallenge reports whether an HTML snapshot is still the CF
