@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.10](https://github.com/anatolykoptev/go-browser/compare/v0.20.9...v0.20.10) (2026-10-07)
+
+
+### Fixed
+
+* **security:** refuse non-public proxy hosts before Chrome sees them ([#87](https://github.com/anatolykoptev/go-browser/issues/87)) ([5c6b096](https://github.com/anatolykoptev/go-browser/commit/5c6b09625608f2f5e79cd3f5c5e395ce83692418))
+
 ## [0.20.9](https://github.com/anatolykoptev/go-browser/compare/v0.20.8...v0.20.9) (2026-09-26)
 
 
