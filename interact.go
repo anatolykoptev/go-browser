@@ -117,7 +117,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 
 	session, mode, proxy, ephemeral := resolveSessionParams(req)
 
-	mp, err := pool.GetOrCreatePage(session, mode, proxy, req.URL)
+	mp, err := pool.getOrCreatePage(ctx, session, mode, proxy, req.URL)
 	if err != nil {
 		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error(), ErrorCode: ClassifyError(err)}
 	}
@@ -158,7 +158,10 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	// Set up stealth / proxy auth on freshly created pages only.
 	if isNewPage {
 		if proxy != "" {
-			_, proxyUser, proxyPass := parseProxy(proxy)
+			// Already vetted when the context was created; only the
+			// credentials are needed here. proxyCredentials never resolves
+			// DNS, so a lookup hiccup cannot silently drop proxy auth.
+			proxyUser, proxyPass := proxyCredentials(proxy)
 			if proxyUser != "" {
 				// Register on the connection-wide egress guard (see
 				// egress_guard.go) rather than a separate Fetch.enable/

@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -87,7 +88,7 @@ func TestContextPool_DefaultDiscovery_ExcludesIncognitoContext(t *testing.T) {
 	closeForeignPageTargets(t, br, incognitoID)
 
 	// Path 1: getOrCreateContextSafe (fresh default-context discovery).
-	mc, err := p.getOrCreateContextSafe("default", "default", "")
+	mc, err := p.getOrCreateContextSafe(context.Background(), "default", "default", "")
 	if err != nil {
 		t.Fatalf("getOrCreateContextSafe(default): %v", err)
 	}
@@ -192,7 +193,7 @@ func TestContextPool_DefaultDiscovery_PicksPersistentDefault(t *testing.T) {
 	closeForeignPageTargets(t, br, persistentID, incognitoID)
 
 	// Path 1: getOrCreateContextSafe.
-	mc, err := p.getOrCreateContextSafe("default", "default", "")
+	mc, err := p.getOrCreateContextSafe(context.Background(), "default", "default", "")
 	if err != nil {
 		t.Fatalf("getOrCreateContextSafe(default): %v", err)
 	}

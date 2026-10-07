@@ -246,6 +246,12 @@ func (p *ContextPool) pageAlive(mp *ManagedPage) bool {
 //
 // CDP calls run OUTSIDE any lock to avoid blocking List/SessionCount callers.
 func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*ManagedPage, error) {
+	return p.getOrCreatePage(context.Background(), session, mode, proxy, url)
+}
+
+// getOrCreatePage is GetOrCreatePage with a caller context bounding the
+// proxy check (parseProxy's DNS lookup).
+func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy, url string) (*ManagedPage, error) {
 	// Rule 1: named session + empty mode → persistent context. With a proxy
 	// the persistent context is the proxy context (egress through that proxy),
 	// matching resolveSessionParams in interact.go. Hardcoding "default" here
@@ -265,7 +271,7 @@ func (p *ContextPool) GetOrCreatePage(session, mode, proxy, url string) (*Manage
 	}
 
 	// Phase 1: get or create context (CDP BrowserContext creation runs unlocked).
-	mc, err := p.getOrCreateContextSafe(key, mode, proxy)
+	mc, err := p.getOrCreateContextSafe(ctx, key, mode, proxy)
 	if err != nil {
 		return nil, err
 	}

@@ -161,7 +161,7 @@ func (p *ContextPool) discoverPersistentDefaultCtxID() proto.BrowserBrowserConte
 
 // getOrCreateContextSafe does the full read→upgrade→write cycle for the
 // contexts map, doing any CDP BrowserContext creation OUTSIDE the lock.
-func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedContext, error) {
+func (p *ContextPool) getOrCreateContextSafe(ctx context.Context, key, mode, proxy string) (*ManagedContext, error) {
 	// Fast path: read lock.
 	p.contextsMu.RLock()
 	if mc, ok := p.contexts[key]; ok {
@@ -169,6 +169,14 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 		return mc, nil
 	}
 	p.contextsMu.RUnlock()
+
+	// Validate the caller-supplied proxy before any CDP work (proxy_guard.go).
+	// proxyServer is credential-stripped, so the creation log below never
+	// emits credentials.
+	proxyServer, _, _, err := parseProxy(ctx, proxy)
+	if err != nil {
+		return nil, err
+	}
 
 	// Slow path: build the new context (CDP call happens here, unlocked).
 	mc := &ManagedContext{Mode: mode, Proxy: proxy, Pages: make(map[string]*ManagedPage)}
@@ -182,10 +190,6 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 		mc.ID = p.discoverPersistentDefaultCtxID()
 	}
 
-	// proxyServer is the credential-stripped proxy URL (for Chrome's
-	// ProxyServer field and for logging). Hoisted out of the mode != "default"
-	// branch so the creation log below never emits credentials.
-	proxyServer, _, _ := parseProxy(proxy)
 	if mode != "default" {
 		b := p.getBrowser()
 		if b == nil {
