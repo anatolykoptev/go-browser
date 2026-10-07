@@ -158,7 +158,9 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	// Set up stealth / proxy auth on freshly created pages only.
 	if isNewPage {
 		if proxy != "" {
-			_, proxyUser, proxyPass := parseProxy(proxy)
+			// Already vetted when the context was created; only the
+			// credentials are needed here.
+			_, proxyUser, proxyPass, _ := parseProxy(proxy)
 			if proxyUser != "" {
 				// Register on the connection-wide egress guard (see
 				// egress_guard.go) rather than a separate Fetch.enable/

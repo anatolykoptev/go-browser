@@ -257,10 +257,10 @@ func TestContextPool_NamedSession_EmptyMode_WithProxy_LandsInProxyContext(t *tes
 	p := NewContextPool(br)
 	defer p.Close()
 
-	// Use a non-routable proxy address with credentials so parseProxy returns a
+	// Use a TEST-NET proxy address with credentials so parseProxy returns a
 	// sanitized server. about:blank navigation never touches the proxy, so
 	// TargetCreateBrowserContext succeeds without a live proxy.
-	proxyRaw := "http://user:pass@127.0.0.1:9"
+	proxyRaw := "http://user:pass@192.0.2.1:9" // TEST-NET-1: public per the proxy guard, never routed
 	mp, err := p.GetOrCreatePage("named-proxy-sess", "", proxyRaw, "about:blank")
 	if err != nil {
 		t.Fatalf("GetOrCreatePage(named, empty mode, proxy): %v", err)

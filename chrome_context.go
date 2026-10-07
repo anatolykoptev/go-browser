@@ -3,7 +3,6 @@ package browser
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/proto"
@@ -14,12 +13,15 @@ import (
 // and a cleanup function for proxy auth handling.
 // Supports authenticated proxies (http://user:pass@host:port) via CDP Fetch.authRequired.
 func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBrowserContextID, func(), error) {
+	proxyServer, proxyUser, proxyPass, err := parseProxy(proxy)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
 	b := m.getBrowser()
 	if b == nil {
 		return nil, "", nil, ErrUnavailable
 	}
-
-	proxyServer, proxyUser, proxyPass := parseProxy(proxy)
 
 	createCtx := func(browser *rod.Browser) (*proto.TargetCreateBrowserContextResult, error) {
 		return proto.TargetCreateBrowserContext{
@@ -66,32 +68,4 @@ func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBro
 	}
 
 	return scoped, res.BrowserContextID, cleanup, nil
-}
-
-// parseProxy extracts host:port and credentials from a proxy URL.
-// Input:  "http://user:pass@host:port" → ("host:port", "user", "pass")
-// Input:  "http://host:port"           → ("http://host:port", "", "")
-// Input:  ""                           → ("", "", "")
-// #36: Validates the scheme is http, https, or socks5; logs and returns
-// the raw string unchanged for unsupported schemes.
-func parseProxy(raw string) (server, user, pass string) {
-	if raw == "" {
-		return "", "", ""
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
-		return raw, "", ""
-	}
-	// #36: Only http, https, and socks5 proxy schemes are allowed.
-	switch u.Scheme {
-	case "http", "https", "socks5":
-	default:
-		slog.Warn("chrome: proxy URL with unsupported scheme, passing through unchanged", "scheme", u.Scheme, "url", raw)
-		return raw, "", ""
-	}
-	pass, _ = u.User.Password()
-	user = u.User.Username()
-	// Reconstruct URL without credentials for Chrome's ProxyServer.
-	u.User = nil
-	return u.String(), user, pass
 }

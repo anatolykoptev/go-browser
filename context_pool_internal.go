@@ -170,6 +170,14 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 	}
 	p.contextsMu.RUnlock()
 
+	// Validate the caller-supplied proxy before any CDP work (proxy_guard.go).
+	// proxyServer is credential-stripped, so the creation log below never
+	// emits credentials.
+	proxyServer, _, _, err := parseProxy(proxy)
+	if err != nil {
+		return nil, err
+	}
+
 	// Slow path: build the new context (CDP call happens here, unlocked).
 	mc := &ManagedContext{Mode: mode, Proxy: proxy, Pages: make(map[string]*ManagedPage)}
 
@@ -182,10 +190,6 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 		mc.ID = p.discoverPersistentDefaultCtxID()
 	}
 
-	// proxyServer is the credential-stripped proxy URL (for Chrome's
-	// ProxyServer field and for logging). Hoisted out of the mode != "default"
-	// branch so the creation log below never emits credentials.
-	proxyServer, _, _ := parseProxy(proxy)
 	if mode != "default" {
 		b := p.getBrowser()
 		if b == nil {
