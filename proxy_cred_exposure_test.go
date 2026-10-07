@@ -1,12 +1,14 @@
 package browser
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-rod/rod/lib/proto"
 )
@@ -107,7 +109,6 @@ func TestAuthChallengeResponse_OnlyRegisteredProxyGetsCredentials(t *testing.T) 
 		want   proto.FetchAuthChallengeResponseResponse
 	}{
 		{"registered proxy", proxyCh(server), true, provide},
-		{"registered proxy, default port elided", proxyCh("http://1.2.3.4:8080"), true, provide},
 		{"another proxy", proxyCh("http://5.6.7.8:8080"), true, cancel},
 		{"proxy challenge, no origin", proxyCh(""), true, cancel},
 		{"server challenge from the same origin", &proto.FetchAuthChallenge{Source: proto.FetchAuthChallengeSourceServer, Origin: server}, true, cancel},
@@ -278,4 +279,75 @@ func TestEgressGuard_ForeignProxy_GetsNoCredentials(t *testing.T) {
 	if hasCreds(got, "victim-user", "victim-pass") {
 		t.Fatalf("a foreign proxy received another proxy's credentials: %q", got)
 	}
+}
+
+func TestAuthChallengeResponse_DefaultPortElided(t *testing.T) {
+	r := authChallengeResponse(&proto.FetchAuthChallenge{Source: proto.FetchAuthChallengeSourceProxy, Origin: "http://1.2.3.4"}, true, "http://1.2.3.4:80", "u", "p")
+	if r.Response != proto.FetchAuthChallengeResponseResponseProvideCredentials {
+		t.Fatalf("origin without its default port: response = %q, want ProvideCredentials", r.Response)
+	}
+}
+
+// allowLoopbackProxies lets parseProxy accept the loopback fake proxies.
+func allowLoopbackProxies(t *testing.T) {
+	t.Helper()
+	prev := proxyAllow
+	proxyAllow = map[string]struct{}{"127.0.0.1": {}}
+	t.Cleanup(func() { proxyAllow = prev })
+}
+
+func interactChrome(t *testing.T) *ChromeManager {
+	t.Helper()
+	br := acquireSharedBrowser(t)
+	guard := acquireGuard(t, br)
+	pool := NewContextPool(br)
+	t.Cleanup(pool.Close)
+	return &ChromeManager{pool: pool, browser: br, guard: guard}
+}
+
+// TestRunInteract_ProxyMode_RegistersCredentialsForItsProxy drives the
+// production wiring (RunInteract -> pool -> ManagedPage.ProxyServer ->
+// registerProxyAuth) with a credentialed proxy and requires the proxy to
+// receive its credentials.
+func TestRunInteract_ProxyMode_RegistersCredentialsForItsProxy(t *testing.T) {
+	allowLoopbackProxies(t)
+	chrome := interactChrome(t)
+	proxy, seen := fakeAuthProxy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	raw := "http://own-user:own-pass@" + proxy.Listener.Addr().String()
+	resp := RunInteract(ctx, chrome, InteractRequest{Mode: modeProxy, Proxy: &raw, NoStealth: true, URL: "http://example.com/?wiring=1"})
+	t.Logf("interact: %s %s", resp.Status, resp.Error)
+	if !hasCreds(seen(), "own-user", "own-pass") {
+		t.Fatalf("proxy never received its credentials via RunInteract; saw %q", seen())
+	}
+}
+
+// TestRunInteract_SharedPrivateContext_RefusesOtherProxy: "private" is keyed
+// without the proxy, so a second caller with its own proxy lands in a
+// context that dials the first caller's proxy. It must be refused, and its
+// credentials must never reach the first caller's proxy.
+func TestRunInteract_SharedPrivateContext_RefusesOtherProxy(t *testing.T) {
+	allowLoopbackProxies(t)
+	chrome := interactChrome(t)
+	first, firstSeen := fakeAuthProxy(t)
+	second, secondSeen := fakeAuthProxy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	firstURL := "http://first:first-pass@" + first.Listener.Addr().String()
+	r1 := RunInteract(ctx, chrome, InteractRequest{Session: "first-sess", Mode: "private", Proxy: &firstURL, NoStealth: true, URL: "about:blank"})
+	if r1.Status == "error" {
+		t.Fatalf("first caller: %s", r1.Error)
+	}
+	secondURL := "http://second:second-pass@" + second.Listener.Addr().String()
+	r2 := RunInteract(ctx, chrome, InteractRequest{Mode: "private", Proxy: &secondURL, NoStealth: true, URL: "http://example.com/?collide=1"})
+	if r2.Status != "error" || !strings.Contains(r2.Error, "different proxy") {
+		t.Errorf("second caller: status %q error %q, want refusal", r2.Status, r2.Error)
+	}
+	if hasCreds(firstSeen(), "second", "second-pass") {
+		t.Fatalf("second caller's credentials reached the first caller's proxy: %q", firstSeen())
+	}
+	_ = secondSeen
 }

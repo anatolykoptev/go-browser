@@ -118,10 +118,13 @@ type ManagedContext struct {
 // placeholder (Page==nil) must wait on ready before using the page.
 // mu protects LastUsed and URL after the page is ready.
 type ManagedPage struct {
-	mu           sync.Mutex
-	Session      string
-	Mode         string // resolved context mode: "default", "private", or "proxy"
-	ProxyServer  string // copied from the owning ManagedContext; scopes proxy auth
+	mu          sync.Mutex
+	Session     string
+	Mode        string // resolved context mode: "default", "private", or "proxy"
+	ProxyServer string // copied from the owning ManagedContext; scopes proxy auth
+	// proxyRaw is the owning context's raw proxy (may carry credentials;
+	// never serialized). RunInteract refuses a caller whose proxy differs.
+	proxyRaw     string
 	Page         *rod.Page
 	ready        chan struct{} // closed when Page != nil (or creation failed)
 	readyOnce    sync.Once     // ensures ready is closed exactly once
@@ -365,6 +368,7 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 		Session:      session,
 		Mode:         mode,
 		ProxyServer:  mc.ProxyServer,
+		proxyRaw:     mc.Proxy,
 		ready:        make(chan struct{}),
 		LastUsed:     time.Now(),
 		TTL:          contextPoolDefaultTTL,
