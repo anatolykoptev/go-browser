@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/anatolykoptev/go-kit/httputil"
 )
@@ -51,6 +53,13 @@ func proxyAllowed(u *url.URL) bool {
 	return ok
 }
 
+// proxyRuleChars are characters with meaning in Chrome's proxy-rules
+// syntax (TargetCreateBrowserContext.ProxyServer is parsed as rules, not as
+// one URL): "," separates fallbacks, ";" separates per-scheme rules, "="
+// binds a scheme to a server. Any of them, or whitespace, in a caller's
+// proxy could smuggle a second, unvetted server into the rules.
+const proxyRuleChars = ",;="
+
 // parseProxy validates a proxy URL and splits out its credentials. It is the
 // single place a caller-supplied proxy is turned into Chrome's ProxyServer
 // value, so every BrowserContext creation goes through the same check.
@@ -59,23 +68,37 @@ func proxyAllowed(u *url.URL) bool {
 // Input:  ""                           → ("", "", "", nil)
 //
 // Rules:
-//   - scheme must be http, https or socks5 (a bare host:port means http);
+//   - no proxy-rules syntax (",", ";", "=") and no whitespace anywhere;
+//   - scheme http, https or socks5 (a bare host:port means http);
+//   - no opaque part, query, fragment or path; a lone trailing "/" is
+//     dropped (Chrome would not accept it as a proxy server);
+//   - port, if present, is 1-65535;
 //   - the host is resolved and EVERY address must be public
 //     (httputil.IsBlockedIP), unless the host is on EGRESS_PROXY_ALLOW;
-//   - for http and socks5 the returned server is pinned to the vetted IP, so
-//     a DNS answer that changes between this check and Chrome's own lookup
-//     cannot redirect the proxy connection. https keeps the hostname (TLS
-//     to the proxy needs it).
-func parseProxy(raw string) (server, user, pass string, err error) {
+//   - the returned server is rebuilt from scheme + host[:port] only, never
+//     from the caller's string. For http and socks5 the host is the vetted
+//     IP, so a DNS answer that changes between this check and Chrome's own
+//     lookup cannot redirect the proxy connection.
+//
+// Residual (documented, not closed): an https proxy keeps its hostname (TLS
+// to the proxy needs it), and an allowlisted host is not resolved or pinned,
+// so for those two cases Chrome's own DNS lookup decides the address — a
+// DNS-rebinding window remains. Neither is used in the fleet today.
+//
+// ctx bounds the DNS lookup (together with checkTimeout).
+func parseProxy(ctx context.Context, raw string) (server, user, pass string, err error) {
 	if raw == "" {
 		return "", "", "", nil
+	}
+	if strings.ContainsAny(raw, proxyRuleChars) || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
+		return "", "", "", fmt.Errorf("%w: proxy URL contains proxy-rules syntax or whitespace", ErrProxyBlocked)
 	}
 	toParse := raw
 	if !strings.Contains(raw, "://") {
 		toParse = "http://" + raw
 	}
 	u, perr := url.Parse(toParse)
-	if perr != nil || u.Hostname() == "" {
+	if perr != nil || u.Opaque != "" || u.Hostname() == "" {
 		return "", "", "", fmt.Errorf("%w: unparseable proxy URL", ErrProxyBlocked)
 	}
 	switch u.Scheme {
@@ -83,34 +106,45 @@ func parseProxy(raw string) (server, user, pass string, err error) {
 	default:
 		return "", "", "", fmt.Errorf("%w: unsupported proxy scheme %q", ErrProxyBlocked, u.Scheme)
 	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" ||
+		(u.Path != "" && u.Path != "/") {
+		return "", "", "", fmt.Errorf("%w: proxy URL must be scheme://[user:pass@]host[:port]", ErrProxyBlocked)
+	}
+	port := u.Port()
+	if port != "" {
+		if n, perr := strconv.Atoi(port); perr != nil || n < 1 || n > 65535 {
+			return "", "", "", fmt.Errorf("%w: invalid proxy port", ErrProxyBlocked)
+		}
+	}
 	if u.User != nil {
 		pass, _ = u.User.Password()
 		user = u.User.Username()
-		u.User = nil
 	}
+
+	host := u.Hostname()
 	if !proxyAllowed(u) {
-		ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
+		vctx, cancel := context.WithTimeout(ctx, checkTimeout)
 		defer cancel()
-		ip, verr := vetProxyHost(ctx, u.Hostname())
+		ip, verr := vetProxyHost(vctx, host)
 		if verr != nil {
 			return "", "", "", verr
 		}
 		if u.Scheme != "https" {
-			host := ip.String()
-			if ip.To4() == nil {
-				host = "[" + host + "]"
-			}
-			if port := u.Port(); port != "" {
-				host = net.JoinHostPort(ip.String(), port)
-			}
-			u.Host = host
+			host = ip.String()
 		}
 	}
-	server = u.String()
-	if !strings.Contains(raw, "://") {
-		server = strings.TrimPrefix(server, "http://")
+	return u.Scheme + "://" + joinHostPort(host, port), user, pass, nil
+}
+
+// joinHostPort is net.JoinHostPort that tolerates an empty port.
+func joinHostPort(host, port string) string {
+	if port != "" {
+		return net.JoinHostPort(host, port)
 	}
-	return server, user, pass, nil
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // proxyCredentials returns the user and password embedded in a proxy URL

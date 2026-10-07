@@ -117,7 +117,7 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 
 	session, mode, proxy, ephemeral := resolveSessionParams(req)
 
-	mp, err := pool.GetOrCreatePage(session, mode, proxy, req.URL)
+	mp, err := pool.getOrCreatePage(ctx, session, mode, proxy, req.URL)
 	if err != nil {
 		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error(), ErrorCode: ClassifyError(err)}
 	}

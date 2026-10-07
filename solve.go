@@ -53,7 +53,7 @@ type SolveResult struct {
 // returns the session cookies plus the solving browser's UA and the page it
 // landed on.
 func SolveCF(ctx context.Context, chrome *ChromeManager, url string, proxy string) (*SolveResult, error) {
-	scopedBrowser, ctxID, authCleanup, err := chrome.NewContext(proxy)
+	scopedBrowser, ctxID, authCleanup, err := chrome.newContext(ctx, proxy)
 	if err != nil {
 		return nil, fmt.Errorf("create browser context: %w", err)
 	}

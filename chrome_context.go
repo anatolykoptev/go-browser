@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -13,7 +14,12 @@ import (
 // and a cleanup function for proxy auth handling.
 // Supports authenticated proxies (http://user:pass@host:port) via CDP Fetch.authRequired.
 func (m *ChromeManager) NewContext(proxy string) (*rod.Browser, proto.BrowserBrowserContextID, func(), error) {
-	proxyServer, proxyUser, proxyPass, err := parseProxy(proxy)
+	return m.newContext(context.Background(), proxy)
+}
+
+// newContext is NewContext with a caller context bounding the proxy check.
+func (m *ChromeManager) newContext(ctx context.Context, proxy string) (*rod.Browser, proto.BrowserBrowserContextID, func(), error) {
+	proxyServer, proxyUser, proxyPass, err := parseProxy(ctx, proxy)
 	if err != nil {
 		return nil, "", nil, err
 	}

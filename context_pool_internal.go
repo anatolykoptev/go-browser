@@ -161,7 +161,7 @@ func (p *ContextPool) discoverPersistentDefaultCtxID() proto.BrowserBrowserConte
 
 // getOrCreateContextSafe does the full read→upgrade→write cycle for the
 // contexts map, doing any CDP BrowserContext creation OUTSIDE the lock.
-func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedContext, error) {
+func (p *ContextPool) getOrCreateContextSafe(ctx context.Context, key, mode, proxy string) (*ManagedContext, error) {
 	// Fast path: read lock.
 	p.contextsMu.RLock()
 	if mc, ok := p.contexts[key]; ok {
@@ -173,7 +173,7 @@ func (p *ContextPool) getOrCreateContextSafe(key, mode, proxy string) (*ManagedC
 	// Validate the caller-supplied proxy before any CDP work (proxy_guard.go).
 	// proxyServer is credential-stripped, so the creation log below never
 	// emits credentials.
-	proxyServer, _, _, err := parseProxy(proxy)
+	proxyServer, _, _, err := parseProxy(ctx, proxy)
 	if err != nil {
 		return nil, err
 	}
