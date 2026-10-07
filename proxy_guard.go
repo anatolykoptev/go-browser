@@ -194,3 +194,68 @@ func vetProxyHost(ctx context.Context, host string) (net.IP, error) {
 	}
 	return addrs[0].IP, nil
 }
+
+// redactProxyUserinfo returns raw without its userinfo, for anything that
+// leaves the process (ContextInfo.Proxy is served by chrome_tabs). It cuts
+// everything between the scheme and the LAST '@' as plain text rather than
+// trusting a URL parser: a malformed value (e.g. a '#' inside the password)
+// can make url.Parse place the host inside the credentials, but no parse can
+// move the last '@'.
+func redactProxyUserinfo(raw string) string {
+	at := strings.LastIndex(raw, "@")
+	if at < 0 {
+		return raw
+	}
+	if sep := strings.Index(raw, "://"); sep >= 0 && sep < at {
+		return raw[:sep+3] + raw[at+1:]
+	}
+	return raw[at+1:]
+}
+
+// redactContextKey is a pool key ("default" | "private" |
+// "private-proxy:<raw>" | "proxy:<raw>") with any proxy credentials removed,
+// for errors and logs.
+func redactContextKey(key string) string {
+	for _, prefix := range []string{privateProxyKeyPrefix, "proxy:"} {
+		if rest, ok := strings.CutPrefix(key, prefix); ok {
+			return prefix + redactProxyUserinfo(rest)
+		}
+	}
+	return key
+}
+
+// defaultProxyPorts maps a proxy scheme to the port Chrome uses when none is
+// given. Chrome serializes a challenger origin without its default port.
+var defaultProxyPorts = map[string]string{"http": "80", "https": "443", "socks5": "1080"}
+
+// sameProxyOrigin reports whether a CDP auth challenger origin names the
+// proxy server the credentials were registered for. Both sides are compared
+// as scheme + host + effective port, case-insensitively, so "http://1.2.3.4"
+// and "http://1.2.3.4:80" match. Empty or unparsable input never matches.
+func sameProxyOrigin(origin, server string) bool {
+	o, okO := proxyOriginKey(origin)
+	s, okS := proxyOriginKey(server)
+	return okO && okS && o == s
+}
+
+func proxyOriginKey(v string) (string, bool) {
+	if v == "" {
+		return "", false
+	}
+	if !strings.Contains(v, "://") {
+		v = "http://" + v
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Hostname() == "" || u.User != nil {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	if port == "" {
+		port = defaultProxyPorts[scheme]
+	}
+	if port == "" {
+		return "", false
+	}
+	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port), true
+}

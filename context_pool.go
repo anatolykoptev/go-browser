@@ -50,7 +50,7 @@ const (
 type ContextPool struct {
 	contextsMu sync.RWMutex
 	browser    atomic.Pointer[rod.Browser]
-	contexts   map[string]*ManagedContext // key: "default" | "private" | "proxy:<url>"
+	contexts   map[string]*ManagedContext // key: "default" | "private" | "private-proxy:<url>" | "proxy:<url>"
 	stop       chan struct{}
 	done       chan struct{}
 
@@ -105,9 +105,12 @@ func (p *ContextPool) getStealthProfile() *StealthProfile {
 type ManagedContext struct {
 	Mu    sync.Mutex
 	ID    proto.BrowserBrowserContextID
-	Mode  string // "default", "private", "proxy"
-	Proxy string // proxy URL (only for mode=proxy)
-	Pages map[string]*ManagedPage
+	Mode  string // "default", "private", "proxy"; not an egress indicator (see ProxyServer)
+	Proxy string // raw proxy URL the context was created for; may carry credentials
+	// ProxyServer is the vetted, credential-free server Chrome dials for this
+	// context (parseProxy's result); empty when Chrome does not use a proxy.
+	ProxyServer string
+	Pages       map[string]*ManagedPage
 }
 
 // ManagedPage is a named tab within a ManagedContext.
@@ -118,6 +121,7 @@ type ManagedPage struct {
 	mu           sync.Mutex
 	Session      string
 	Mode         string // resolved context mode: "default", "private", or "proxy"
+	ProxyServer  string // copied from the owning ManagedContext; scopes proxy auth
 	Page         *rod.Page
 	ready        chan struct{} // closed when Page != nil (or creation failed)
 	readyOnce    sync.Once     // ensures ready is closed exactly once
@@ -151,6 +155,8 @@ func (mp *ManagedPage) IsValid(pool *ContextPool) bool {
 }
 
 // ContextInfo describes a context and its sessions (for chrome_tabs tool).
+// Proxy never carries userinfo: List serves it to callers, and the raw value
+// holds the upstream proxy's username and password.
 type ContextInfo struct {
 	Mode     string        `json:"mode"`
 	Proxy    string        `json:"proxy,omitempty"`
@@ -358,6 +364,7 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 	placeholder := &ManagedPage{
 		Session:      session,
 		Mode:         mode,
+		ProxyServer:  mc.ProxyServer,
 		ready:        make(chan struct{}),
 		LastUsed:     time.Now(),
 		TTL:          contextPoolDefaultTTL,
@@ -390,7 +397,7 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 	case page = <-pageCh:
 		cdpErr = <-errCh
 	case <-time.After(pageCreationTimeout):
-		cdpErr = fmt.Errorf("context_pool: create tab in context %q timed out after %s", key, pageCreationTimeout)
+		cdpErr = fmt.Errorf("context_pool: create tab in context %q timed out after %s", redactContextKey(key), pageCreationTimeout)
 	}
 
 	// Phase 4: patch placeholder and signal waiters regardless of outcome.
@@ -411,7 +418,7 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 		delete(mc.Pages, session)
 		mc.Mu.Unlock()
 		cancelPageLife(placeholder)
-		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", key, cdpErr)
+		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", redactContextKey(key), cdpErr)
 		placeholder.signalReady()
 		return nil, placeholder.readyErr
 	}
@@ -548,7 +555,7 @@ func (p *ContextPool) List() []ContextInfo {
 	result := make([]ContextInfo, 0, len(ctxs))
 	for _, mc := range ctxs {
 		mc.Mu.Lock()
-		ci := ContextInfo{Mode: mc.Mode, Proxy: mc.Proxy, Sessions: make([]SessionInfo, 0, len(mc.Pages))}
+		ci := ContextInfo{Mode: mc.Mode, Proxy: redactProxyUserinfo(mc.Proxy), Sessions: make([]SessionInfo, 0, len(mc.Pages))}
 		for _, mp := range mc.Pages {
 			mp.mu.Lock()
 			si := SessionInfo{Name: mp.Session, URL: mp.URL, LastUsed: formatAge(mp.LastUsed)}

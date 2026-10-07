@@ -252,7 +252,7 @@ func TestEgressGuard_CoexistsWithActiveProxyAuth_StillBlocks(t *testing.T) {
 	// gating behavior while active/username/password are non-zero, not the
 	// FetchAuthRequired challenge-response flow itself (a separate concern,
 	// unaffected by this test).
-	unregister := guard.registerProxyAuth("coexist-test-user", "coexist-test-pass")
+	unregister := guard.registerProxyAuth("http://203.0.113.10:3128", "coexist-test-user", "coexist-test-pass")
 	defer unregister()
 
 	page, err := b.Page(proto.TargetCreateTarget{URL: "about:blank"})
