@@ -36,12 +36,17 @@ func TestContextPool_ListRedactsProxyUserinfo(t *testing.T) {
 
 func TestRedactProxyUserinfo(t *testing.T) {
 	cases := map[string]string{
-		"":                                  "",
-		"http://proxy.example.net:80":       "http://proxy.example.net:80",
-		"http://u:p@proxy.example.net:80":   "http://proxy.example.net:80",
-		"socks5://u@10.0.0.1:1080":          "socks5://10.0.0.1:1080",
-		"u:p@proxy.example.net:80":          "proxy.example.net:80",
-		"http://u:p%40x@[2001:db8::1]:3128": "http://[2001:db8::1]:3128",
+		"":                                   "",
+		"http://proxy.example.net:80":        "http://proxy.example.net:80",
+		"http://u:p@proxy.example.net:80":    "http://proxy.example.net:80",
+		"HTTP://u:p@proxy.example.net":       "HTTP://proxy.example.net",
+		"socks5://u@10.0.0.1:1080":           "socks5://10.0.0.1:1080",
+		"u:p@proxy.example.net:80":           "proxy.example.net:80",
+		"http://u:p%40x@[2001:db8::1]:3128":  "http://[2001:db8::1]:3128",
+		"u:p@[2001:db8::1]:3128":             "[2001:db8::1]:3128",
+		"http://u:p@ss@proxy.example.net:80": "http://proxy.example.net:80",
+		// url.Parse would read host "u:1234" and the rest as a fragment.
+		"http://u:1234#x@proxy.example.net:80": "http://proxy.example.net:80",
 	}
 	for in, want := range cases {
 		if got := redactProxyUserinfo(in); got != want {
@@ -50,23 +55,68 @@ func TestRedactProxyUserinfo(t *testing.T) {
 	}
 }
 
-func TestAuthChallengeResponse_OnlyProxyGetsCredentials(t *testing.T) {
+func TestRedactContextKey(t *testing.T) {
+	cases := map[string]string{
+		"default":                        "default",
+		"private":                        "private",
+		"proxy:http://u:pw@1.2.3.4:8080": "proxy:http://1.2.3.4:8080",
+		"proxy:http://1.2.3.4:8080":      "proxy:http://1.2.3.4:8080",
+	}
+	for in, want := range cases {
+		if got := redactContextKey(in); got != want {
+			t.Errorf("redactContextKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSameProxyOrigin(t *testing.T) {
+	cases := []struct {
+		origin, server string
+		want           bool
+	}{
+		{"http://1.2.3.4:8080", "http://1.2.3.4:8080", true},
+		{"http://1.2.3.4", "http://1.2.3.4:80", true},
+		{"http://1.2.3.4:80", "http://1.2.3.4", true},
+		{"HTTPS://Proxy.Example.net", "https://proxy.example.net:443", true},
+		{"http://[2001:db8::1]:3128", "http://[2001:db8::1]:3128", true},
+		{"http://5.6.7.8:8080", "http://1.2.3.4:8080", false},
+		{"http://1.2.3.4:8081", "http://1.2.3.4:8080", false},
+		{"https://1.2.3.4:8080", "http://1.2.3.4:8080", false},
+		{"", "http://1.2.3.4:8080", false},
+		{"http://1.2.3.4:8080", "", false},
+		{"http://u:p@1.2.3.4:8080", "http://1.2.3.4:8080", false},
+	}
+	for _, c := range cases {
+		if got := sameProxyOrigin(c.origin, c.server); got != c.want {
+			t.Errorf("sameProxyOrigin(%q, %q) = %v, want %v", c.origin, c.server, got, c.want)
+		}
+	}
+}
+
+func TestAuthChallengeResponse_OnlyRegisteredProxyGetsCredentials(t *testing.T) {
+	const server = "http://1.2.3.4:8080"
 	provide := proto.FetchAuthChallengeResponseResponseProvideCredentials
 	cancel := proto.FetchAuthChallengeResponseResponseCancelAuth
+	proxyCh := func(origin string) *proto.FetchAuthChallenge {
+		return &proto.FetchAuthChallenge{Source: proto.FetchAuthChallengeSourceProxy, Origin: origin}
+	}
 	cases := []struct {
 		name   string
 		ch     *proto.FetchAuthChallenge
 		active bool
 		want   proto.FetchAuthChallengeResponseResponse
 	}{
-		{"proxy challenge, creds registered", &proto.FetchAuthChallenge{Source: proto.FetchAuthChallengeSourceProxy}, true, provide},
-		{"server challenge, creds registered", &proto.FetchAuthChallenge{Source: proto.FetchAuthChallengeSourceServer}, true, cancel},
-		{"no source, creds registered", &proto.FetchAuthChallenge{}, true, cancel},
-		{"nil challenge, creds registered", nil, true, cancel},
-		{"proxy challenge, nothing registered", &proto.FetchAuthChallenge{Source: proto.FetchAuthChallengeSourceProxy}, false, cancel},
+		{"registered proxy", proxyCh(server), true, provide},
+		{"registered proxy, default port elided", proxyCh("http://1.2.3.4:8080"), true, provide},
+		{"another proxy", proxyCh("http://5.6.7.8:8080"), true, cancel},
+		{"proxy challenge, no origin", proxyCh(""), true, cancel},
+		{"server challenge from the same origin", &proto.FetchAuthChallenge{Source: proto.FetchAuthChallengeSourceServer, Origin: server}, true, cancel},
+		{"no source", &proto.FetchAuthChallenge{Origin: server}, true, cancel},
+		{"nil challenge", nil, true, cancel},
+		{"nothing registered", proxyCh(server), false, cancel},
 	}
 	for _, c := range cases {
-		r := authChallengeResponse(c.ch, c.active, "u", "p")
+		r := authChallengeResponse(c.ch, c.active, server, "u", "p")
 		if r.Response != c.want {
 			t.Errorf("%s: response = %q, want %q", c.name, r.Response, c.want)
 		}
@@ -86,7 +136,7 @@ func TestEgressGuard_SiteBasicChallenge_GetsNoProxyCredentials(t *testing.T) {
 	guard := acquireGuard(t, b)
 
 	const user, pass = "proxy-user-x", "proxy-pass-x"
-	unregister := guard.registerProxyAuth(user, pass)
+	unregister := guard.registerProxyAuth("http://203.0.113.10:3128", user, pass)
 	defer unregister()
 
 	var mu sync.Mutex
@@ -123,5 +173,109 @@ func TestEgressGuard_SiteBasicChallenge_GetsNoProxyCredentials(t *testing.T) {
 		if h == leaked {
 			t.Fatalf("site received the proxy credentials in Authorization: %q", h)
 		}
+	}
+}
+
+// fakeAuthProxy is a forward proxy that demands Basic proxy auth: it answers
+// 407 until a request carries Proxy-Authorization, and records every header
+// it sees.
+func fakeAuthProxy(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := r.Header.Get("Proxy-Authorization")
+		mu.Lock()
+		seen = append(seen, h)
+		mu.Unlock()
+		if h == "" {
+			w.Header().Set("Proxy-Authenticate", `Basic realm="proxy"`)
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		_, _ = w.Write([]byte("proxied-ok"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+// navigateThroughProxy opens a page in a fresh browser context whose
+// ProxyServer is proxyURL and navigates to a public IP literal (no DNS, so
+// the egress guard lets it through and Chrome sends it to the proxy).
+func navigateThroughProxy(t *testing.T, proxyURL string) {
+	t.Helper()
+	b := acquireSharedBrowser(t)
+	acquireGuard(t, b)
+	res, err := proto.TargetCreateBrowserContext{ProxyServer: proxyURL, DisposeOnDetach: true}.Call(b)
+	if err != nil {
+		t.Fatalf("create browser context: %v", err)
+	}
+	t.Cleanup(func() { _ = proto.TargetDisposeBrowserContext{BrowserContextID: res.BrowserContextID}.Call(b) })
+	// rod's Browser.Page overrides BrowserContextID with the browser's own,
+	// so scope a browser to the new context (as chrome_context.go does).
+	scoped := b.NoDefaultDevice()
+	scoped.BrowserContextID = res.BrowserContextID
+	page, err := scoped.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	if err != nil {
+		t.Fatalf("create page: %v", err)
+	}
+	t.Cleanup(func() { _ = page.Close() })
+	if err := page.Timeout(navigateTimeout).Navigate("http://example.com/?proxy-auth-test=1"); err != nil {
+		t.Logf("navigate: %v", err)
+	}
+
+}
+
+func hasCreds(seen []string, user, pass string) bool {
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+	for _, h := range seen {
+		if h == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestEgressGuard_RegisteredProxy_GetsCredentials is the positive path that
+// threads-mcp depends on: the proxy the credentials were registered for gets
+// them on its 407.
+func TestEgressGuard_RegisteredProxy_GetsCredentials(t *testing.T) {
+	proxy, seen := fakeAuthProxy(t)
+	guard := acquireGuard(t, acquireSharedBrowser(t))
+	unregister := guard.registerProxyAuth(proxy.URL, "own-user", "own-pass")
+	defer unregister()
+
+	navigateThroughProxy(t, proxy.URL)
+
+	got := seen()
+	if len(got) == 0 {
+		t.Fatal("proxy never saw a request; the test did not exercise the challenge")
+	}
+	if !hasCreds(got, "own-user", "own-pass") {
+		t.Fatalf("registered proxy never received its credentials; Proxy-Authorization seen: %q", got)
+	}
+}
+
+// TestEgressGuard_ForeignProxy_GetsNoCredentials: credentials registered for
+// one proxy must not go to a different proxy that also answers 407 (proxies
+// are caller supplied, and the credential slot is connection-wide).
+func TestEgressGuard_ForeignProxy_GetsNoCredentials(t *testing.T) {
+	proxy, seen := fakeAuthProxy(t)
+	guard := acquireGuard(t, acquireSharedBrowser(t))
+	unregister := guard.registerProxyAuth("http://203.0.113.10:3128", "victim-user", "victim-pass")
+	defer unregister()
+
+	navigateThroughProxy(t, proxy.URL)
+
+	got := seen()
+	if len(got) == 0 {
+		t.Fatal("proxy never saw a request; the test did not exercise the challenge")
+	}
+	if hasCreds(got, "victim-user", "victim-pass") {
+		t.Fatalf("a foreign proxy received another proxy's credentials: %q", got)
 	}
 }

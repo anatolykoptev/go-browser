@@ -161,14 +161,17 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 			// Already vetted when the context was created; only the
 			// credentials are needed here. proxyCredentials never resolves
 			// DNS, so a lookup hiccup cannot silently drop proxy auth.
+			// The credentials are scoped to the server Chrome actually dials
+			// for this page; with no such server (mode=default) Chrome never
+			// talks to the proxy, so there is nothing to authenticate.
 			proxyUser, proxyPass := proxyCredentials(proxy)
-			if proxyUser != "" {
+			if proxyUser != "" && mp.ProxyServer != "" {
 				// Register on the connection-wide egress guard (see
 				// egress_guard.go) rather than a separate Fetch.enable/
 				// disable cycle — the latter used to race with, and could
 				// disable, the SSRF guard sharing this same CDP session.
 				if guard := chrome.getGuard(); guard != nil {
-					cleanup := guard.registerProxyAuth(proxyUser, proxyPass)
+					cleanup := guard.registerProxyAuth(mp.ProxyServer, proxyUser, proxyPass)
 					defer cleanup()
 				}
 			}

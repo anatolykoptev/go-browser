@@ -180,6 +180,9 @@ func (p *ContextPool) getOrCreateContextSafe(ctx context.Context, key, mode, pro
 
 	// Slow path: build the new context (CDP call happens here, unlocked).
 	mc := &ManagedContext{Mode: mode, Proxy: proxy, Pages: make(map[string]*ManagedPage)}
+	if mode != "default" {
+		mc.ProxyServer = proxyServer // default mode never sets ProxyServer on Chrome
+	}
 
 	// For default mode, discover the default BrowserContextID from existing tabs
 	// so that TargetCreateTarget creates a tab in the same window instead of a new

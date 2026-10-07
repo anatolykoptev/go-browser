@@ -106,7 +106,10 @@ type ManagedContext struct {
 	Mu    sync.Mutex
 	ID    proto.BrowserBrowserContextID
 	Mode  string // "default", "private", "proxy"
-	Proxy string // proxy URL (only for mode=proxy)
+	Proxy string // proxy URL (only for mode=proxy); may carry credentials
+	// ProxyServer is the vetted, credential-free server Chrome dials for this
+	// context (parseProxy's result); empty when Chrome does not use a proxy.
+	ProxyServer string
 	Pages map[string]*ManagedPage
 }
 
@@ -118,6 +121,7 @@ type ManagedPage struct {
 	mu           sync.Mutex
 	Session      string
 	Mode         string // resolved context mode: "default", "private", or "proxy"
+	ProxyServer  string // copied from the owning ManagedContext; scopes proxy auth
 	Page         *rod.Page
 	ready        chan struct{} // closed when Page != nil (or creation failed)
 	readyOnce    sync.Once     // ensures ready is closed exactly once
@@ -360,6 +364,7 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 	placeholder := &ManagedPage{
 		Session:      session,
 		Mode:         mode,
+		ProxyServer:  mc.ProxyServer,
 		ready:        make(chan struct{}),
 		LastUsed:     time.Now(),
 		TTL:          contextPoolDefaultTTL,
@@ -392,7 +397,7 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 	case page = <-pageCh:
 		cdpErr = <-errCh
 	case <-time.After(pageCreationTimeout):
-		cdpErr = fmt.Errorf("context_pool: create tab in context %q timed out after %s", key, pageCreationTimeout)
+		cdpErr = fmt.Errorf("context_pool: create tab in context %q timed out after %s", redactContextKey(key), pageCreationTimeout)
 	}
 
 	// Phase 4: patch placeholder and signal waiters regardless of outcome.
@@ -413,7 +418,7 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 		delete(mc.Pages, session)
 		mc.Mu.Unlock()
 		cancelPageLife(placeholder)
-		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", key, cdpErr)
+		placeholder.readyErr = fmt.Errorf("context_pool: create tab in context %q: %w", redactContextKey(key), cdpErr)
 		placeholder.signalReady()
 		return nil, placeholder.readyErr
 	}

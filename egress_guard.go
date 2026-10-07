@@ -192,6 +192,7 @@ type egressGuard struct {
 	gen      uint64
 	username string
 	password string
+	server   string // vetted proxy server the credentials belong to
 	active   bool
 
 	// #15: rebindDomains tracks hostnames whose response-stage remoteIPAddress
@@ -450,12 +451,12 @@ func (g *egressGuard) checkFrameNavigated(_ *rod.Browser, ev *proto.PageFrameNav
 // credentials UI).
 func (g *egressGuard) respondAuth(b *rod.Browser, ev *proto.FetchAuthRequired) {
 	g.mu.Lock()
-	active, username, password := g.active, g.username, g.password
+	active, server, username, password := g.active, g.server, g.username, g.password
 	g.mu.Unlock()
 
 	req := proto.FetchContinueWithAuth{
 		RequestID:             ev.RequestID,
-		AuthChallengeResponse: authChallengeResponse(ev.AuthChallenge, active, username, password),
+		AuthChallengeResponse: authChallengeResponse(ev.AuthChallenge, active, server, username, password),
 	}
 	if err := req.Call(b); err != nil {
 		slog.Warn("egress guard: auth challenge response failed", "err", err)
@@ -463,14 +464,18 @@ func (g *egressGuard) respondAuth(b *rod.Browser, ev *proto.FetchAuthRequired) {
 }
 
 // authChallengeResponse decides what to answer to one Fetch.authRequired.
-// The registered credentials belong to the upstream proxy, so they go only to
-// a challenge whose source is the proxy. A site answering 401 with
-// WWW-Authenticate raises a Server-sourced challenge on the same event, and
-// answering that with the proxy credentials hands them to the site, which
-// may be any URL a caller asked Chrome to open. Anything that is not a Proxy
-// challenge, including a missing source, is cancelled.
-func authChallengeResponse(ch *proto.FetchAuthChallenge, active bool, username, password string) *proto.FetchAuthChallengeResponse {
-	if active && ch != nil && ch.Source == proto.FetchAuthChallengeSourceProxy {
+// The registered credentials belong to ONE upstream proxy (server), so they
+// go only to a challenge that is both Proxy-sourced and raised by that
+// proxy's origin. Two leaks this closes:
+//   - a site answering 401 + WWW-Authenticate raises a Server-sourced
+//     challenge on the same event;
+//   - any other proxy a caller points a context at (proxies are caller
+//     supplied) raises a Proxy-sourced challenge of its own, and the slot is
+//     connection-wide, so it would receive whichever credentials another
+//     caller has registered at that moment.
+// Everything else, a missing source or origin included, is cancelled.
+func authChallengeResponse(ch *proto.FetchAuthChallenge, active bool, server, username, password string) *proto.FetchAuthChallengeResponse {
+	if active && ch != nil && ch.Source == proto.FetchAuthChallengeSourceProxy && sameProxyOrigin(ch.Origin, server) {
 		return &proto.FetchAuthChallengeResponse{
 			Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
 			Username: username,
@@ -492,10 +497,11 @@ func authChallengeResponse(ch *proto.FetchAuthChallenge, active bool, username, 
 // it: a generation token guards against a stale unregister (from an earlier,
 // already-finished call) wiping out a still-active, more recent
 // registration from a different concurrent call.
-func (g *egressGuard) registerProxyAuth(username, password string) func() {
+func (g *egressGuard) registerProxyAuth(server, username, password string) func() {
 	g.mu.Lock()
 	g.gen++
 	myGen := g.gen
+	g.server = server
 	g.username = username
 	g.password = password
 	g.active = true
@@ -509,6 +515,7 @@ func (g *egressGuard) registerProxyAuth(username, password string) func() {
 			// its credentials out from under it.
 			return
 		}
+		g.server = ""
 		g.username = ""
 		g.password = ""
 		g.active = false

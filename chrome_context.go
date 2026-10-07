@@ -63,13 +63,13 @@ func (m *ChromeManager) newContext(ctx context.Context, proxy string) (*rod.Brow
 	if proxyUser != "" {
 		guard := m.getGuard()
 		if guard != nil {
-			cleanup = guard.registerProxyAuth(proxyUser, proxyPass)
+			cleanup = guard.registerProxyAuth(proxyServer, proxyUser, proxyPass)
 		} else {
 			// #21: Log when proxy auth is silently skipped — the egress guard is nil
 			// (e.g., during reconnect or if installEgressGuard failed). Without this,
 			// authenticated proxy requests will fail with 407 Proxy Authentication
 			// Required and the caller has no idea why.
-			slog.Warn("chrome: proxy auth registration skipped — egress guard is nil (reconnect in progress?)", "proxyUser", proxyUser)
+			slog.Warn("chrome: proxy auth registration skipped — egress guard is nil (reconnect in progress?)", "proxy", proxyServer)
 		}
 	}
 
