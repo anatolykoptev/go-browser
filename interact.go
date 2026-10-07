@@ -159,8 +159,9 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 	if isNewPage {
 		if proxy != "" {
 			// Already vetted when the context was created; only the
-			// credentials are needed here.
-			_, proxyUser, proxyPass, _ := parseProxy(proxy)
+			// credentials are needed here. proxyCredentials never resolves
+			// DNS, so a lookup hiccup cannot silently drop proxy auth.
+			proxyUser, proxyPass := proxyCredentials(proxy)
 			if proxyUser != "" {
 				// Register on the connection-wide egress guard (see
 				// egress_guard.go) rather than a separate Fetch.enable/

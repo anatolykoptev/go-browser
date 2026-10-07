@@ -100,3 +100,24 @@ func TestParseProxy_Allowlist(t *testing.T) {
 		}
 	}
 }
+
+// TestProxyCredentials_NoDNS: the interact path recovers proxy credentials
+// for an already-vetted proxy. It must not depend on DNS, or a lookup
+// failure would silently skip proxy auth (Chrome then gets 407).
+//
+// Falsification: make proxyCredentials delegate to parseProxy (the vetting,
+// DNS-resolving parser) and the unresolvable host loses its credentials →
+// RED. The interact.go call site itself needs a live Chrome to exercise.
+func TestProxyCredentials_NoDNS(t *testing.T) {
+	user, pass := proxyCredentials("http://alice:s3cret@unresolvable.invalid:80")
+	if user != "alice" || pass != "s3cret" {
+		t.Fatalf("got (%q, %q), want (alice, s3cret)", user, pass)
+	}
+	if u, p := proxyCredentials("http://host.invalid:80"); u != "" || p != "" {
+		t.Fatalf("no-credential proxy: got (%q, %q)", u, p)
+	}
+	if _, _, _, err := parseProxy("http://alice:s3cret@unresolvable.invalid:80"); !errors.Is(err, ErrProxyBlocked) {
+		t.Fatalf("parseProxy must still refuse an unresolvable host at context creation, got %v", err)
+	}
+}
+

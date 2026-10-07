@@ -113,6 +113,25 @@ func parseProxy(raw string) (server, user, pass string, err error) {
 	return server, user, pass, nil
 }
 
+// proxyCredentials returns the user and password embedded in a proxy URL
+// without validating or resolving it. Use it only for a proxy that already
+// passed parseProxy (at context creation): it must not fail on a transient
+// DNS error, or proxy auth would be skipped and Chrome would get 407.
+func proxyCredentials(raw string) (user, pass string) {
+	if raw == "" {
+		return "", ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return "", ""
+	}
+	pass, _ = u.User.Password()
+	return u.User.Username(), pass
+}
+
 // vetProxyHost resolves host and returns the first address when every
 // address is public. Any blocked address, or a resolution failure, refuses
 // the proxy: fail closed.
