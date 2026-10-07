@@ -1,8 +1,10 @@
 package browser
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -476,5 +478,34 @@ func TestGetOrCreatePage_EmptyModeWithProxy_LeavesSharedPrivateUnproxied(t *test
 	}
 	if !own {
 		t.Fatal("empty-mode proxied request did not get its own private-proxy context")
+	}
+}
+
+// TestGetOrCreatePage_CreationLogRedactsProxyCredentials: context creation
+// logs at INFO; for every mode that can carry a proxy, the log line must not
+// contain the proxy's username or password.
+func TestGetOrCreatePage_CreationLogRedactsProxyCredentials(t *testing.T) {
+	allowLoopbackProxies(t)
+	chrome := interactChrome(t)
+	proxy, _ := fakeAuthProxy(t)
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	for _, mode := range []string{"private", "", modeProxy} {
+		raw := "http://loguser" + mode + ":LOGSECRET" + mode + "@" + proxy.Listener.Addr().String()
+		if _, err := chrome.Pool().GetOrCreatePage("", mode, raw, "about:blank"); err != nil {
+			t.Fatalf("mode %q: %v", mode, err)
+		}
+	}
+	out := buf.String()
+	if !strings.Contains(out, "created context") {
+		t.Fatal("no creation log captured; the test did not exercise the log line")
+	}
+	for _, secret := range []string{"LOGSECRET", "loguser"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("creation log leaks %q:\n%s", secret, out)
+		}
 	}
 }

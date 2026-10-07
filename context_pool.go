@@ -105,8 +105,8 @@ func (p *ContextPool) getStealthProfile() *StealthProfile {
 type ManagedContext struct {
 	Mu    sync.Mutex
 	ID    proto.BrowserBrowserContextID
-	Mode  string // "default", "private", "proxy"
-	Proxy string // proxy URL (only for mode=proxy); may carry credentials
+	Mode  string // "default", "private", "proxy"; not an egress indicator (see ProxyServer)
+	Proxy string // raw proxy URL the context was created for; may carry credentials
 	// ProxyServer is the vetted, credential-free server Chrome dials for this
 	// context (parseProxy's result); empty when Chrome does not use a proxy.
 	ProxyServer string

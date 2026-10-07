@@ -32,7 +32,7 @@ type InteractRequest struct {
 	Proxy       *string  `json:"proxy,omitempty"`
 	// New session/mode params.
 	Session string `json:"session,omitempty"` // named session; empty = ephemeral
-	Mode    string `json:"mode,omitempty"`    // "default", "private", "proxy"; empty + named session → "default" (#74)
+	Mode    string `json:"mode,omitempty"`    // "default", "private", "proxy"; empty + named session → "default" (#74); private + proxy → its own incognito context through that proxy
 	// Backward-compat params (still accepted, mapped to Session/Mode internally).
 	SessionID   *string `json:"session_id,omitempty"`
 	Profile     string  `json:"profile,omitempty"`
