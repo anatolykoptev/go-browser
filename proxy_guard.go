@@ -194,3 +194,21 @@ func vetProxyHost(ctx context.Context, host string) (net.IP, error) {
 	}
 	return addrs[0].IP, nil
 }
+
+// redactProxyUserinfo returns raw without its userinfo, for anything that
+// leaves the process (ContextInfo.Proxy is served by chrome_tabs). A value
+// that does not parse as a URL with a host keeps only what follows the last
+// '@', so a malformed string cannot smuggle credentials through either.
+func redactProxyUserinfo(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		u.User = nil
+		return u.String()
+	}
+	if i := strings.LastIndex(raw, "@"); i >= 0 {
+		return raw[i+1:]
+	}
+	return raw
+}

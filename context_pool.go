@@ -151,6 +151,8 @@ func (mp *ManagedPage) IsValid(pool *ContextPool) bool {
 }
 
 // ContextInfo describes a context and its sessions (for chrome_tabs tool).
+// Proxy never carries userinfo: List serves it to callers, and the raw value
+// holds the upstream proxy's username and password.
 type ContextInfo struct {
 	Mode     string        `json:"mode"`
 	Proxy    string        `json:"proxy,omitempty"`
@@ -548,7 +550,7 @@ func (p *ContextPool) List() []ContextInfo {
 	result := make([]ContextInfo, 0, len(ctxs))
 	for _, mc := range ctxs {
 		mc.Mu.Lock()
-		ci := ContextInfo{Mode: mc.Mode, Proxy: mc.Proxy, Sessions: make([]SessionInfo, 0, len(mc.Pages))}
+		ci := ContextInfo{Mode: mc.Mode, Proxy: redactProxyUserinfo(mc.Proxy), Sessions: make([]SessionInfo, 0, len(mc.Pages))}
 		for _, mp := range mc.Pages {
 			mp.mu.Lock()
 			si := SessionInfo{Name: mp.Session, URL: mp.URL, LastUsed: formatAge(mp.LastUsed)}

@@ -453,20 +453,32 @@ func (g *egressGuard) respondAuth(b *rod.Browser, ev *proto.FetchAuthRequired) {
 	active, username, password := g.active, g.username, g.password
 	g.mu.Unlock()
 
-	req := proto.FetchContinueWithAuth{RequestID: ev.RequestID}
-	if active {
-		req.AuthChallengeResponse = &proto.FetchAuthChallengeResponse{
+	req := proto.FetchContinueWithAuth{
+		RequestID:             ev.RequestID,
+		AuthChallengeResponse: authChallengeResponse(ev.AuthChallenge, active, username, password),
+	}
+	if err := req.Call(b); err != nil {
+		slog.Warn("egress guard: auth challenge response failed", "err", err)
+	}
+}
+
+// authChallengeResponse decides what to answer to one Fetch.authRequired.
+// The registered credentials belong to the upstream proxy, so they go only to
+// a challenge whose source is the proxy. A site answering 401 with
+// WWW-Authenticate raises a Server-sourced challenge on the same event, and
+// answering that with the proxy credentials hands them to the site, which
+// may be any URL a caller asked Chrome to open. Anything that is not a Proxy
+// challenge, including a missing source, is cancelled.
+func authChallengeResponse(ch *proto.FetchAuthChallenge, active bool, username, password string) *proto.FetchAuthChallengeResponse {
+	if active && ch != nil && ch.Source == proto.FetchAuthChallengeSourceProxy {
+		return &proto.FetchAuthChallengeResponse{
 			Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
 			Username: username,
 			Password: password,
 		}
-	} else {
-		req.AuthChallengeResponse = &proto.FetchAuthChallengeResponse{
-			Response: proto.FetchAuthChallengeResponseResponseCancelAuth,
-		}
 	}
-	if err := req.Call(b); err != nil {
-		slog.Warn("egress guard: auth challenge response failed", "err", err)
+	return &proto.FetchAuthChallengeResponse{
+		Response: proto.FetchAuthChallengeResponseResponseCancelAuth,
 	}
 }
 
