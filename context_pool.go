@@ -110,7 +110,7 @@ type ManagedContext struct {
 	// ProxyServer is the vetted, credential-free server Chrome dials for this
 	// context (parseProxy's result); empty when Chrome does not use a proxy.
 	ProxyServer string
-	Pages map[string]*ManagedPage
+	Pages       map[string]*ManagedPage
 }
 
 // ManagedPage is a named tab within a ManagedContext.

@@ -473,6 +473,7 @@ func (g *egressGuard) respondAuth(b *rod.Browser, ev *proto.FetchAuthRequired) {
 //     supplied) raises a Proxy-sourced challenge of its own, and the slot is
 //     connection-wide, so it would receive whichever credentials another
 //     caller has registered at that moment.
+//
 // Everything else, a missing source or origin included, is cancelled.
 func authChallengeResponse(ch *proto.FetchAuthChallenge, active bool, server, username, password string) *proto.FetchAuthChallengeResponse {
 	if active && ch != nil && ch.Source == proto.FetchAuthChallengeSourceProxy && sameProxyOrigin(ch.Origin, server) {
