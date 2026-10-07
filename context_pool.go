@@ -50,7 +50,7 @@ const (
 type ContextPool struct {
 	contextsMu sync.RWMutex
 	browser    atomic.Pointer[rod.Browser]
-	contexts   map[string]*ManagedContext // key: "default" | "private" | "proxy:<url>"
+	contexts   map[string]*ManagedContext // key: "default" | "private" | "private-proxy:<url>" | "proxy:<url>"
 	stop       chan struct{}
 	done       chan struct{}
 
@@ -270,17 +270,6 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 		} else {
 			mode = modeDefault
 		}
-	}
-	// Rule 2: private + proxy → the proxy-keyed context. contextKey keys
-	// "private" without the proxy, so a shared private context would dial
-	// whichever proxy its creator named: a later caller with another proxy
-	// would egress (and authenticate) through the creator's proxy, a caller
-	// naming a proxy could egress directly through a proxy-less one, and a
-	// no-proxy caller could be routed through someone's proxy. A proxy
-	// context is an incognito context too, keyed by the exact proxy, so this
-	// keeps private's isolation and makes the proxy part of the identity.
-	if mode == "private" && proxy != "" {
-		mode = modeProxy
 	}
 	key, err := contextKey(mode, proxy)
 	if err != nil {

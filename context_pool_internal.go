@@ -55,11 +55,23 @@ var ErrInvalidMode = errors.New("browser: invalid context mode")
 // Rule 1 (named session defaults to persistent) is applied by the caller
 // (GetOrCreatePage) BEFORE contextKey is invoked, so an empty mode reaching
 // contextKey means the session is anonymous — leave it ephemeral.
+// privateProxyKeyPrefix keys a private (ephemeral, incognito) context that
+// egresses through a specific proxy.
+const privateProxyKeyPrefix = "private-proxy:"
+
 func contextKey(mode, proxy string) (string, error) {
 	switch mode {
 	case "default":
 		return "default", nil
 	case "private", "":
+		// A private request with a proxy gets its own incognito context keyed
+		// by that exact proxy. It must not share "private" (which would dial
+		// whichever proxy its creator named, for every later caller) nor
+		// "proxy:<raw>" (the persistent jar Rule 1 gives named sessions, e.g.
+		// a logged-in account), so ephemeral work never sees those cookies.
+		if proxy != "" {
+			return privateProxyKeyPrefix + proxy, nil
+		}
 		return "private", nil
 	case "proxy":
 		return "proxy:" + proxy, nil

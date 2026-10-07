@@ -59,10 +59,11 @@ func TestRedactProxyUserinfo(t *testing.T) {
 
 func TestRedactContextKey(t *testing.T) {
 	cases := map[string]string{
-		"default":                        "default",
-		"private":                        "private",
-		"proxy:http://u:pw@1.2.3.4:8080": "proxy:http://1.2.3.4:8080",
-		"proxy:http://1.2.3.4:8080":      "proxy:http://1.2.3.4:8080",
+		"default":                                "default",
+		"private":                                "private",
+		"proxy:http://u:pw@1.2.3.4:8080":         "proxy:http://1.2.3.4:8080",
+		"proxy:http://1.2.3.4:8080":              "proxy:http://1.2.3.4:8080",
+		"private-proxy:http://u:pw@1.2.3.4:8080": "private-proxy:http://1.2.3.4:8080",
 	}
 	for in, want := range cases {
 		if got := redactContextKey(in); got != want {
@@ -411,5 +412,69 @@ func TestRunInteract_NoProxyThenPrivateProxy_GoesThroughProxy(t *testing.T) {
 	_ = RunInteract(ctx, chrome, InteractRequest{Mode: "private", Proxy: &raw, NoStealth: true, URL: "http://example.com/?asym=1"})
 	if len(seen()) == 0 {
 		t.Fatal("proxied caller egressed without its proxy (the proxy saw no request)")
+	}
+}
+
+func contextIDFor(chrome *ChromeManager, key string) (string, bool) {
+	p := chrome.Pool()
+	p.contextsMu.RLock()
+	defer p.contextsMu.RUnlock()
+	mc, ok := p.contexts[key]
+	if !ok {
+		return "", false
+	}
+	return string(mc.ID), true
+}
+
+// TestRunInteract_PrivateProxy_DoesNotShareThePersistentProxyJar: a named
+// session with a proxy (Rule 1, the persistent jar, e.g. a logged-in
+// account) and an ephemeral private call through the SAME proxy must land in
+// different browser contexts, so the ephemeral call never sees the
+// persistent session's cookies.
+func TestRunInteract_PrivateProxy_DoesNotShareThePersistentProxyJar(t *testing.T) {
+	allowLoopbackProxies(t)
+	chrome := interactChrome(t)
+	proxy, _ := fakeAuthProxy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	raw := "http://acct:acct-pass@" + proxy.Listener.Addr().String()
+	if r := RunInteract(ctx, chrome, InteractRequest{Session: "logged-in", Proxy: &raw, NoStealth: true, URL: "about:blank"}); r.Status == "error" {
+		t.Fatalf("persistent session: %s", r.Error)
+	}
+	if r := RunInteract(ctx, chrome, InteractRequest{Session: "scan", Mode: "private", Proxy: &raw, NoStealth: true, URL: "about:blank"}); r.Status == "error" {
+		t.Fatalf("private scan: %s", r.Error)
+	}
+	persistent, ok1 := contextIDFor(chrome, "proxy:"+raw)
+	ephemeral, ok2 := contextIDFor(chrome, privateProxyKeyPrefix+raw)
+	if !ok1 || !ok2 {
+		t.Fatalf("contexts present: persistent=%v private-proxy=%v", ok1, ok2)
+	}
+	if persistent == ephemeral {
+		t.Fatalf("private+proxy shares browser context %s with the persistent proxy session", persistent)
+	}
+}
+
+// TestGetOrCreatePage_EmptyModeWithProxy_LeavesSharedPrivateUnproxied: the
+// exported API with mode "" (an alias of private) and a proxy must not put
+// that proxy on the shared "private" context.
+func TestGetOrCreatePage_EmptyModeWithProxy_LeavesSharedPrivateUnproxied(t *testing.T) {
+	allowLoopbackProxies(t)
+	chrome := interactChrome(t)
+	proxy, _ := fakeAuthProxy(t)
+	raw := "http://ev:ev-pass@" + proxy.Listener.Addr().String()
+	if _, err := chrome.Pool().GetOrCreatePage("", "", raw, "about:blank"); err != nil {
+		t.Fatalf("GetOrCreatePage: %v", err)
+	}
+	p := chrome.Pool()
+	p.contextsMu.RLock()
+	shared := p.contexts["private"]
+	_, own := p.contexts[privateProxyKeyPrefix+raw]
+	p.contextsMu.RUnlock()
+	if shared != nil && shared.ProxyServer != "" {
+		t.Fatalf("shared private context got ProxyServer %q", shared.ProxyServer)
+	}
+	if !own {
+		t.Fatal("empty-mode proxied request did not get its own private-proxy context")
 	}
 }

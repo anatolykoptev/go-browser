@@ -212,11 +212,14 @@ func redactProxyUserinfo(raw string) string {
 	return raw[at+1:]
 }
 
-// redactContextKey is a pool key ("default" | "private" | "proxy:<raw>")
-// with any proxy credentials removed, for errors and logs.
+// redactContextKey is a pool key ("default" | "private" |
+// "private-proxy:<raw>" | "proxy:<raw>") with any proxy credentials removed,
+// for errors and logs.
 func redactContextKey(key string) string {
-	if rest, ok := strings.CutPrefix(key, "proxy:"); ok {
-		return "proxy:" + redactProxyUserinfo(rest)
+	for _, prefix := range []string{privateProxyKeyPrefix, "proxy:"} {
+		if rest, ok := strings.CutPrefix(key, prefix); ok {
+			return prefix + redactProxyUserinfo(rest)
+		}
 	}
 	return key
 }
