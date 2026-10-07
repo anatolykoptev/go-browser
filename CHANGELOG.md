@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.11](https://github.com/anatolykoptev/go-browser/compare/v0.20.10...v0.20.11) (2026-10-07)
+
+
+### Fixed
+
+* **security:** keep proxy credentials out of chrome_tabs and away from sites ([#90](https://github.com/anatolykoptev/go-browser/issues/90)) ([866d98c](https://github.com/anatolykoptev/go-browser/commit/866d98c25fd9d835f8480572d627f9fe47ab5837))
+
 ## [0.20.10](https://github.com/anatolykoptev/go-browser/compare/v0.20.9...v0.20.10) (2026-10-07)
 
 
