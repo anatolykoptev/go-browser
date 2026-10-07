@@ -122,20 +122,6 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 		return InteractResponse{URL: req.URL, Status: "error", Error: err.Error(), ErrorCode: ClassifyError(err)}
 	}
 
-	// A shared context ("private" is keyed without the proxy) dials whatever
-	// proxy its creator gave it. A caller naming a different proxy, or none,
-	// would have its traffic sent through that proxy and, before this check,
-	// its credentials registered against it. Refuse instead.
-	if mp.ProxyServer != "" && proxy != mp.proxyRaw {
-		return InteractResponse{
-			URL:       req.URL,
-			Status:    "error",
-			Error:     "session context is bound to a different proxy; use mode=proxy for a caller-specific proxy",
-			ErrorCode: ErrCodeInvalidInput,
-			SessionID: session,
-		}
-	}
-
 	// Check if session is detached for human control
 	if !mp.DetachedAt.IsZero() {
 		return InteractResponse{

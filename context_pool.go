@@ -118,13 +118,10 @@ type ManagedContext struct {
 // placeholder (Page==nil) must wait on ready before using the page.
 // mu protects LastUsed and URL after the page is ready.
 type ManagedPage struct {
-	mu          sync.Mutex
-	Session     string
-	Mode        string // resolved context mode: "default", "private", or "proxy"
-	ProxyServer string // copied from the owning ManagedContext; scopes proxy auth
-	// proxyRaw is the owning context's raw proxy (may carry credentials;
-	// never serialized). RunInteract refuses a caller whose proxy differs.
-	proxyRaw     string
+	mu           sync.Mutex
+	Session      string
+	Mode         string // resolved context mode: "default", "private", or "proxy"
+	ProxyServer  string // copied from the owning ManagedContext; scopes proxy auth
 	Page         *rod.Page
 	ready        chan struct{} // closed when Page != nil (or creation failed)
 	readyOnce    sync.Once     // ensures ready is closed exactly once
@@ -274,6 +271,17 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 			mode = modeDefault
 		}
 	}
+	// Rule 2: private + proxy → the proxy-keyed context. contextKey keys
+	// "private" without the proxy, so a shared private context would dial
+	// whichever proxy its creator named: a later caller with another proxy
+	// would egress (and authenticate) through the creator's proxy, a caller
+	// naming a proxy could egress directly through a proxy-less one, and a
+	// no-proxy caller could be routed through someone's proxy. A proxy
+	// context is an incognito context too, keyed by the exact proxy, so this
+	// keeps private's isolation and makes the proxy part of the identity.
+	if mode == "private" && proxy != "" {
+		mode = modeProxy
+	}
 	key, err := contextKey(mode, proxy)
 	if err != nil {
 		return nil, err
@@ -368,7 +376,6 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 		Session:      session,
 		Mode:         mode,
 		ProxyServer:  mc.ProxyServer,
-		proxyRaw:     mc.Proxy,
 		ready:        make(chan struct{}),
 		LastUsed:     time.Now(),
 		TTL:          contextPoolDefaultTTL,

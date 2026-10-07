@@ -324,16 +324,30 @@ func TestRunInteract_ProxyMode_RegistersCredentialsForItsProxy(t *testing.T) {
 	}
 }
 
-// TestRunInteract_SharedPrivateContext_RefusesOtherProxy: "private" is keyed
-// without the proxy, so a second caller with its own proxy lands in a
-// context that dials the first caller's proxy. It must be refused, and its
-// credentials must never reach the first caller's proxy.
-func TestRunInteract_SharedPrivateContext_RefusesOtherProxy(t *testing.T) {
+// privatePageCount reports how many pages the shared "private" context holds.
+func privatePageCount(chrome *ChromeManager) int {
+	p := chrome.Pool()
+	p.contextsMu.RLock()
+	mc := p.contexts["private"]
+	p.contextsMu.RUnlock()
+	if mc == nil {
+		return 0
+	}
+	mc.Mu.Lock()
+	defer mc.Mu.Unlock()
+	return len(mc.Pages)
+}
+
+// TestRunInteract_PrivateWithProxy_UsesItsOwnProxy: mode=private + proxy
+// resolves to the context keyed by that exact proxy, so two callers with
+// different proxies never share a context, and each proxy sees only its own
+// caller's credentials.
+func TestRunInteract_PrivateWithProxy_UsesItsOwnProxy(t *testing.T) {
 	allowLoopbackProxies(t)
 	chrome := interactChrome(t)
 	first, firstSeen := fakeAuthProxy(t)
 	second, secondSeen := fakeAuthProxy(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	firstURL := "http://first:first-pass@" + first.Listener.Addr().String()
@@ -342,12 +356,60 @@ func TestRunInteract_SharedPrivateContext_RefusesOtherProxy(t *testing.T) {
 		t.Fatalf("first caller: %s", r1.Error)
 	}
 	secondURL := "http://second:second-pass@" + second.Listener.Addr().String()
-	r2 := RunInteract(ctx, chrome, InteractRequest{Mode: "private", Proxy: &secondURL, NoStealth: true, URL: "http://example.com/?collide=1"})
-	if r2.Status != "error" || !strings.Contains(r2.Error, "different proxy") {
-		t.Errorf("second caller: status %q error %q, want refusal", r2.Status, r2.Error)
-	}
+	_ = RunInteract(ctx, chrome, InteractRequest{Mode: "private", Proxy: &secondURL, NoStealth: true, URL: "http://example.com/?own=1"})
+
 	if hasCreds(firstSeen(), "second", "second-pass") {
 		t.Fatalf("second caller's credentials reached the first caller's proxy: %q", firstSeen())
 	}
-	_ = secondSeen
+	if !hasCreds(secondSeen(), "second", "second-pass") {
+		t.Fatalf("second caller did not go through its own proxy; it saw %q", secondSeen())
+	}
+}
+
+// TestRunInteract_PrivateProxyThenNoProxy_NotWedged: after a private+proxy
+// call (go-wowa's full security scan shape), ordinary no-proxy private calls
+// (snapshot/screenshot shape) keep working and leave no tabs behind.
+func TestRunInteract_PrivateProxyThenNoProxy_NotWedged(t *testing.T) {
+	allowLoopbackProxies(t)
+	chrome := interactChrome(t)
+	proxy, _ := fakeAuthProxy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	raw := "http://scan:scan-pass@" + proxy.Listener.Addr().String()
+	r1 := RunInteract(ctx, chrome, InteractRequest{Session: "__security_scan__", Mode: "private", Proxy: &raw, NoStealth: true, URL: "about:blank"})
+	if r1.Status == "error" {
+		t.Fatalf("scan-shaped call: %s", r1.Error)
+	}
+	for i := 0; i < 3; i++ {
+		r := RunInteract(ctx, chrome, InteractRequest{Mode: "private", NoStealth: true, URL: "about:blank",
+			Actions: []Action{{Type: "evaluate", Script: "1+1"}}})
+		if r.Status != "ok" {
+			t.Fatalf("no-proxy private call %d after a proxied one: %q %s", i, r.Status, r.Error)
+		}
+	}
+	if n := privatePageCount(chrome); n != 0 {
+		t.Errorf("shared private context holds %d pages after ephemeral calls, want 0", n)
+	}
+}
+
+// TestRunInteract_NoProxyThenPrivateProxy_GoesThroughProxy: a caller naming
+// a proxy must not egress directly because a proxy-less private context
+// already exists.
+func TestRunInteract_NoProxyThenPrivateProxy_GoesThroughProxy(t *testing.T) {
+	allowLoopbackProxies(t)
+	chrome := interactChrome(t)
+	proxy, seen := fakeAuthProxy(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	r1 := RunInteract(ctx, chrome, InteractRequest{Session: "plain-sess", Mode: "private", NoStealth: true, URL: "about:blank"})
+	if r1.Status == "error" {
+		t.Fatalf("no-proxy caller: %s", r1.Error)
+	}
+	raw := "http://pu:pp@" + proxy.Listener.Addr().String()
+	_ = RunInteract(ctx, chrome, InteractRequest{Mode: "private", Proxy: &raw, NoStealth: true, URL: "http://example.com/?asym=1"})
+	if len(seen()) == 0 {
+		t.Fatal("proxied caller egressed without its proxy (the proxy saw no request)")
+	}
 }
