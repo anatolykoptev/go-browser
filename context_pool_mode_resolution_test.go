@@ -168,18 +168,19 @@ func TestContextPool_ResolvedMode_Readable(t *testing.T) {
 	defer p.Close()
 
 	cases := []struct {
-		name string
-		mode string
-		want string
+		name  string
+		mode  string
+		proxy string // mode "proxy" requires one (ErrProxyRequired); never dialed at context creation
+		want  string
 	}{
-		{"default", "default", "default"},
-		{"private", "private", "private"},
-		{"proxy", "proxy", "proxy"},
+		{"default", "default", "", "default"},
+		{"private", "private", "", "private"},
+		{"proxy", "proxy", "http://203.0.113.1:9", "proxy"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := "mode-read-" + tc.name
-			mp, err := p.GetOrCreatePage(sess, tc.mode, "", "about:blank")
+			mp, err := p.GetOrCreatePage(sess, tc.mode, tc.proxy, "about:blank")
 			if err != nil {
 				t.Fatalf("GetOrCreatePage(%q): %v", tc.mode, err)
 			}
