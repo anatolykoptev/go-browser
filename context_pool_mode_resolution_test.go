@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -477,5 +478,99 @@ func TestRunInteract_DefaultModeWithProxy_Rejected(t *testing.T) {
 	}
 	if resp.ErrorCode == ErrCodeProxyConflict {
 		t.Errorf("control: mode=default without proxy hit the proxy rejection — guard over-fires")
+	}
+}
+
+// TestContextKey_ProxyModeWithoutProxy_Rejected verifies the sibling hole of
+// #97 at the contextKey level: mode "proxy" with an empty proxy would create a
+// direct incognito context on the host's real IP while the caller believes it
+// is proxied. It must fail with ErrProxyRequired / proxy_required.
+//
+// Mutation probe: delete the `if proxy == ""` guard in contextKey's "proxy"
+// arm (context_pool_internal.go) → contextKey returns "proxy:", nil → the
+// err == nil check below fails → RED.
+func TestContextKey_ProxyModeWithoutProxy_Rejected(t *testing.T) {
+	_, err := contextKey("proxy", "")
+	if err == nil {
+		t.Fatal("contextKey(proxy, \"\") returned nil error — the caller asked for " +
+			"proxy egress and would silently get a direct context")
+	}
+	if !errors.Is(err, ErrProxyRequired) {
+		t.Errorf("error is not ErrProxyRequired: %v", err)
+	}
+	if code := ClassifyError(err); code != ErrCodeProxyRequired {
+		t.Errorf("ClassifyError = %q, want %q", code, ErrCodeProxyRequired)
+	}
+}
+
+// TestContextKey_ProxyConflictMessage_ActionableNoEcho pins the conflict
+// message: it names the remedy and the implied-by flags, and never echoes the
+// (credential-bearing) proxy URL.
+func TestContextKey_ProxyConflictMessage_ActionableNoEcho(t *testing.T) {
+	const proxy = "http://user:pass@192.0.2.1:9"
+	_, err := contextKey("default", proxy)
+	if err == nil {
+		t.Fatal("expected ErrProxyConflict")
+	}
+	for _, want := range []string{"use_profile/reuse_page", `mode "proxy"`, `"private"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "pass") || strings.Contains(err.Error(), "192.0.2.1") {
+		t.Errorf("message echoes proxy URL parts: %v", err)
+	}
+}
+
+// TestContextPool_ProxyModeWithoutProxy_Rejected: GetOrCreatePage must fail
+// before any context is created, for both an ephemeral-style and a named
+// session.
+//
+// Mutation probe: remove the contextKey guard → the call registers a "proxy:"
+// context and fails later (ErrUnavailable) → errors.Is(ErrProxyRequired) false
+// and len(p.contexts) == 1 → RED.
+func TestContextPool_ProxyModeWithoutProxy_Rejected(t *testing.T) {
+	for _, session := range []string{"", "proxy-req-sess"} {
+		p := NewContextPool(nil)
+		_, err := p.GetOrCreatePage(session, "proxy", "", "about:blank")
+		if !errors.Is(err, ErrProxyRequired) {
+			t.Errorf("session %q: err = %v, want ErrProxyRequired", session, err)
+		}
+		p.contextsMu.RLock()
+		n := len(p.contexts)
+		p.contextsMu.RUnlock()
+		if n != 0 {
+			t.Errorf("session %q: %d contexts created despite rejection", session, n)
+		}
+		p.Close()
+	}
+}
+
+// TestRunInteract_ProxyModeWithoutProxy_Rejected: the public API returns
+// proxy_required for mode=proxy with no proxy (ephemeral and named session).
+//
+// Mutation probe: remove the contextKey guard → the request proceeds to the
+// nil browser and fails with a different ErrorCode → RED.
+func TestRunInteract_ProxyModeWithoutProxy_Rejected(t *testing.T) {
+	for _, req := range []InteractRequest{
+		{URL: "https://example.com/", Mode: "proxy"},
+		{URL: "https://example.com/", Session: "s", Mode: "proxy"},
+	} {
+		p := NewContextPool(nil)
+		resp := RunInteract(context.Background(), &ChromeManager{pool: p}, req)
+		if resp.Status != "error" || resp.ErrorCode != ErrCodeProxyRequired {
+			t.Errorf("req %+v: Status=%q ErrorCode=%q, want error/%q",
+				req, resp.Status, resp.ErrorCode, ErrCodeProxyRequired)
+		}
+		p.Close()
+	}
+}
+
+// TestClassifyError_ProxyBlocked pins the sentinel-table row for the proxy
+// guard's refusal.
+func TestClassifyError_ProxyBlocked(t *testing.T) {
+	err := fmt.Errorf("%w: unparseable proxy URL", ErrProxyBlocked)
+	if code := ClassifyError(err); code != ErrCodeProxyBlocked {
+		t.Errorf("ClassifyError = %q, want %q", code, ErrCodeProxyBlocked)
 	}
 }

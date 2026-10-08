@@ -42,6 +42,8 @@ var sentinelTable = []struct {
 	{ErrJsException, ErrCodeJsException},
 	{ErrInvalidMode, ErrCodeInvalidInput},
 	{ErrProxyConflict, ErrCodeProxyConflict},
+	{ErrProxyRequired, ErrCodeProxyRequired},
+	{ErrProxyBlocked, ErrCodeProxyBlocked},
 }
 
 // ErrorCode is a stable machine-readable classification for action failures.
@@ -80,6 +82,11 @@ const (
 	// ErrCodeProxyConflict represents a proxy requested on a context mode that
 	// cannot carry it (mode "default" resolves to the persistent profile context)
 	ErrCodeProxyConflict ErrorCode = "proxy_conflict"
+	// ErrCodeProxyRequired represents mode "proxy" requested without a proxy URL
+	ErrCodeProxyRequired ErrorCode = "proxy_required"
+	// ErrCodeProxyBlocked represents a caller-supplied proxy URL refused by the
+	// proxy guard (malformed, wrong scheme, non-public host)
+	ErrCodeProxyBlocked ErrorCode = "proxy_blocked"
 )
 
 // ClassifyError maps a raw Go error to an ErrorCode based on its string.

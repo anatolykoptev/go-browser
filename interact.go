@@ -162,8 +162,8 @@ func RunInteract(ctx context.Context, chrome *ChromeManager, req InteractRequest
 			// credentials are needed here. proxyCredentials never resolves
 			// DNS, so a lookup hiccup cannot silently drop proxy auth.
 			// The credentials are scoped to the server Chrome actually dials
-			// for this page; with no such server (mode=default) Chrome never
-			// talks to the proxy, so there is nothing to authenticate.
+			// for this page (mp.ProxyServer). Defensive: contextKey rejects
+			// mode=default+proxy, so a proxied page always has one.
 			proxyUser, proxyPass := proxyCredentials(proxy)
 			if proxyUser != "" && mp.ProxyServer != "" {
 				// Register on the connection-wide egress guard (see
