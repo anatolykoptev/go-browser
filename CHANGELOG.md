@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.12](https://github.com/anatolykoptev/go-browser/compare/v0.20.11...v0.20.12) (2026-10-08)
+
+
+### Fixed
+
+* **pool:** reject mode=default with a proxy instead of egressing on the real IP ([#97](https://github.com/anatolykoptev/go-browser/issues/97)) ([#100](https://github.com/anatolykoptev/go-browser/issues/100)) ([591a572](https://github.com/anatolykoptev/go-browser/commit/591a572170b979d48eeada8c1df5af39216284fc))
+
 ## [0.20.11](https://github.com/anatolykoptev/go-browser/compare/v0.20.10...v0.20.11) (2026-10-07)
 
 
