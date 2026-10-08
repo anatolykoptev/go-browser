@@ -41,6 +41,7 @@ var sentinelTable = []struct {
 	{ErrCdpError, ErrCodeCdpError},
 	{ErrJsException, ErrCodeJsException},
 	{ErrInvalidMode, ErrCodeInvalidInput},
+	{ErrProxyConflict, ErrCodeProxyConflict},
 }
 
 // ErrorCode is a stable machine-readable classification for action failures.
@@ -76,6 +77,9 @@ const (
 	ErrCodeCdpError ErrorCode = "cdp_error"
 	// ErrCodeJsException represents a JS script throwing during evaluate/script execution
 	ErrCodeJsException ErrorCode = "js_exception"
+	// ErrCodeProxyConflict represents a proxy requested on a context mode that
+	// cannot carry it (mode "default" resolves to the persistent profile context)
+	ErrCodeProxyConflict ErrorCode = "proxy_conflict"
 )
 
 // ClassifyError maps a raw Go error to an ErrorCode based on its string.
