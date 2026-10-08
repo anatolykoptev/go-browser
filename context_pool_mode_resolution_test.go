@@ -1,7 +1,9 @@
 package browser
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -166,18 +168,19 @@ func TestContextPool_ResolvedMode_Readable(t *testing.T) {
 	defer p.Close()
 
 	cases := []struct {
-		name string
-		mode string
-		want string
+		name  string
+		mode  string
+		proxy string // mode "proxy" requires one (ErrProxyRequired); never dialed at context creation
+		want  string
 	}{
-		{"default", "default", "default"},
-		{"private", "private", "private"},
-		{"proxy", "proxy", "proxy"},
+		{"default", "default", "", "default"},
+		{"private", "private", "", "private"},
+		{"proxy", "proxy", "http://203.0.113.1:9", "proxy"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := "mode-read-" + tc.name
-			mp, err := p.GetOrCreatePage(sess, tc.mode, "", "about:blank")
+			mp, err := p.GetOrCreatePage(sess, tc.mode, tc.proxy, "about:blank")
 			if err != nil {
 				t.Fatalf("GetOrCreatePage(%q): %v", tc.mode, err)
 			}
@@ -323,5 +326,252 @@ func TestContextKey_AcceptedModes(t *testing.T) {
 				t.Errorf("contextKey(%q, %q) = %q, want %q", tc.mode, tc.proxy, key, tc.wantKey)
 			}
 		})
+	}
+}
+
+// TestContextKey_DefaultModeWithProxy_Rejected verifies #97 at the pure
+// contextKey level: mode "default" with a non-empty proxy must return a typed
+// error, while every other mode/proxy combination is unchanged. The default
+// context has no proxy knob — honoring the request would silently drop the
+// proxy and egress on the host's real IP.
+//
+// Mutation probe: remove the proxy != "" rejection in contextKey's "default"
+// arm (context_pool_internal.go) → contextKey returns "default", nil → the
+// error assertions below all fail → RED.
+func TestContextKey_DefaultModeWithProxy_Rejected(t *testing.T) {
+	const proxy = "http://user:pass@192.0.2.1:9" // TEST-NET-1 — never dialed
+
+	_, err := contextKey("default", proxy)
+	if err == nil {
+		t.Fatal("contextKey(default, proxy) returned nil error — the proxy would be " +
+			"silently dropped and the page would egress on the host's real IP")
+	}
+	if !errors.Is(err, ErrProxyConflict) {
+		t.Errorf("contextKey(default, proxy) error is not ErrProxyConflict: %v", err)
+	}
+	if code := ClassifyError(err); code != ErrCodeProxyConflict {
+		t.Errorf("ClassifyError = %q, want %q — callers must be able to distinguish "+
+			"a dropped-proxy rejection", code, ErrCodeProxyConflict)
+	}
+	if !strings.Contains(err.Error(), "default") {
+		t.Errorf("error does not name the offending mode: %v", err)
+	}
+	// The raw proxy URL can carry credentials — it must not leak into the error.
+	if strings.Contains(err.Error(), proxy) {
+		t.Errorf("error leaks the raw proxy URL (credentials risk): %v", err)
+	}
+
+	// All other mode/proxy combinations are unchanged.
+	cases := []struct {
+		mode    string
+		proxy   string
+		wantKey string
+	}{
+		{"default", "", "default"},                        // no proxy → unchanged
+		{"proxy", proxy, "proxy:" + proxy},                // proxy mode → unchanged
+		{"", proxy, privateProxyKeyPrefix + proxy},        // empty mode + proxy → unchanged
+		{"private", proxy, privateProxyKeyPrefix + proxy}, // private + proxy → unchanged
+		{"", "", "private"},                               // bare anonymous → unchanged
+	}
+	for _, tc := range cases {
+		t.Run(tc.mode+"/"+tc.wantKey, func(t *testing.T) {
+			key, kerr := contextKey(tc.mode, tc.proxy)
+			if kerr != nil {
+				t.Fatalf("contextKey(%q, %q): unexpected error %v", tc.mode, tc.proxy, kerr)
+			}
+			if key != tc.wantKey {
+				t.Errorf("contextKey(%q, %q) = %q, want %q", tc.mode, tc.proxy, key, tc.wantKey)
+			}
+		})
+	}
+}
+
+// TestContextPool_DefaultModeWithProxy_Rejected verifies #97 at the pool
+// boundary: GetOrCreatePage with mode "default" + a proxy must fail BEFORE any
+// context is created or any page/target is touched. A nil browser is enough —
+// the rejection happens before the first CDP call; if the guard were absent the
+// pool would instead register a "default" context and proceed to page creation
+// on the real IP.
+//
+// Mutation probe: remove the proxy rejection in contextKey → the call proceeds,
+// getOrCreateContextSafe registers a "default" context (nil browser makes
+// discovery return "", then page creation fails with ErrUnavailable) →
+// len(p.contexts) == 1 and errors.Is(err, ErrProxyConflict) is false → RED.
+func TestContextPool_DefaultModeWithProxy_Rejected(t *testing.T) {
+	p := NewContextPool(nil)
+	defer p.Close()
+
+	_, err := p.GetOrCreatePage("default-proxy-sess", "default",
+		"http://user:pass@192.0.2.1:9", "about:blank")
+	if err == nil {
+		t.Fatal("GetOrCreatePage(default, proxy) returned nil error — " +
+			"mode=default+proxy must be rejected, not silently unproxied")
+	}
+	if !errors.Is(err, ErrProxyConflict) {
+		t.Errorf("error is not ErrProxyConflict: %v", err)
+	}
+	if code := ClassifyError(err); code != ErrCodeProxyConflict {
+		t.Errorf("ClassifyError = %q, want %q", code, ErrCodeProxyConflict)
+	}
+
+	// No context may exist after the rejection — a registered "default" context
+	// here would mean the request proceeded towards a real-IP page.
+	p.contextsMu.RLock()
+	n := len(p.contexts)
+	p.contextsMu.RUnlock()
+	if n != 0 {
+		t.Errorf("contexts created despite proxy rejection: %d entries "+
+			"(the request proceeded on the real IP)", n)
+	}
+}
+
+// TestRunInteract_DefaultModeWithProxy_Rejected verifies #97 reaches the public
+// interact API: every InteractRequest shape that resolves to mode "default"
+// plus a non-empty proxy returns Status=error with the proxy_conflict code —
+// before any navigation — instead of running unproxied on the host IP.
+//
+// Mutation probe: remove the proxy rejection in contextKey → each request
+// proceeds to context creation + page setup (failing later on the nil browser
+// with a backend-unavailable error, not proxy_conflict) → RED.
+func TestRunInteract_DefaultModeWithProxy_Rejected(t *testing.T) {
+	proxy := "http://user:pass@192.0.2.1:9"
+	cases := []struct {
+		name string
+		req  InteractRequest
+	}{
+		{"session + explicit default + proxy", InteractRequest{
+			URL: "https://example.com/", Session: "s1", Mode: "default", Proxy: &proxy}},
+		{"ephemeral default + proxy", InteractRequest{
+			URL: "https://example.com/", Mode: "default", Proxy: &proxy}},
+		{"use_profile + proxy (backward compat)", InteractRequest{
+			URL: "https://example.com/", UseProfile: true, Proxy: &proxy}},
+		{"reuse_page + proxy (backward compat)", InteractRequest{
+			URL: "https://example.com/", ReusePage: true, Proxy: &proxy}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewContextPool(nil)
+			defer p.Close()
+			resp := RunInteract(context.Background(), &ChromeManager{pool: p}, tc.req)
+			if resp.Status != "error" {
+				t.Fatalf("Status = %q, want error — mode=default+proxy must be rejected", resp.Status)
+			}
+			if resp.ErrorCode != ErrCodeProxyConflict {
+				t.Errorf("ErrorCode = %q, want %q", resp.ErrorCode, ErrCodeProxyConflict)
+			}
+			p.contextsMu.RLock()
+			n := len(p.contexts)
+			p.contextsMu.RUnlock()
+			if n != 0 {
+				t.Errorf("contexts created despite proxy rejection: %d entries", n)
+			}
+		})
+	}
+
+	// Control: mode "default" WITHOUT a proxy must sail past the rejection —
+	// it fails later on the nil browser with a different code entirely.
+	p := NewContextPool(nil)
+	defer p.Close()
+	resp := RunInteract(context.Background(), &ChromeManager{pool: p}, InteractRequest{
+		URL: "https://example.com/", Session: "s2", Mode: "default"})
+	if resp.Status != "error" {
+		t.Fatalf("control: Status = %q, want error (nil browser)", resp.Status)
+	}
+	if resp.ErrorCode == ErrCodeProxyConflict {
+		t.Errorf("control: mode=default without proxy hit the proxy rejection — guard over-fires")
+	}
+}
+
+// TestContextKey_ProxyModeWithoutProxy_Rejected verifies the sibling hole of
+// #97 at the contextKey level: mode "proxy" with an empty proxy would create a
+// direct incognito context on the host's real IP while the caller believes it
+// is proxied. It must fail with ErrProxyRequired / proxy_required.
+//
+// Mutation probe: delete the `if proxy == ""` guard in contextKey's "proxy"
+// arm (context_pool_internal.go) → contextKey returns "proxy:", nil → the
+// err == nil check below fails → RED.
+func TestContextKey_ProxyModeWithoutProxy_Rejected(t *testing.T) {
+	_, err := contextKey("proxy", "")
+	if err == nil {
+		t.Fatal("contextKey(proxy, \"\") returned nil error — the caller asked for " +
+			"proxy egress and would silently get a direct context")
+	}
+	if !errors.Is(err, ErrProxyRequired) {
+		t.Errorf("error is not ErrProxyRequired: %v", err)
+	}
+	if code := ClassifyError(err); code != ErrCodeProxyRequired {
+		t.Errorf("ClassifyError = %q, want %q", code, ErrCodeProxyRequired)
+	}
+}
+
+// TestContextKey_ProxyConflictMessage_ActionableNoEcho pins the conflict
+// message: it names the remedy and the implied-by flags, and never echoes the
+// (credential-bearing) proxy URL.
+func TestContextKey_ProxyConflictMessage_ActionableNoEcho(t *testing.T) {
+	const proxy = "http://user:pass@192.0.2.1:9"
+	_, err := contextKey("default", proxy)
+	if err == nil {
+		t.Fatal("expected ErrProxyConflict")
+	}
+	for _, want := range []string{"use_profile/reuse_page", `mode "proxy"`, `"private"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "pass") || strings.Contains(err.Error(), "192.0.2.1") {
+		t.Errorf("message echoes proxy URL parts: %v", err)
+	}
+}
+
+// TestContextPool_ProxyModeWithoutProxy_Rejected: GetOrCreatePage must fail
+// before any context is created, for both an ephemeral-style and a named
+// session.
+//
+// Mutation probe: remove the contextKey guard → the call registers a "proxy:"
+// context and fails later (ErrUnavailable) → errors.Is(ErrProxyRequired) false
+// and len(p.contexts) == 1 → RED.
+func TestContextPool_ProxyModeWithoutProxy_Rejected(t *testing.T) {
+	for _, session := range []string{"", "proxy-req-sess"} {
+		p := NewContextPool(nil)
+		_, err := p.GetOrCreatePage(session, "proxy", "", "about:blank")
+		if !errors.Is(err, ErrProxyRequired) {
+			t.Errorf("session %q: err = %v, want ErrProxyRequired", session, err)
+		}
+		p.contextsMu.RLock()
+		n := len(p.contexts)
+		p.contextsMu.RUnlock()
+		if n != 0 {
+			t.Errorf("session %q: %d contexts created despite rejection", session, n)
+		}
+		p.Close()
+	}
+}
+
+// TestRunInteract_ProxyModeWithoutProxy_Rejected: the public API returns
+// proxy_required for mode=proxy with no proxy (ephemeral and named session).
+//
+// Mutation probe: remove the contextKey guard → the request proceeds to the
+// nil browser and fails with a different ErrorCode → RED.
+func TestRunInteract_ProxyModeWithoutProxy_Rejected(t *testing.T) {
+	for _, req := range []InteractRequest{
+		{URL: "https://example.com/", Mode: "proxy"},
+		{URL: "https://example.com/", Session: "s", Mode: "proxy"},
+	} {
+		p := NewContextPool(nil)
+		resp := RunInteract(context.Background(), &ChromeManager{pool: p}, req)
+		if resp.Status != "error" || resp.ErrorCode != ErrCodeProxyRequired {
+			t.Errorf("req %+v: Status=%q ErrorCode=%q, want error/%q",
+				req, resp.Status, resp.ErrorCode, ErrCodeProxyRequired)
+		}
+		p.Close()
+	}
+}
+
+// TestClassifyError_ProxyBlocked pins the sentinel-table row for the proxy
+// guard's refusal.
+func TestClassifyError_ProxyBlocked(t *testing.T) {
+	err := fmt.Errorf("%w: unparseable proxy URL", ErrProxyBlocked)
+	if code := ClassifyError(err); code != ErrCodeProxyBlocked {
+		t.Errorf("ClassifyError = %q, want %q", code, ErrCodeProxyBlocked)
 	}
 }

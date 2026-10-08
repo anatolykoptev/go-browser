@@ -45,6 +45,19 @@ func closePageWithTimeout(page *rod.Page) {
 // CDP/transport failure.
 var ErrInvalidMode = errors.New("browser: invalid context mode")
 
+// ErrProxyConflict is returned when a request asks for a proxy on a context
+// mode that cannot carry one — mode "default" resolves to the persistent
+// profile context, which Chrome gives no proxy knob. Honoring such a request
+// would silently drop the proxy and egress on the host's real IP (issue #97).
+var ErrProxyConflict = errors.New("browser: proxy conflicts with context mode")
+
+// ErrProxyRequired is returned when mode "proxy" is requested without a proxy.
+// An empty proxy would create a plain incognito context that egresses on the
+// host's real IP — the caller asked for proxy egress and would silently get
+// none. Distinct from ErrProxyConflict: the remedy is to supply a proxy (or
+// pick another mode), not to drop one.
+var ErrProxyRequired = errors.New("browser: mode proxy requires a proxy")
+
 // privateProxyKeyPrefix keys a private (ephemeral, incognito) context that
 // egresses through a specific proxy.
 const privateProxyKeyPrefix = "private-proxy:"
@@ -62,6 +75,10 @@ const privateProxyKeyPrefix = "private-proxy:"
 func contextKey(mode, proxy string) (string, error) {
 	switch mode {
 	case "default":
+		if proxy != "" {
+			return "", fmt.Errorf("%w: mode %q (also implied by use_profile/reuse_page) "+
+				"cannot be used with a proxy; use mode \"proxy\" or \"private\"", ErrProxyConflict, mode)
+		}
 		return "default", nil
 	case "private", "":
 		// A private request with a proxy gets its own incognito context keyed
@@ -74,6 +91,9 @@ func contextKey(mode, proxy string) (string, error) {
 		}
 		return "private", nil
 	case "proxy":
+		if proxy == "" {
+			return "", fmt.Errorf("%w: pass a proxy URL, or use mode \"private\" for no proxy", ErrProxyRequired)
+		}
 		return "proxy:" + proxy, nil
 	default:
 		return "", fmt.Errorf("%w: %q (accepted: default, private, proxy)", ErrInvalidMode, mode)
@@ -196,7 +216,7 @@ func (p *ContextPool) getOrCreateContextSafe(ctx context.Context, key, mode, pro
 	}
 	mc := &ManagedContext{Mode: mode, Proxy: proxy, Pages: make(map[string]*ManagedPage)}
 	if mode != "default" {
-		mc.ProxyServer = proxyServer // default mode never sets ProxyServer on Chrome
+		mc.ProxyServer = proxyServer // default mode carries no proxy (contextKey rejects default+proxy)
 	}
 
 	// For default mode, discover the default BrowserContextID from existing tabs

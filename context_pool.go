@@ -261,9 +261,9 @@ func (p *ContextPool) getOrCreatePage(ctx context.Context, session, mode, proxy,
 	// Rule 1: named session + empty mode → persistent context. With a proxy
 	// the persistent context is the proxy context (egress through that proxy),
 	// matching resolveSessionParams in interact.go. Hardcoding "default" here
-	// would drop the proxy: contextKey("default", proxy) yields "default", and
-	// getOrCreateContextSafe's default branch never sets proxyServer — the
-	// caller would get an unproxied context (proxy bypass / datacenter-IP leak).
+	// would turn every proxied named session into a mode=default+proxy request,
+	// which contextKey now rejects with ErrProxyConflict (it used to silently
+	// drop the proxy and egress on the host's real IP).
 	if session != "" && mode == "" {
 		if proxy != "" {
 			mode = modeProxy
