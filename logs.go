@@ -210,7 +210,7 @@ func (c *LogCollector) FilterNetwork(urlSubstr string) []NetworkEntry {
 }
 
 // Stats returns the current count of captured entries per category. Non-blocking,
-// lock held briefly. Intended for periodic Prometheus scraping. Note: because the
+// lock held briefly. Intended for periodic Prometheus polling. Note: because the
 // underlying buffers are ring buffers, these counts can decrease when the oldest
 // entry is evicted after reaching maxLogEntries.
 func (c *LogCollector) Stats() (network, console, exceptions, navigations int) {

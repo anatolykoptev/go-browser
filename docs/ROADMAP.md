@@ -83,7 +83,7 @@
 
 **Done (via go-wowa auto-bypass, 2026-04-01):**
 - [x] Protection-specific bypass profiles (22 profiles for CF, DataDome, PX, Akamai, etc.)
-- [x] Active evasion JS: webdriver, chrome.runtime, plugins, permissions, iframes, codecs, WebGL
+- [x] Active anti-detection JS: webdriver, chrome.runtime, plugins, permissions, iframes, codecs, WebGL
 - [x] Deterministic canvas noise (seed-based LCG, not random)
 - [x] Auto-detect + auto-bypass pipeline in `chrome_interact` (auto_bypass=true)
 
