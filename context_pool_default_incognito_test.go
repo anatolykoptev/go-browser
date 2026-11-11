@@ -51,7 +51,7 @@ func launchDedicatedBrowser(t *testing.T) (*rod.Browser, func()) {
 // Root cause: getOrCreateContextSafe and rediscoverDefaultContext bound the
 // default context's BrowserContextID to the FIRST page target returned by
 // TargetGetTargets. When the pool has itself created private/proxy incognito
-// contexts (each with live scraping page targets), and TargetGetTargets returns
+// contexts (each with live page-fetching page targets), and TargetGetTargets returns
 // them in arbitrary order, that "first page" could be an incognito tab — binding
 // mode=default to an incognito, anonymous cookie jar.
 //
@@ -72,7 +72,7 @@ func TestContextPool_DefaultDiscovery_ExcludesIncognitoContext(t *testing.T) {
 	defer p.Close()
 
 	// Create a REAL incognito (private) BrowserContext with a live page target —
-	// exactly what the pool does for mode=private / mode=proxy scraping tabs.
+	// exactly what the pool does for mode=private / mode=proxy page-fetching tabs.
 	incognitoID := newContextWithPage(t, br)
 
 	// Register the incognito context in the pool so it is part of the known,

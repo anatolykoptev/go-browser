@@ -157,7 +157,7 @@ func (p *ContextPool) knownIncognitoCtxIDs() map[proto.BrowserBrowserContextID]s
 // context was already registered, and a snapshot taken AFTER the CDP call is
 // guaranteed to include its ID → it is correctly excluded. Snapshotting FIRST
 // would reopen the leak as a race window: a concurrent mode=private/proxy create
-// running on go-wowa's scraping tabs could register its context and surface its
+// running on go-wowa's page-fetching tabs could register its context and surface its
 // page BETWEEN an earlier snapshot and this call, and that page would be misread
 // as the persistent default. The only residual race under this order is a
 // context disposed between the two calls — a dead id that fails the subsequent

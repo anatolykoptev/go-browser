@@ -7,7 +7,7 @@
 - **Headed Chrome** via Xvfb + persistent profile (Docker volume)
 - **bot.sannysoft.com**: 56/56 PASS
 - **TLS/HTTP2**: identical to real Chrome 145 (JA4, Akamai hash verified)
-- **Scraping**: Amazon, Booking, Avito, Reddit, HN, GitHub — 0 blocks
+- **Page fetching**: Amazon, Booking, Avito, Reddit, HN, GitHub — 0 blocks
 - **Twitter 399**: all open-source solutions broken, not our issue
 
 ## Phase 1: Quick JS Fixes — ✅ DONE
@@ -81,7 +81,7 @@ Implemented in go-wowa as `security_scan` MCP tool + `auto_bypass` in `chrome_in
 - Lie detection (6 probe categories: canvas, screen, navigator, webgl, timezone, prototype)
 - Deep extraction (9 vendors: reCAPTCHA/hCaptcha/Turnstile sitekeys, DataDome js_key, PX app_id, etc.)
 
-**Active evasion (auto_bypass):**
+**Active anti-detection (auto_bypass):**
 - `stealth_evasions.js` — 7 patches (webdriver, chrome.runtime, plugins, permissions, iframes, codecs, WebGL)
 - `stealth_canvas_noise.js` — deterministic LCG PRNG canvas noise
 - 22 bypass profiles (CF, DataDome, PX, Akamai, Shape, Imperva, FingerprintJS, 8 CAPTCHAs, IP block)
@@ -109,7 +109,7 @@ After each stealth change:
 1. Run fingerprint diagnostic (in-browser JS eval)
 2. Check creepJS trust score (should be >50%)
 3. Verify Castle.io token generation (no hanging)
-4. Scraping test: Amazon, Booking, Reddit (no blocks)
+4. Page-fetching test: Amazon, Booking, Reddit (no blocks)
 
 ### 5.3 Monitoring
 - `d60/twitter_login` repo — Castle protocol updates
@@ -257,7 +257,7 @@ Two options:
 - App Challenge (2FA): ✅ handled via 60s sleep + mobile approve
 - `li_at` cookie obtained and feed loaded: ✅
 - 12 fingerprinting hooks detected but did not block access
-- Proxy sticky IP (Webshare :10030 = 154.192.119.80): ✅ stable
+- Proxy sticky IP (Webshare :10030 = 198.51.100.7): ✅ stable
 
 **TLS fingerprint binding (critical discovery):**
 - `li_at` bound to Chrome JA3 — rejected by curl/go-stealth/ox-browser

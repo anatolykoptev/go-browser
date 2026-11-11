@@ -66,7 +66,7 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.12.2
+          version: v2.15.0
 
       - name: go test (full suite, no -short)
         env:
