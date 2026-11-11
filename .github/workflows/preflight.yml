@@ -41,24 +41,32 @@ jobs:
       # #53: gostall — static analysis for lock-order inversions, missing
       # unlocks, WaitGroup misuse, channel deadlocks, livelocks, starvation.
       # Catches concurrency bugs at build time that go vet and -race miss.
-      - name: Ensure gostall v1.0.0 (pinned)
+      # gostall v1.0.0 pins golang.org/x/tools v0.44.0, whose package loader
+      # cannot read Go 1.27 export data ("package embed without types was
+      # imported from ..."). Build the pinned gostall release against a newer
+      # pinned x/tools instead of a plain `go install`.
+      - name: Build gostall v1.0.0 (pinned, with x/tools v0.52.0)
         run: |
           GOBIN="$(go env GOPATH)/bin"
-          if ! go version -m "$GOBIN/gostall" 2>/dev/null | grep -q "erfanmomeniii/gostall.*v1.0.0"; then
-            go install github.com/erfanmomeniii/gostall/cmd/gostall@v1.0.0
-          fi
+          mkdir -p "$GOBIN"
+          build="$(mktemp -d)"
+          (cd "$build" \
+            && go mod init gostallbuild \
+            && go get github.com/erfanmomeniii/gostall/cmd/gostall@v1.0.0 golang.org/x/tools@v0.52.0 \
+            && go build -o "$GOBIN/gostall" github.com/erfanmomeniii/gostall/cmd/gostall)
 
       # golangci-lint is not pre-installed on ubuntu-24.04-arm. Use the
       # official GitHub action (pinned, checksum-verified) instead of the
       # curl install script — the script's master-branch checksums are
       # unreliable and fail the gate on mismatch (seen live: v2.12.2).
       # golangci-lint v2 requires action v7 (v6 rejects v2 version strings).
-      # v2.13.x is built with Go 1.27 — v2.12.2 (go1.26) cannot typecheck the
-      # 1.27 stdlib ("math/rand/v2: method must have no type parameters").
-      # v2.14.0 skipped: released <7 days ago.
+      # Go 1.27 needs golangci-lint >= v2.14.0: v2.13.2 (and older) bundle an
+      # x/tools whose export-data reader stops at version 4, so it cannot
+      # typecheck the 1.27 stdlib ("export data version 5 is greater than
+      # maximum supported version 4"). v2.15.0 is the latest release.
       - uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.13.2
+          version: v2.15.0
 
       - name: make preflight
         run: make preflight
