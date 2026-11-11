@@ -41,12 +41,19 @@ jobs:
       # #53: gostall — static analysis for lock-order inversions, missing
       # unlocks, WaitGroup misuse, channel deadlocks, livelocks, starvation.
       # Catches concurrency bugs at build time that go vet and -race miss.
-      - name: Ensure gostall v1.0.0 (pinned)
+      # gostall v1.0.0 pins golang.org/x/tools v0.44.0, whose package loader
+      # cannot read Go 1.27 export data ("package embed without types was
+      # imported from ..."). Build the pinned gostall release against a newer
+      # pinned x/tools instead of a plain `go install`.
+      - name: Build gostall v1.0.0 (pinned, with x/tools v0.52.0)
         run: |
           GOBIN="$(go env GOPATH)/bin"
-          if ! go version -m "$GOBIN/gostall" 2>/dev/null | grep -q "erfanmomeniii/gostall.*v1.0.0"; then
-            go install github.com/erfanmomeniii/gostall/cmd/gostall@v1.0.0
-          fi
+          mkdir -p "$GOBIN"
+          build="$(mktemp -d)"
+          (cd "$build" \
+            && go mod init gostallbuild \
+            && go get github.com/erfanmomeniii/gostall/cmd/gostall@v1.0.0 golang.org/x/tools@v0.52.0 \
+            && go build -o "$GOBIN/gostall" github.com/erfanmomeniii/gostall/cmd/gostall)
 
       # golangci-lint is not pre-installed on ubuntu-24.04-arm. Use the
       # official GitHub action (pinned, checksum-verified) instead of the
