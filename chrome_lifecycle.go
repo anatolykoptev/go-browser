@@ -211,7 +211,7 @@ func (m *ChromeManager) HealthCheck() HealthStatus {
 	}
 	status.LatencyMs = time.Since(start).Milliseconds()
 
-	// Page-level probe (krolik-server#493): BrowserGetVersion proves the
+	// Page-level probe (server-repo issue #493): BrowserGetVersion proves the
 	// browser domain answers, but a wedged target set — e.g. after an
 	// external Chrome restart behind a persistent websocket — leaves every
 	// pooled tab dead while the socket stays healthy. TargetGetTargets

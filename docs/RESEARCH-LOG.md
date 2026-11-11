@@ -8,7 +8,7 @@
 ## Предыстория
 
 **Цель**: Автоматический логин в Twitter аккаунты для go-social (управление соцсетями).
-**go-social** (:8905) — централизованный менеджер аккаунтов: PostgreSQL + Redis, AES-256 encryption, pool rotation, REST API. Потребители: go-hully, ox-browser, vaelor.
+**go-social** (:8905) — централизованный менеджер аккаунтов: PostgreSQL + Redis, AES-256 encryption, pool rotation, REST API. Потребители: ox-browser, vaelor.
 
 ### Этап 0: ox-browser (Rust + chromiumoxide) — до 2026-03-27
 
@@ -362,7 +362,7 @@ Castle.io ML видит: **нулевая browser API активность** п�
 
 Построена полная система обнаружения и обхода в go-wowa (`chrome_interact` с `auto_bypass=true`):
 
-**Фаза 0 — Evasion (до навигации):**
+**Фаза 0 — Маскировка (до навигации):**
 - `stealth_evasions.js` — 7 активных патчей (ported from puppeteer-extra-stealth):
   - `navigator.webdriver` → undefined через Proxy `has()` trap
   - `window.chrome.runtime` → fake объект
@@ -393,7 +393,7 @@ Castle.io ML видит: **нулевая browser API активность** п�
 ### LinkedIn Login — пошаговый результат
 
 ```
-1. Navigate linkedin.com/login (proxy p.webshare.io:10030 = IP 154.192.119.80)
+1. Navigate linkedin.com/login (proxy p.webshare.io:10030 = IP 198.51.100.7)
 2. stealth_evasions.js инжектирован → headless signals скрыты
 3. fill_form (#username + #password)
 4. click submit (humanize=true, Bezier mouse path)
@@ -439,7 +439,7 @@ LinkedIn привязывает `li_at` к JA3/JA4 TLS fingerprint:
 
 | Файл | Repo | Назначение |
 |------|------|-----------|
-| `stealth_evasions.js` | go-wowa | 7 активных evasion патчей |
+| `stealth_evasions.js` | go-wowa | 7 активных anti-detection патчей |
 | `stealth_canvas_noise.js` | go-wowa | Deterministic canvas noise |
 | `bypass_profile.go` | go-wowa | 22 protection profiles |
 | `interact_detect.go` | go-wowa | quickDetect() + matchProfile() |
