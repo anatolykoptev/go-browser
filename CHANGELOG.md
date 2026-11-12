@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.13](https://github.com/anatolykoptev/go-browser/compare/v0.20.12...v0.20.13) (2026-11-12)
+
+
+### Fixed
+
+* **ci:** bump golangci-lint to v2.15.0 for Go 1.27 export data ([#106](https://github.com/anatolykoptev/go-browser/issues/106)) ([515ab82](https://github.com/anatolykoptev/go-browser/commit/515ab82c5d54c704865ab1274d16892c23e9d6b0))
+
 ## [0.20.12](https://github.com/anatolykoptev/go-browser/compare/v0.20.11...v0.20.12) (2026-10-08)
 
 
